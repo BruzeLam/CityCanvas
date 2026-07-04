@@ -1,66 +1,65 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  CityProject,
-  FeatureKind,
-  MapFeature,
-  MapStyle,
-  Point,
-  RoadLevel,
-  Tool,
+import type { CityProject, FeatureKind, MapFeature, Point, RoadLevel, Tool } from '../types';
+import {
+  POLYLINE_TOOLS,
+  RECTANGLE_TOOLS,
+  clampToMap,
+  createId,
+  rectFromCorners,
 } from '../types';
-import { createId } from '../types';
 import { findSnapPoint, screenToWorld } from '../engine/geometry';
-import { renderMap } from '../engine/renderer';
+import { fitViewport, renderMap, type PreviewState } from '../engine/renderer';
 
 type Props = {
   project: CityProject;
   tool: Tool;
   roadLevel: RoadLevel;
-  mapStyle: MapStyle;
   onProjectChange: (project: CityProject) => void;
 };
 
 function toolKind(tool: Tool): FeatureKind | null {
+  if (tool === 'ocean') return 'ocean';
+  if (tool === 'land') return 'land';
+  if (tool === 'mountain') return 'mountain';
   if (tool === 'river') return 'river';
-  if (tool === 'coastline') return 'coastline';
-  if (tool === 'greenbelt') return 'greenbelt';
   if (tool === 'road') return 'road';
   return null;
 }
 
-function isClosedKind(kind: FeatureKind): boolean {
-  return kind === 'coastline' || kind === 'river' || kind === 'greenbelt';
-}
+const MIN_RECT_M = 20;
 
-export function MapCanvas({
-  project,
-  tool,
-  roadLevel,
-  mapStyle,
-  onProjectChange,
-}: Props) {
+export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [draft, setDraft] = useState<Point[]>([]);
-  const [draftClosed, setDraftClosed] = useState(false);
-  const [cursor, setCursor] = useState<Point | null>(null);
+  const [polyDraft, setPolyDraft] = useState<Point[]>([]);
+  const [polyCursor, setPolyCursor] = useState<Point | null>(null);
+  const [rectStart, setRectStart] = useState<Point | null>(null);
+  const [rectEnd, setRectEnd] = useState<Point | null>(null);
   const panning = useRef<{ start: Point; origin: Point } | null>(null);
   const spaceDown = useRef(false);
+  const fitted = useRef(false);
 
   const allEndpoints = project.features.flatMap((f) => f.points);
 
-  const getLocalPoint = useCallback(
+  const getWorldPoint = useCallback(
     (clientX: number, clientY: number): Point => {
       const rect = canvasRef.current!.getBoundingClientRect();
-      return screenToWorld(
+      const raw = screenToWorld(
         { x: clientX - rect.left, y: clientY - rect.top },
         project.viewport,
       );
+      return clampToMap(raw, project.settings);
     },
-    [project.viewport],
+    [project.viewport, project.settings],
   );
 
-  const resize = useCallback(() => {
+  const preview: PreviewState = rectStart && rectEnd
+    ? { mode: 'rect', from: rectStart, to: rectEnd }
+    : polyDraft.length > 0 || polyCursor
+      ? { mode: 'polyline', points: polyDraft, cursor: polyCursor }
+      : { mode: 'none' };
+
+  const paint = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
@@ -74,54 +73,75 @@ export function MapCanvas({
 
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderMap(
-      ctx,
-      width,
-      height,
-      project,
-      mapStyle,
-      draft.length > 0 ? [...draft, ...(cursor ? [cursor] : [])] : null,
-      draftClosed,
-    );
-  }, [project, mapStyle, draft, cursor, draftClosed]);
+    renderMap(ctx, width, height, project, preview);
+  }, [project, preview]);
 
   useEffect(() => {
-    resize();
-  }, [resize]);
+    paint();
+  }, [paint]);
 
   useEffect(() => {
-    const observer = new ResizeObserver(resize);
+    const observer = new ResizeObserver(() => {
+      if (!containerRef.current || fitted.current) return;
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      if (width < 10 || height < 10) return;
+      fitted.current = true;
+      onProjectChange({
+        ...project,
+        viewport: fitViewport(width, height, project.settings.widthM, project.settings.heightM),
+      });
+    });
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [resize]);
+  }, [project, onProjectChange]);
 
-  const finishDraft = useCallback(
-    (forceClosed = false) => {
-      const kind = toolKind(tool);
-      if (!kind || draft.length < 2) {
-        setDraft([]);
-        setDraftClosed(false);
-        return;
-      }
-
-      const closed = (draftClosed || forceClosed) && isClosedKind(kind);
-      const feature: MapFeature = {
-        id: createId(),
-        kind,
-        points: draft,
-        closed,
-        roadLevel: kind === 'road' ? roadLevel : undefined,
-      };
-
+  const addFeature = useCallback(
+    (feature: MapFeature) => {
       onProjectChange({
         ...project,
         features: [...project.features, feature],
       });
-      setDraft([]);
-      setCursor(null);
-      setDraftClosed(false);
     },
-    [draft, draftClosed, onProjectChange, project, roadLevel, tool],
+    [onProjectChange, project],
+  );
+
+  const finishPolyline = useCallback(() => {
+    const kind = toolKind(tool);
+    if (!kind || polyDraft.length < 2) {
+      setPolyDraft([]);
+      setPolyCursor(null);
+      return;
+    }
+
+    addFeature({
+      id: createId(),
+      kind,
+      points: polyDraft,
+      closed: false,
+      roadLevel: kind === 'road' ? roadLevel : undefined,
+    });
+    setPolyDraft([]);
+    setPolyCursor(null);
+  }, [addFeature, polyDraft, roadLevel, tool]);
+
+  const commitRect = useCallback(
+    (from: Point, to: Point) => {
+      const kind = toolKind(tool);
+      if (!kind || !RECTANGLE_TOOLS.includes(tool)) return;
+
+      const points = rectFromCorners(from, to);
+      const w = Math.abs(to.x - from.x);
+      const h = Math.abs(to.y - from.y);
+      if (w < MIN_RECT_M || h < MIN_RECT_M) return;
+
+      addFeature({
+        id: createId(),
+        kind,
+        points,
+        closed: true,
+      });
+    },
+    [addFeature, tool],
   );
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -130,7 +150,7 @@ export function MapCanvas({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.min(4, Math.max(0.2, project.viewport.zoom * factor));
+    const newZoom = Math.min(8, Math.max(0.05, project.viewport.zoom * factor));
 
     onProjectChange({
       ...project,
@@ -154,19 +174,21 @@ export function MapCanvas({
       return;
     }
 
-    const kind = toolKind(activeTool);
-    if (!kind) return;
+    const world = getWorldPoint(e.clientX, e.clientY);
 
-    let world = getLocalPoint(e.clientX, e.clientY);
-    const snap = findSnapPoint(world, allEndpoints, project.viewport.zoom);
-    if (snap) world = snap;
-
-    if (draft.length >= 3 && dist(world, draft[0]) < 12 / project.viewport.zoom) {
-      finishDraft(true);
+    if (RECTANGLE_TOOLS.includes(activeTool)) {
+      setRectStart(world);
+      setRectEnd(world);
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
 
-    setDraft((prev) => [...prev, world]);
+    if (POLYLINE_TOOLS.includes(activeTool)) {
+      let pt = world;
+      const snap = findSnapPoint(pt, allEndpoints, project.viewport.zoom);
+      if (snap) pt = snap;
+      setPolyDraft((prev) => [...prev, pt]);
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -184,21 +206,32 @@ export function MapCanvas({
       return;
     }
 
-    const kind = toolKind(tool);
-    if (!kind || draft.length === 0) {
-      setCursor(null);
+    const world = getWorldPoint(e.clientX, e.clientY);
+
+    if (rectStart) {
+      setRectEnd(world);
       return;
     }
 
-    let world = getLocalPoint(e.clientX, e.clientY);
-    const snap = findSnapPoint(world, allEndpoints, project.viewport.zoom);
-    if (snap) world = snap;
-    setCursor(world);
+    if (POLYLINE_TOOLS.includes(tool) && polyDraft.length > 0) {
+      let pt = world;
+      const snap = findSnapPoint(pt, allEndpoints, project.viewport.zoom);
+      if (snap) pt = snap;
+      setPolyCursor(pt);
+    }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
     if (panning.current) {
       panning.current = null;
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      return;
+    }
+
+    if (rectStart && rectEnd) {
+      commitRect(rectStart, rectEnd);
+      setRectStart(null);
+      setRectEnd(null);
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     }
   };
@@ -206,14 +239,15 @@ export function MapCanvas({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') spaceDown.current = true;
-      if (e.key === 'Enter') finishDraft();
+      if (e.key === 'Enter') finishPolyline();
       if (e.key === 'Escape') {
-        setDraft([]);
-        setCursor(null);
-        setDraftClosed(false);
+        setPolyDraft([]);
+        setPolyCursor(null);
+        setRectStart(null);
+        setRectEnd(null);
       }
-      if (e.key === 'Backspace' && draft.length > 0) {
-        setDraft((prev) => prev.slice(0, -1));
+      if (e.key === 'Backspace' && polyDraft.length > 0) {
+        setPolyDraft((prev) => prev.slice(0, -1));
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -225,15 +259,18 @@ export function MapCanvas({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [draft.length, finishDraft]);
+  }, [finishPolyline, polyDraft.length]);
 
-  const activeKind = toolKind(tool);
-  const hint =
-    tool === 'pan'
-      ? '拖拽平移 · 滚轮缩放'
-      : activeKind
-        ? `点击添加节点 · Enter 完成 · Esc 取消 · 靠近首点闭合`
-        : '选择绘制工具开始';
+  const hint = (() => {
+    if (tool === 'pan') return '拖拽平移 · 滚轮缩放 · 左下角比例尺';
+    if (RECTANGLE_TOOLS.includes(tool)) {
+      return '拖拽绘制矩形区域 · 松开完成';
+    }
+    if (POLYLINE_TOOLS.includes(tool)) {
+      return '点击添加节点 · Enter 完成 · Esc 取消 · Backspace 撤销节点';
+    }
+    return '选择工具开始绘制';
+  })();
 
   return (
     <div className="canvas-wrap" ref={containerRef}>
@@ -244,13 +281,9 @@ export function MapCanvas({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onDoubleClick={() => finishDraft()}
+        onDoubleClick={finishPolyline}
       />
       <div className="canvas-hint">{hint}</div>
     </div>
   );
-}
-
-function dist(a: Point, b: Point) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
 }

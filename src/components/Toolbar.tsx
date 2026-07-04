@@ -8,10 +8,11 @@ type Props = {
   onRoadLevelChange: (level: RoadLevel) => void;
 };
 
-const NATURAL_TOOLS: { id: Tool; label: string; icon: string }[] = [
-  { id: 'coastline', label: '海岸线', icon: '🌊' },
-  { id: 'river', label: '河流', icon: '💧' },
-  { id: 'greenbelt', label: '绿带', icon: '🌿' },
+const LANDFORM_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
+  { id: 'land', label: '陆地', icon: '🏝️', hint: '拖拽矩形' },
+  { id: 'ocean', label: '海洋', icon: '🌊', hint: '拖拽矩形' },
+  { id: 'mountain', label: '山地', icon: '⛰️', hint: '拖拽矩形' },
+  { id: 'river', label: '河流', icon: '💧', hint: '折线' },
 ];
 
 const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
@@ -28,7 +29,7 @@ export function Toolbar({
   return (
     <aside className="toolbar">
       <section className="tool-section">
-        <h3>视图</h3>
+        <h3>步骤 1 · 视图</h3>
         <button
           type="button"
           className={tool === 'pan' ? 'active' : ''}
@@ -39,27 +40,30 @@ export function Toolbar({
       </section>
 
       <section className="tool-section">
-        <h3>自然层</h3>
-        {NATURAL_TOOLS.map((t) => (
+        <h3>步骤 2 · 地貌</h3>
+        {LANDFORM_TOOLS.map((t) => (
           <button
             key={t.id}
             type="button"
             className={tool === t.id ? 'active' : ''}
             onClick={() => onToolChange(t.id)}
+            title={t.hint}
           >
             {t.icon} {t.label}
+            <span className="tool-hint">{t.hint}</span>
           </button>
         ))}
       </section>
 
       <section className="tool-section">
-        <h3>路网层</h3>
+        <h3>步骤 3 · 路网</h3>
         <button
           type="button"
           className={tool === 'road' ? 'active' : ''}
           onClick={() => onToolChange('road')}
         >
           🛣️ 道路
+          <span className="tool-hint">折线</span>
         </button>
         {tool === 'road' && (
           <div className="road-levels">
