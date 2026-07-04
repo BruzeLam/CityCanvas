@@ -13,7 +13,15 @@ export type MapFeature = {
   roadLevel?: RoadLevel;
 };
 
-export type Tool = 'pan' | 'ocean' | 'land' | 'mountain' | 'river' | 'road';
+export type Tool =
+  | 'pan'
+  | 'select'
+  | 'eraser'
+  | 'ocean'
+  | 'land'
+  | 'mountain'
+  | 'river'
+  | 'road';
 
 export type MapStyle = 'navigation' | 'blueprint' | 'sketch';
 
@@ -58,11 +66,20 @@ export const LAYER_LABELS: Record<FeatureKind, string> = {
   road: '道路',
 };
 
-/** 矩形拖拽绘制（海洋 / 陆地 / 山地） */
-export const RECTANGLE_TOOLS: Tool[] = ['ocean', 'land', 'mountain'];
+/** 地貌面状要素（海洋 / 陆地 / 山地） */
+export const LANDFORM_TOOLS: Tool[] = ['ocean', 'land', 'mountain'];
 
 /** 折线点击绘制（河流 / 道路） */
 export const POLYLINE_TOOLS: Tool[] = ['river', 'road'];
+
+/** 地貌绘制方式 */
+export type LandformDrawMode = 'freehand' | 'polygon' | 'rectangle';
+
+export const LANDFORM_DRAW_MODES: { id: LandformDrawMode; label: string; desc: string }[] = [
+  { id: 'freehand', label: '自由手绘', desc: '按住拖拽，适合海岸线' },
+  { id: 'polygon', label: '多边形', desc: '逐点点击，Enter 完成' },
+  { id: 'rectangle', label: '矩形', desc: '拖拽框选，快速占位' },
+];
 
 export function createId(): string {
   return crypto.randomUUID();

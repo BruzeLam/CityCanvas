@@ -1,10 +1,12 @@
 import { formatDistance } from '../constants/mapPresets';
 import type { CityProject, MapStyle } from '../types';
-import { LAYER_LABELS } from '../types';
+import { LAYER_LABELS, ROAD_STYLES } from '../types';
 
 type Props = {
   project: CityProject;
   mapStyle: MapStyle;
+  selectedFeatureId: string | null;
+  onDeleteSelected: () => void;
   onMapStyleChange: (style: MapStyle) => void;
   onSave: () => void;
   onExport: () => void;
@@ -21,6 +23,8 @@ const STYLES: { id: MapStyle; label: string }[] = [
 export function SidePanel({
   project,
   mapStyle,
+  selectedFeatureId,
+  onDeleteSelected,
   onMapStyleChange,
   onSave,
   onExport,
@@ -46,9 +50,27 @@ export function SidePanel({
     }, 0);
 
   const { widthM, heightM, scale } = project.settings;
+  const selected = selectedFeatureId
+    ? project.features.find((f) => f.id === selectedFeatureId)
+    : null;
 
   return (
     <aside className="side-panel">
+      {selected && (
+        <section className="selection-panel">
+          <h3>已选中</h3>
+          <p className="selection-kind">
+            {selected.kind === 'road'
+              ? `道路 · ${ROAD_STYLES[selected.roadLevel ?? 'local'].label}`
+              : LAYER_LABELS[selected.kind]}
+          </p>
+          <p className="selection-meta">{selected.points.length} 个顶点</p>
+          <button type="button" className="danger-btn" onClick={onDeleteSelected}>
+            删除此要素
+          </button>
+        </section>
+      )}
+
       <section>
         <h3>地图信息</h3>
         <div className="map-info">

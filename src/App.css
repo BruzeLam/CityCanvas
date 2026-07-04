@@ -123,6 +123,36 @@ input {
   background: #252830;
 }
 
+.selection-panel {
+  margin-bottom: 20px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #1a2332;
+  border: 1px solid #f59e0b44;
+}
+
+.selection-kind {
+  margin: 0 0 4px;
+  font-weight: 600;
+  color: #fbbf24;
+}
+
+.selection-meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.danger-btn {
+  background: #3f1d1d !important;
+  border-color: #7f1d1d !important;
+  color: #fca5a5 !important;
+}
+
+.danger-btn:hover {
+  background: #5c2020 !important;
+}
+
 .tool-section button.active,
 .style-tabs button.active,
 .road-chip.active {
@@ -134,6 +164,26 @@ input {
 .road-levels {
   margin-top: 8px;
   padding-left: 4px;
+}
+
+.draw-modes {
+  margin-top: 10px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  background: #171a22;
+  border: 1px solid #252830;
+}
+
+.draw-modes-label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.draw-mode-chip {
+  font-size: 12px;
+  padding: 8px 10px !important;
+  margin-bottom: 4px !important;
 }
 
 .road-chip {

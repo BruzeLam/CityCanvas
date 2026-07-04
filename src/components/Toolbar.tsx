@@ -1,18 +1,20 @@
-import type { RoadLevel, Tool } from '../types';
-import { ROAD_STYLES } from '../types';
+import type { LandformDrawMode, RoadLevel, Tool } from '../types';
+import { LANDFORM_DRAW_MODES, LANDFORM_TOOLS, ROAD_STYLES } from '../types';
 
 type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
+  landformDrawMode: LandformDrawMode;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
+  onLandformDrawModeChange: (mode: LandformDrawMode) => void;
 };
 
-const LANDFORM_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
-  { id: 'land', label: '陆地', icon: '🏝️', hint: '拖拽矩形' },
-  { id: 'ocean', label: '海洋', icon: '🌊', hint: '拖拽矩形' },
-  { id: 'mountain', label: '山地', icon: '⛰️', hint: '拖拽矩形' },
-  { id: 'river', label: '河流', icon: '💧', hint: '折线' },
+const TERRAIN_ITEMS: { id: Tool; label: string; icon: string }[] = [
+  { id: 'land', label: '陆地', icon: '🏝️' },
+  { id: 'ocean', label: '海洋', icon: '🌊' },
+  { id: 'mountain', label: '山地', icon: '⛰️' },
+  { id: 'river', label: '河流', icon: '💧' },
 ];
 
 const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
@@ -20,11 +22,15 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   (typeof ROAD_STYLES)[RoadLevel],
 ][];
 
+const isLandformTool = (t: Tool) => LANDFORM_TOOLS.includes(t);
+
 export function Toolbar({
   tool,
   roadLevel,
+  landformDrawMode,
   onToolChange,
   onRoadLevelChange,
+  onLandformDrawModeChange,
 }: Props) {
   return (
     <aside className="toolbar">
@@ -37,22 +43,54 @@ export function Toolbar({
         >
           ✋ 平移
         </button>
+        <button
+          type="button"
+          className={tool === 'select' ? 'active' : ''}
+          onClick={() => onToolChange('select')}
+        >
+          🎯 选择
+          <span className="tool-hint">编辑</span>
+        </button>
+        <button
+          type="button"
+          className={tool === 'eraser' ? 'active' : ''}
+          onClick={() => onToolChange('eraser')}
+        >
+          🧹 橡皮擦
+          <span className="tool-hint">删除</span>
+        </button>
       </section>
 
       <section className="tool-section">
         <h3>步骤 2 · 地貌</h3>
-        {LANDFORM_TOOLS.map((t) => (
+        {TERRAIN_ITEMS.map((t) => (
           <button
             key={t.id}
             type="button"
             className={tool === t.id ? 'active' : ''}
             onClick={() => onToolChange(t.id)}
-            title={t.hint}
           >
             {t.icon} {t.label}
-            <span className="tool-hint">{t.hint}</span>
+            <span className="tool-hint">{t.id === 'river' ? '折线' : '面状'}</span>
           </button>
         ))}
+
+        {isLandformTool(tool) && (
+          <div className="draw-modes">
+            <p className="draw-modes-label">绘制方式</p>
+            {LANDFORM_DRAW_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                className={landformDrawMode === mode.id ? 'active draw-mode-chip' : 'draw-mode-chip'}
+                onClick={() => onLandformDrawModeChange(mode.id)}
+                title={mode.desc}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="tool-section">

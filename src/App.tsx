@@ -5,26 +5,33 @@ import { SidePanel } from './components/SidePanel';
 import { Toolbar } from './components/Toolbar';
 import { downloadMapMd, loadMapFromFile } from './io/mapFile';
 import { exportToPng } from './engine/renderer';
-import type { CityProject, MapStyle, RoadLevel, Tool } from './types';
+import type { CityProject, LandformDrawMode, MapStyle, RoadLevel, Tool } from './types';
 import './App.css';
 
 function App() {
   const [project, setProject] = useState<CityProject | null>(null);
   const [tool, setTool] = useState<Tool>('land');
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const [landformDrawMode, setLandformDrawMode] = useState<LandformDrawMode>('freehand');
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
   const [, setHistory] = useState<CityProject[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const mapStyle = project?.mapStyle ?? 'navigation';
 
-  const updateProject = useCallback((next: CityProject) => {
-    setProject((prev) => {
-      if (prev && next.features.length > prev.features.length) {
-        setHistory((h) => [...h, prev]);
-      }
-      return next;
-    });
-  }, []);
+  const updateProject = useCallback(
+    (next: CityProject, meta?: { undoSnapshot?: CityProject }) => {
+      setProject((prev) => {
+        if (meta?.undoSnapshot) {
+          setHistory((h) => [...h, meta.undoSnapshot!]);
+        } else if (prev && next.features.length > prev.features.length) {
+          setHistory((h) => [...h, prev]);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const handleSave = () => {
     if (!project) return;
@@ -60,6 +67,7 @@ function App() {
       const loaded = await loadMapFromFile(file);
       setProject(loaded);
       setTool('land');
+      setSelectedFeatureId(null);
       setHistory([]);
     } catch {
       alert('无法读取存档，请确认是 CityCanvas 的 .md 文件');
@@ -75,6 +83,7 @@ function App() {
             setProject(p);
             setHistory([]);
             setTool('land');
+            setSelectedFeatureId(null);
           }}
           onOpenFile={handleOpenFile}
         />
@@ -109,19 +118,39 @@ function App() {
         <Toolbar
           tool={tool}
           roadLevel={roadLevel}
-          onToolChange={setTool}
+          landformDrawMode={landformDrawMode}
+          onToolChange={(t) => {
+            setTool(t);
+            if (t !== 'select') setSelectedFeatureId(null);
+          }}
           onRoadLevelChange={setRoadLevel}
+          onLandformDrawModeChange={setLandformDrawMode}
         />
         <MapCanvas
           key={`${project.settings.widthM}-${project.settings.heightM}-${project.name}`}
           project={project}
           tool={tool}
           roadLevel={roadLevel}
+          landformDrawMode={landformDrawMode}
+          selectedFeatureId={selectedFeatureId}
+          onSelectFeature={setSelectedFeatureId}
           onProjectChange={updateProject}
         />
         <SidePanel
           project={project}
           mapStyle={mapStyle}
+          selectedFeatureId={selectedFeatureId}
+          onDeleteSelected={() => {
+            if (!selectedFeatureId) return;
+            updateProject(
+              {
+                ...project,
+                features: project.features.filter((f) => f.id !== selectedFeatureId),
+              },
+              { undoSnapshot: project },
+            );
+            setSelectedFeatureId(null);
+          }}
           onMapStyleChange={(style: MapStyle) =>
             setProject((p) => (p ? { ...p, mapStyle: style } : p))
           }

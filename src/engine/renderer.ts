@@ -238,6 +238,39 @@ function drawPreviewRect(
   ctx.setLineDash([]);
 }
 
+function drawPreviewRegion(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  closed: boolean,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  if (points.length === 0) return;
+  const screen = points.map((p) => toScreen(p, viewport));
+
+  if (screen.length >= 2) {
+    tracePath(ctx, screen, closed);
+    if (closed && screen.length >= 3) {
+      ctx.fillStyle = palette.previewFill;
+      ctx.fill();
+    }
+    ctx.strokeStyle = palette.preview;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(closed ? [] : [6, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (!closed) {
+    for (const p of screen) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = palette.preview;
+      ctx.fill();
+    }
+  }
+}
+
 function drawPreviewPolyline(
   ctx: CanvasRenderingContext2D,
   points: Point[],
@@ -296,7 +329,39 @@ function drawScaleBar(
 export type PreviewState =
   | { mode: 'none' }
   | { mode: 'rect'; from: Point; to: Point }
+  | { mode: 'region'; points: Point[]; cursor: Point | null; closed: boolean }
   | { mode: 'polyline'; points: Point[]; cursor: Point | null };
+
+export type SelectionState = {
+  featureId: string;
+} | null;
+
+function drawSelection(
+  ctx: CanvasRenderingContext2D,
+  feature: MapFeature,
+  viewport: Viewport,
+) {
+  const points = feature.points.map((p) => toScreen(p, viewport));
+  if (points.length < 2) return;
+
+  tracePath(ctx, points, feature.closed);
+
+  ctx.strokeStyle = '#f59e0b';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (const p of points) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
 
 export function renderMap(
   ctx: CanvasRenderingContext2D,
@@ -304,6 +369,7 @@ export function renderMap(
   canvasH: number,
   project: CityProject,
   preview: PreviewState,
+  selection: SelectionState = null,
 ) {
   const palette = PALETTES[project.mapStyle];
   const { viewport, features } = project;
@@ -334,11 +400,19 @@ export function renderMap(
 
   if (preview.mode === 'rect') {
     drawPreviewRect(ctx, preview.from, preview.to, viewport, palette);
+  } else if (preview.mode === 'region') {
+    const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
+    drawPreviewRegion(ctx, pts, preview.closed, viewport, palette);
   } else if (preview.mode === 'polyline') {
     const pts = preview.cursor
       ? [...preview.points, preview.cursor]
       : preview.points;
     drawPreviewPolyline(ctx, pts, viewport, palette);
+  }
+
+  if (selection) {
+    const selected = features.find((f) => f.id === selection.featureId);
+    if (selected) drawSelection(ctx, selected, viewport);
   }
 
   ctx.restore();

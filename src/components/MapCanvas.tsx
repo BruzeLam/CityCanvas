@@ -1,20 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CityProject, FeatureKind, MapFeature, Point, RoadLevel, Tool } from '../types';
+import type {
+  CityProject,
+  FeatureKind,
+  LandformDrawMode,
+  MapFeature,
+  Point,
+  RoadLevel,
+  Tool,
+} from '../types';
 import {
+  LANDFORM_TOOLS,
   POLYLINE_TOOLS,
-  RECTANGLE_TOOLS,
   clampToMap,
   createId,
   rectFromCorners,
 } from '../types';
 import { findSnapPoint, screenToWorld } from '../engine/geometry';
+import { dist, polygonArea, prepareFreehandPath } from '../engine/pathUtils';
+import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
 import { fitViewport, renderMap, type PreviewState } from '../engine/renderer';
 
 type Props = {
   project: CityProject;
   tool: Tool;
   roadLevel: RoadLevel;
-  onProjectChange: (project: CityProject) => void;
+  landformDrawMode: LandformDrawMode;
+  selectedFeatureId: string | null;
+  onSelectFeature: (id: string | null) => void;
+  onProjectChange: (project: CityProject, options?: { undoSnapshot?: CityProject }) => void;
 };
 
 function toolKind(tool: Tool): FeatureKind | null {
@@ -27,19 +40,53 @@ function toolKind(tool: Tool): FeatureKind | null {
 }
 
 const MIN_RECT_M = 20;
+const MIN_REGION_AREA_M2 = 400;
+const MIN_FREEHAND_SAMPLE_M = 18;
+const CLOSE_THRESHOLD_M = 35;
 
-export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) {
+export function MapCanvas({
+  project,
+  tool,
+  roadLevel,
+  landformDrawMode,
+  selectedFeatureId,
+  onSelectFeature,
+  onProjectChange,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [polyDraft, setPolyDraft] = useState<Point[]>([]);
   const [polyCursor, setPolyCursor] = useState<Point | null>(null);
+  const [regionDraft, setRegionDraft] = useState<Point[]>([]);
+  const [regionCursor, setRegionCursor] = useState<Point | null>(null);
   const [rectStart, setRectStart] = useState<Point | null>(null);
   const [rectEnd, setRectEnd] = useState<Point | null>(null);
   const panning = useRef<{ start: Point; origin: Point } | null>(null);
+  const freehandDrawing = useRef(false);
+  const freehandPoints = useRef<Point[]>([]);
+  const draggingVertex = useRef<{ featureId: string; index: number; moved: boolean } | null>(null);
+  const undoSnapshot = useRef<CityProject | null>(null);
+  const projectRef = useRef(project);
   const spaceDown = useRef(false);
   const fitted = useRef(false);
 
   const allEndpoints = project.features.flatMap((f) => f.points);
+  const isLandform = LANDFORM_TOOLS.includes(tool);
+
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
+    setPolyDraft([]);
+    setPolyCursor(null);
+    setRegionDraft([]);
+    setRegionCursor(null);
+    setRectStart(null);
+    setRectEnd(null);
+    freehandDrawing.current = false;
+    freehandPoints.current = [];
+  }, [tool, landformDrawMode]);
 
   const getWorldPoint = useCallback(
     (clientX: number, clientY: number): Point => {
@@ -53,11 +100,25 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
     [project.viewport, project.settings],
   );
 
-  const preview: PreviewState = rectStart && rectEnd
-    ? { mode: 'rect', from: rectStart, to: rectEnd }
-    : polyDraft.length > 0 || polyCursor
-      ? { mode: 'polyline', points: polyDraft, cursor: polyCursor }
-      : { mode: 'none' };
+  const preview: PreviewState = (() => {
+    if (rectStart && rectEnd) {
+      return { mode: 'rect', from: rectStart, to: rectEnd };
+    }
+    if (isLandform && landformDrawMode !== 'rectangle') {
+      if (regionDraft.length > 0 || regionCursor) {
+        return {
+          mode: 'region',
+          points: regionDraft,
+          cursor: regionCursor,
+          closed: false,
+        };
+      }
+    }
+    if (polyDraft.length > 0 || polyCursor) {
+      return { mode: 'polyline', points: polyDraft, cursor: polyCursor };
+    }
+    return { mode: 'none' };
+  })();
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current;
@@ -73,8 +134,8 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
 
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderMap(ctx, width, height, project, preview);
-  }, [project, preview]);
+    renderMap(ctx, width, height, project, preview, selectedFeatureId ? { featureId: selectedFeatureId } : null);
+  }, [project, preview, selectedFeatureId]);
 
   useEffect(() => {
     paint();
@@ -95,6 +156,41 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
     return () => observer.disconnect();
   }, [project, onProjectChange]);
 
+  const removeFeature = useCallback(
+    (id: string) => {
+      onProjectChange(
+        {
+          ...projectRef.current,
+          features: projectRef.current.features.filter((f) => f.id !== id),
+        },
+        { undoSnapshot: projectRef.current },
+      );
+      if (selectedFeatureId === id) onSelectFeature(null);
+    },
+    [onProjectChange, onSelectFeature, selectedFeatureId],
+  );
+
+  const updateFeaturePoint = useCallback(
+    (featureId: string, index: number, point: Point, commit = false) => {
+      const current = projectRef.current;
+      const next = {
+        ...current,
+        features: current.features.map((f) =>
+          f.id === featureId
+            ? { ...f, points: f.points.map((p, i) => (i === index ? point : p)) }
+            : f,
+        ),
+      };
+      if (commit && undoSnapshot.current) {
+        onProjectChange(next, { undoSnapshot: undoSnapshot.current });
+        undoSnapshot.current = null;
+      } else {
+        onProjectChange(next);
+      }
+    },
+    [onProjectChange],
+  );
+
   const addFeature = useCallback(
     (feature: MapFeature) => {
       onProjectChange({
@@ -103,6 +199,37 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
       });
     },
     [onProjectChange, project],
+  );
+
+  const resetDrafts = useCallback(() => {
+    setPolyDraft([]);
+    setPolyCursor(null);
+    setRegionDraft([]);
+    setRegionCursor(null);
+    setRectStart(null);
+    setRectEnd(null);
+    freehandDrawing.current = false;
+    freehandPoints.current = [];
+  }, []);
+
+  const commitRegion = useCallback(
+    (rawPoints: Point[]) => {
+      const kind = toolKind(tool);
+      if (!kind || !LANDFORM_TOOLS.includes(tool)) return;
+
+      const points = prepareFreehandPath(rawPoints);
+      if (points.length < 3) return;
+      if (polygonArea(points) < MIN_REGION_AREA_M2) return;
+
+      addFeature({
+        id: createId(),
+        kind,
+        points,
+        closed: true,
+      });
+      resetDrafts();
+    },
+    [addFeature, resetDrafts, tool],
   );
 
   const finishPolyline = useCallback(() => {
@@ -124,10 +251,15 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
     setPolyCursor(null);
   }, [addFeature, polyDraft, roadLevel, tool]);
 
+  const finishPolygon = useCallback(() => {
+    if (regionDraft.length < 3) return;
+    commitRegion(regionDraft);
+  }, [commitRegion, regionDraft]);
+
   const commitRect = useCallback(
     (from: Point, to: Point) => {
       const kind = toolKind(tool);
-      if (!kind || !RECTANGLE_TOOLS.includes(tool)) return;
+      if (!kind || !LANDFORM_TOOLS.includes(tool)) return;
 
       const points = rectFromCorners(from, to);
       const w = Math.abs(to.x - from.x);
@@ -142,6 +274,14 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
       });
     },
     [addFeature, tool],
+  );
+
+  const snapPoint = useCallback(
+    (pt: Point, extraTargets: Point[] = []): Point => {
+      const targets = [...allEndpoints, ...extraTargets];
+      return findSnapPoint(pt, targets, project.viewport.zoom) ?? pt;
+    },
+    [allEndpoints, project.viewport.zoom],
   );
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -176,17 +316,60 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
 
     const world = getWorldPoint(e.clientX, e.clientY);
 
-    if (RECTANGLE_TOOLS.includes(activeTool)) {
-      setRectStart(world);
-      setRectEnd(world);
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    if (activeTool === 'eraser') {
+      const hit = findFeatureAt(projectRef.current.features, world, projectRef.current.viewport.zoom);
+      if (hit) removeFeature(hit.id);
       return;
     }
 
+    if (activeTool === 'select') {
+      const selected = selectedFeatureId
+        ? projectRef.current.features.find((f) => f.id === selectedFeatureId)
+        : null;
+      if (selected) {
+        const vi = findVertexIndex(selected, world, projectRef.current.viewport.zoom);
+        if (vi !== null) {
+          undoSnapshot.current = projectRef.current;
+          draggingVertex.current = { featureId: selected.id, index: vi, moved: false };
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+          return;
+        }
+      }
+      const hit = findFeatureAt(projectRef.current.features, world, projectRef.current.viewport.zoom);
+      onSelectFeature(hit?.id ?? null);
+      return;
+    }
+
+    if (LANDFORM_TOOLS.includes(activeTool)) {
+      if (landformDrawMode === 'rectangle') {
+        setRectStart(world);
+        setRectEnd(world);
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
+      if (landformDrawMode === 'freehand') {
+        freehandDrawing.current = true;
+        freehandPoints.current = [world];
+        setRegionDraft([world]);
+        setRegionCursor(null);
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
+      if (landformDrawMode === 'polygon') {
+        if (regionDraft.length >= 3 && dist(world, regionDraft[0]) < CLOSE_THRESHOLD_M) {
+          commitRegion(regionDraft);
+          return;
+        }
+        const pt = snapPoint(world);
+        setRegionDraft((prev) => [...prev, pt]);
+        return;
+      }
+    }
+
     if (POLYLINE_TOOLS.includes(activeTool)) {
-      let pt = world;
-      const snap = findSnapPoint(pt, allEndpoints, project.viewport.zoom);
-      if (snap) pt = snap;
+      const pt = snapPoint(world);
       setPolyDraft((prev) => [...prev, pt]);
     }
   };
@@ -208,22 +391,74 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
 
     const world = getWorldPoint(e.clientX, e.clientY);
 
+    if (draggingVertex.current) {
+      draggingVertex.current.moved = true;
+      const { featureId, index } = draggingVertex.current;
+      updateFeaturePoint(featureId, index, clampToMap(world, projectRef.current.settings), false);
+      return;
+    }
+
     if (rectStart) {
       setRectEnd(world);
       return;
     }
 
-    if (POLYLINE_TOOLS.includes(tool) && polyDraft.length > 0) {
+    if (freehandDrawing.current) {
+      const last = freehandPoints.current[freehandPoints.current.length - 1];
+      if (!last || dist(last, world) >= MIN_FREEHAND_SAMPLE_M) {
+        freehandPoints.current = [...freehandPoints.current, world];
+        setRegionDraft(freehandPoints.current);
+      }
+      return;
+    }
+
+    if (isLandform && landformDrawMode === 'polygon' && regionDraft.length > 0) {
       let pt = world;
-      const snap = findSnapPoint(pt, allEndpoints, project.viewport.zoom);
-      if (snap) pt = snap;
-      setPolyCursor(pt);
+      if (regionDraft.length >= 3 && dist(pt, regionDraft[0]) < CLOSE_THRESHOLD_M) {
+        pt = regionDraft[0];
+      } else {
+        pt = snapPoint(world);
+      }
+      setRegionCursor(pt);
+      return;
+    }
+
+    if (POLYLINE_TOOLS.includes(tool) && polyDraft.length > 0) {
+      setPolyCursor(snapPoint(world));
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (draggingVertex.current) {
+      const drag = draggingVertex.current;
+      draggingVertex.current = null;
+      if (drag.moved) {
+        const world = getWorldPoint(e.clientX, e.clientY);
+        updateFeaturePoint(
+          drag.featureId,
+          drag.index,
+          clampToMap(world, projectRef.current.settings),
+          true,
+        );
+      } else {
+        undoSnapshot.current = null;
+      }
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      return;
+    }
+
     if (panning.current) {
       panning.current = null;
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      return;
+    }
+
+    if (freehandDrawing.current) {
+      freehandDrawing.current = false;
+      const points = freehandPoints.current;
+      freehandPoints.current = [];
+      if (points.length >= 3) commitRegion(points);
+      else resetDrafts();
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       return;
     }
@@ -239,15 +474,26 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') spaceDown.current = true;
-      if (e.key === 'Enter') finishPolyline();
-      if (e.key === 'Escape') {
-        setPolyDraft([]);
-        setPolyCursor(null);
-        setRectStart(null);
-        setRectEnd(null);
+      if (e.key === 'Enter') {
+        if (isLandform && landformDrawMode === 'polygon') finishPolygon();
+        else finishPolyline();
       }
-      if (e.key === 'Backspace' && polyDraft.length > 0) {
-        setPolyDraft((prev) => prev.slice(0, -1));
+      if (e.key === 'Escape') {
+        resetDrafts();
+        if (tool === 'select') onSelectFeature(null);
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedFeatureId && tool === 'select') {
+        if (!e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          removeFeature(selectedFeatureId);
+        }
+      }
+      if (e.key === 'Backspace' && tool !== 'select') {
+        if (isLandform && landformDrawMode === 'polygon' && regionDraft.length > 0) {
+          setRegionDraft((prev) => prev.slice(0, -1));
+        } else if (polyDraft.length > 0) {
+          setPolyDraft((prev) => prev.slice(0, -1));
+        }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -259,12 +505,34 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [finishPolyline, polyDraft.length]);
+  }, [
+    finishPolyline,
+    finishPolygon,
+    isLandform,
+    landformDrawMode,
+    polyDraft.length,
+    regionDraft.length,
+    resetDrafts,
+    onSelectFeature,
+    removeFeature,
+    selectedFeatureId,
+    tool,
+  ]);
 
   const hint = (() => {
     if (tool === 'pan') return '拖拽平移 · 滚轮缩放 · 左下角比例尺';
-    if (RECTANGLE_TOOLS.includes(tool)) {
-      return '拖拽绘制矩形区域 · 松开完成';
+    if (tool === 'select') {
+      return '点击选中 · 拖拽顶点编辑 · Delete 删除 · Esc 取消选中';
+    }
+    if (tool === 'eraser') return '点击要素即可删除';
+    if (isLandform) {
+      if (landformDrawMode === 'freehand') {
+        return '按住拖拽绘制轮廓 · 松开自动闭合 · Esc 取消';
+      }
+      if (landformDrawMode === 'polygon') {
+        return '点击添加顶点 · 点击起点或 Enter 闭合 · Backspace 撤销 · Esc 取消';
+      }
+      return '拖拽框选矩形区域 · 松开完成';
     }
     if (POLYLINE_TOOLS.includes(tool)) {
       return '点击添加节点 · Enter 完成 · Esc 取消 · Backspace 撤销节点';
@@ -281,7 +549,7 @@ export function MapCanvas({ project, tool, roadLevel, onProjectChange }: Props) 
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onDoubleClick={finishPolyline}
+        onDoubleClick={POLYLINE_TOOLS.includes(tool) ? finishPolyline : undefined}
       />
       <div className="canvas-hint">{hint}</div>
     </div>
