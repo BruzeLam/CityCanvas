@@ -6,16 +6,32 @@ import { SidePanel } from './components/SidePanel';
 import { Toolbar } from './components/Toolbar';
 import { useAuth } from './context/AuthContext';
 import { api } from './io/api';
+import {
+  clearLocalSession,
+  loadLocalSession,
+  saveLocalSession,
+} from './io/localStore';
 import { downloadMapMd, loadMapFromFile } from './io/mapFile';
 import { payloadToProject, projectToPayload } from './io/mapPayload';
 import { exportToPng } from './engine/renderer';
 import { downloadSvg } from './engine/svgExport';
-import type { CityProject, LandformDrawMode, LayerKey, MapStyle, PathDrawMode, RoadLevel, Tool } from './types';
+import type {
+  CityProject,
+  LandformDrawMode,
+  LayerKey,
+  MapStyle,
+  PathDrawMode,
+  RoadLevel,
+  Tool,
+} from './types';
 import { getLayers } from './types';
 import './App.css';
 
+type BootPhase = 'booting' | 'auth' | 'ready';
+
 function App() {
   const { user, loading: authLoading, logout } = useAuth();
+  const [boot, setBoot] = useState<BootPhase>('booting');
   const [project, setProject] = useState<CityProject | null>(null);
   const [tool, setTool] = useState<Tool>('land');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
@@ -25,10 +41,63 @@ function App() {
   const [, setHistory] = useState<CityProject[]>([]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [dirty, setDirty] = useState(false);
+  const [localOnly, setLocalOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restoredRef = useRef(false);
 
   const mapStyle = project?.mapStyle ?? 'navigation';
+
+  const openProject = useCallback((p: CityProject, opts?: { dirty?: boolean; saved?: boolean }) => {
+    setProject(p);
+    setTool('land');
+    setSelectedFeatureId(null);
+    setHistory([]);
+    setDirty(opts?.dirty ?? false);
+    setSaveState(opts?.saved ? 'saved' : 'idle');
+    saveLocalSession(p);
+  }, []);
+
+  // 启动：优先恢复本地存档，无需登录
+  useEffect(() => {
+    if (authLoading || restoredRef.current) return;
+    restoredRef.current = true;
+
+    const session = loadLocalSession();
+    if (session) {
+      setLocalOnly(!user);
+      openProject(session.project, { saved: true });
+      setBoot('ready');
+      return;
+    }
+
+    if (user) {
+      setBoot('ready');
+      return;
+    }
+
+    setBoot('auth');
+  }, [authLoading, user, openProject]);
+
+  // 登录成功后进入 ready（若还在 auth）
+  useEffect(() => {
+    if (boot === 'auth' && user) {
+      setLocalOnly(false);
+      setBoot('ready');
+    }
+  }, [boot, user]);
+
+  const persistLocal = useCallback((p: CityProject) => {
+    if (localSaveTimer.current) clearTimeout(localSaveTimer.current);
+    localSaveTimer.current = setTimeout(() => {
+      saveLocalSession(p);
+      if (localOnly || !user) {
+        setSaveState('saved');
+        setDirty(false);
+      }
+    }, 400);
+  }, [localOnly, user]);
 
   const updateProject = useCallback(
     (next: CityProject, meta?: { undoSnapshot?: CityProject }) => {
@@ -40,45 +109,65 @@ function App() {
         } else if (prev && next.features.length > prev.features.length) {
           setHistory((h) => [...h, prev]);
         }
+        persistLocal(next);
         return next;
       });
     },
-    [],
+    [persistLocal],
   );
 
   const saveToCloud = useCallback(async (target: CityProject) => {
+    if (!user) {
+      saveLocalSession(target);
+      setDirty(false);
+      setSaveState('saved');
+      return;
+    }
     setSaveState('saving');
     try {
       const payload = projectToPayload(target);
       if (target.cloudId) {
         await api.updateMap(target.cloudId, target.name, payload);
+        saveLocalSession(target);
       } else {
         const { map } = await api.createMap(target.name, payload);
-        setProject((p) => (p && p === target ? { ...p, cloudId: map.id } : p));
+        const withId = { ...target, cloudId: map.id };
+        setProject((p) => (p && p === target ? withId : p));
+        saveLocalSession(withId);
       }
       setDirty(false);
       setSaveState('saved');
     } catch (err) {
+      // 云端失败仍保留本地
+      saveLocalSession(target);
       setSaveState('error');
-      alert(err instanceof Error ? err.message : '云端保存失败');
+      console.warn(err);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    if (!project || !dirty || saveState === 'saving') return;
-    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(() => {
+    if (!project || !dirty || !user || localOnly) return;
+    if (saveState === 'saving') return;
+    if (cloudSaveTimer.current) clearTimeout(cloudSaveTimer.current);
+    cloudSaveTimer.current = setTimeout(() => {
       saveToCloud(project);
     }, 3000);
     return () => {
-      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      if (cloudSaveTimer.current) clearTimeout(cloudSaveTimer.current);
     };
-  }, [project, dirty, saveState, saveToCloud]);
+  }, [project, dirty, saveState, saveToCloud, user, localOnly]);
 
   const handleSave = async () => {
     if (!project) return;
-    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-    await saveToCloud(project);
+    if (cloudSaveTimer.current) clearTimeout(cloudSaveTimer.current);
+    if (localSaveTimer.current) clearTimeout(localSaveTimer.current);
+    saveLocalSession(project);
+    if (user && !localOnly) {
+      await saveToCloud(project);
+    } else {
+      setDirty(false);
+      setSaveState('saved');
+    }
   };
 
   const handleExport = () => {
@@ -106,6 +195,7 @@ function App() {
       const prev = h[h.length - 1];
       setProject(prev);
       setDirty(true);
+      persistLocal(prev);
       return h.slice(0, -1);
     });
   };
@@ -119,11 +209,8 @@ function App() {
     if (!file) return;
     try {
       const loaded = await loadMapFromFile(file);
-      setProject(loaded);
-      setTool('land');
-      setSelectedFeatureId(null);
-      setHistory([]);
-      setDirty(true);
+      openProject(loaded, { dirty: true });
+      setBoot('ready');
     } catch {
       alert('无法读取存档，请确认是 CityCanvas 的 .md 文件');
     }
@@ -131,34 +218,43 @@ function App() {
   };
 
   const handleCreate = async (p: CityProject) => {
-    try {
-      const { map } = await api.createMap(p.name, projectToPayload(p));
-      setProject(payloadToProject(map.payload, map.id));
-      setHistory([]);
-      setTool('land');
-      setSelectedFeatureId(null);
-      setDirty(false);
-      setSaveState('saved');
-    } catch (err) {
-      alert(err instanceof Error ? err.message : '创建地图失败');
+    if (user && !localOnly) {
+      try {
+        const { map } = await api.createMap(p.name, projectToPayload(p));
+        openProject(payloadToProject(map.payload, map.id), { saved: true });
+        return;
+      } catch (err) {
+        alert(err instanceof Error ? err.message : '云端创建失败，已改为本地存档');
+      }
     }
+    openProject(p, { dirty: true });
   };
 
   const handleOpenCloud = async (mapId: string) => {
     try {
       const { map } = await api.getMap(mapId);
-      setProject(payloadToProject(map.payload, map.id));
-      setHistory([]);
-      setTool('land');
-      setSelectedFeatureId(null);
-      setDirty(false);
-      setSaveState('saved');
+      openProject(payloadToProject(map.payload, map.id), { saved: true });
     } catch (err) {
       alert(err instanceof Error ? err.message : '加载地图失败');
     }
   };
 
-  if (authLoading) {
+  const handleContinueLocal = () => {
+    const session = loadLocalSession();
+    setLocalOnly(true);
+    if (session) {
+      openProject(session.project, { saved: true });
+    }
+    setBoot('ready');
+  };
+
+  const handleLogout = () => {
+    if (project) saveLocalSession(project);
+    logout();
+    setLocalOnly(true);
+  };
+
+  if (authLoading || boot === 'booting') {
     return (
       <div className="setup-overlay">
         <p className="loading-text">加载中…</p>
@@ -166,8 +262,19 @@ function App() {
     );
   }
 
-  if (!user) {
-    return <AuthScreen />;
+  if (boot === 'auth' && !user) {
+    return (
+      <>
+        <AuthScreen onContinueLocal={handleContinueLocal} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,text/markdown"
+          hidden
+          onChange={handleFileChange}
+        />
+      </>
+    );
   }
 
   if (!project) {
@@ -177,6 +284,7 @@ function App() {
           onCreate={handleCreate}
           onOpenCloud={handleOpenCloud}
           onOpenFile={handleOpenFile}
+          localOnly={localOnly || !user}
         />
         <input
           ref={fileInputRef}
@@ -191,9 +299,11 @@ function App() {
 
   const saveLabel =
     saveState === 'saving'
-      ? '保存中…'
+      ? '同步中…'
       : saveState === 'saved' && !dirty
-        ? '已保存'
+        ? user && !localOnly
+          ? '已保存'
+          : '已缓存'
         : dirty
           ? '保存'
           : '保存';
@@ -207,7 +317,9 @@ function App() {
           {dirty && <span className="dirty-dot" title="有未保存更改" />}
         </div>
         <div className="header-actions">
-          <span className="header-user">{user.displayName || user.email}</span>
+          <span className="header-user">
+            {user && !localOnly ? user.displayName || user.email : '本地模式'}
+          </span>
           <button
             type="button"
             className={`header-btn ${saveState === 'saved' && !dirty ? 'saved' : ''}`}
@@ -219,12 +331,35 @@ function App() {
           <button type="button" className="header-btn" onClick={handleOpenFile}>
             导入 .md
           </button>
-          <button type="button" className="header-btn" onClick={() => setProject(null)}>
+          <button
+            type="button"
+            className="header-btn"
+            onClick={() => {
+              if (project) saveLocalSession(project);
+              setProject(null);
+              setHistory([]);
+              setDirty(false);
+              setSaveState('idle');
+            }}
+          >
             我的地图
           </button>
-          <button type="button" className="header-btn" onClick={logout}>
-            退出
-          </button>
+          {user ? (
+            <button type="button" className="header-btn" onClick={handleLogout}>
+              退出登录
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="header-btn"
+              onClick={() => {
+                if (project) saveLocalSession(project);
+                setBoot('auth');
+              }}
+            >
+              登录
+            </button>
+          )}
         </div>
       </header>
       <main className="workspace">
@@ -257,6 +392,7 @@ function App() {
           mapStyle={mapStyle}
           selectedFeatureId={selectedFeatureId}
           cloudSaved={!dirty && saveState === 'saved'}
+          localMode={localOnly || !user}
           onDeleteSelected={() => {
             if (!selectedFeatureId) return;
             updateProject(
@@ -270,14 +406,21 @@ function App() {
           }}
           onMapStyleChange={(style: MapStyle) => {
             setDirty(true);
-            setProject((p) => (p ? { ...p, mapStyle: style } : p));
+            setProject((p) => {
+              if (!p) return p;
+              const next = { ...p, mapStyle: style };
+              persistLocal(next);
+              return next;
+            });
           }}
           onLayerToggle={(key: LayerKey) => {
             setDirty(true);
             setProject((p) => {
               if (!p) return p;
               const layers = getLayers(p);
-              return { ...p, layers: { ...layers, [key]: !layers[key] } };
+              const next = { ...p, layers: { ...layers, [key]: !layers[key] } };
+              persistLocal(next);
+              return next;
             });
           }}
           onSave={handleSave}
@@ -286,10 +429,18 @@ function App() {
           onExportMd={handleExportMd}
           onUndo={handleUndo}
           onNewMap={() => {
-            if (dirty && !confirm('返回地图列表？未保存的更改将丢失')) return;
+            if (dirty && !confirm('返回地图列表？当前进度已写入浏览器缓存')) return;
+            if (project) saveLocalSession(project);
             setProject(null);
             setHistory([]);
             setDirty(false);
+            setSaveState('idle');
+          }}
+          onClearLocal={() => {
+            if (!confirm('清除浏览器本地缓存？当前地图仍可继续编辑，但刷新后不会自动恢复。')) {
+              return;
+            }
+            clearLocalSession();
             setSaveState('idle');
           }}
         />

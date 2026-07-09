@@ -14,6 +14,7 @@ type Props = {
   mapStyle: MapStyle;
   selectedFeatureId: string | null;
   cloudSaved: boolean;
+  localMode?: boolean;
   onDeleteSelected: () => void;
   onMapStyleChange: (style: MapStyle) => void;
   onLayerToggle: (key: LayerKey) => void;
@@ -23,6 +24,7 @@ type Props = {
   onExportMd: () => void;
   onUndo: () => void;
   onNewMap: () => void;
+  onClearLocal?: () => void;
 };
 
 const STYLES: { id: MapStyle; label: string }[] = [
@@ -38,6 +40,7 @@ export function SidePanel({
   mapStyle,
   selectedFeatureId,
   cloudSaved,
+  localMode = false,
   onDeleteSelected,
   onMapStyleChange,
   onLayerToggle,
@@ -47,6 +50,7 @@ export function SidePanel({
   onExportMd,
   onUndo,
   onNewMap,
+  onClearLocal,
 }: Props) {
   const layers = getLayers(project);
   const blockCount = detectBlocks(
@@ -107,9 +111,14 @@ export function SidePanel({
             {formatDistance(widthM)} × {formatDistance(heightM)}
           </p>
           <p>比例尺 1 : {scale.toLocaleString()}</p>
-          {project.cloudId && (
+          {project.cloudId && !localMode && (
             <p className={cloudSaved ? 'cloud-status saved' : 'cloud-status'}>
               {cloudSaved ? '☁️ 已同步云端' : '☁️ 等待保存…'}
+            </p>
+          )}
+          {localMode && (
+            <p className={cloudSaved ? 'cloud-status saved' : 'cloud-status'}>
+              {cloudSaved ? '💾 已写入浏览器缓存' : '💾 缓存中…'}
             </p>
           )}
         </div>
@@ -167,7 +176,7 @@ export function SidePanel({
 
       <section className="actions">
         <button type="button" className="primary" onClick={onSave}>
-          ☁️ 保存到云端
+          {localMode ? '💾 保存到本地缓存' : '☁️ 保存到云端'}
         </button>
         <button type="button" onClick={onExport}>
           ⬇ 导出 PNG
@@ -184,11 +193,18 @@ export function SidePanel({
         <button type="button" className="secondary" onClick={onNewMap}>
           我的地图…
         </button>
+        {onClearLocal && (
+          <button type="button" className="secondary" onClick={onClearLocal}>
+            清除本地缓存
+          </button>
+        )}
       </section>
 
       <footer className="panel-footer">
-        <p>手绘地图 · 参照 CSLMV 视觉</p>
-        <p className="muted">街区由道路围合自动识别</p>
+        <p>{localMode ? '本地自动续档 · 刷新继续编辑' : '手绘地图 · 参照 CSLMV 视觉'}</p>
+        <p className="muted">
+          {localMode ? '数据保存在本机浏览器 localStorage' : '街区由道路围合自动识别'}
+        </p>
       </footer>
     </aside>
   );

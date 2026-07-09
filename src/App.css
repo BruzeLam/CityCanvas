@@ -630,6 +630,18 @@ input {
   font-size: 15px;
 }
 
+.local-continue {
+  margin: 0 28px 8px;
+  width: calc(100% - 56px) !important;
+}
+
+.auth-divider {
+  margin: 4px 28px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #6b7280;
+}
+
 .auth-submit:disabled {
   opacity: 0.6;
   cursor: wait;

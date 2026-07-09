@@ -15,9 +15,10 @@ type Props = {
   onCreate: (project: ReturnType<typeof createProject>) => void;
   onOpenCloud: (mapId: string) => void;
   onOpenFile: () => void;
+  localOnly?: boolean;
 };
 
-export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
+export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile, localOnly = false }: Props) {
   const { user, logout } = useAuth();
   const [name, setName] = useState('未命名城市');
   const [presetIdx, setPresetIdx] = useState(1);
@@ -28,9 +29,14 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
   const [customScale, setCustomScale] = useState(false);
   const [scaleValue, setScaleValue] = useState(10000);
   const [cloudMaps, setCloudMaps] = useState<CloudMapSummary[]>([]);
-  const [loadingMaps, setLoadingMaps] = useState(true);
+  const [loadingMaps, setLoadingMaps] = useState(false);
 
   const loadCloudMaps = useCallback(async () => {
+    if (!user || localOnly) {
+      setCloudMaps([]);
+      setLoadingMaps(false);
+      return;
+    }
     setLoadingMaps(true);
     try {
       const { maps } = await api.listMaps();
@@ -40,7 +46,7 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
     } finally {
       setLoadingMaps(false);
     }
-  }, []);
+  }, [user, localOnly]);
 
   useEffect(() => {
     loadCloudMaps();
@@ -74,7 +80,7 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
     await loadCloudMaps();
   };
 
-  if (!user) return null;
+  if (!user && !localOnly) return null;
 
   return (
     <div className="setup-overlay">
@@ -85,52 +91,60 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
             <p>开始绘制前，先设定地图范围与比例尺</p>
           </div>
           <div className="setup-user">
-            <span>{user.displayName || user.email}</span>
-            <button type="button" className="link-btn" onClick={logout}>
-              退出
-            </button>
+            <span>{user && !localOnly ? user.displayName || user.email : '本地模式'}</span>
+            {user && !localOnly ? (
+              <button type="button" className="link-btn" onClick={logout}>
+                退出
+              </button>
+            ) : null}
           </div>
         </header>
 
         <div className="setup-body">
-          <section className="cloud-maps-section">
-            <div className="cloud-maps-head">
-              <strong>我的云端地图</strong>
-              <button type="button" className="link-btn" onClick={loadCloudMaps}>
-                刷新
-              </button>
-            </div>
-            {loadingMaps ? (
-              <p className="muted">加载中…</p>
-            ) : cloudMaps.length === 0 ? (
-              <p className="muted">还没有云端地图，在下方创建第一张吧</p>
-            ) : (
-              <ul className="cloud-map-list">
-                {cloudMaps.map((m) => (
-                  <li key={m.id} className="cloud-map-item">
-                    <button type="button" className="cloud-map-open" onClick={() => onOpenCloud(m.id)}>
-                      <span className="cloud-map-name">{m.name}</span>
-                      <span className="cloud-map-meta">
-                        {formatDistance(m.widthM)} × {formatDistance(m.heightM)} · {m.featureCount}{' '}
-                        要素
-                      </span>
-                      <span className="cloud-map-date">
-                        更新于 {new Date(m.updatedAt + 'Z').toLocaleString('zh-CN')}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="cloud-map-delete"
-                      title="删除"
-                      onClick={() => handleDeleteCloud(m.id, m.name)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          {user && !localOnly ? (
+            <section className="cloud-maps-section">
+              <div className="cloud-maps-head">
+                <strong>我的云端地图</strong>
+                <button type="button" className="link-btn" onClick={loadCloudMaps}>
+                  刷新
+                </button>
+              </div>
+              {loadingMaps ? (
+                <p className="muted">加载中…</p>
+              ) : cloudMaps.length === 0 ? (
+                <p className="muted">还没有云端地图，在下方创建第一张吧</p>
+              ) : (
+                <ul className="cloud-map-list">
+                  {cloudMaps.map((m) => (
+                    <li key={m.id} className="cloud-map-item">
+                      <button type="button" className="cloud-map-open" onClick={() => onOpenCloud(m.id)}>
+                        <span className="cloud-map-name">{m.name}</span>
+                        <span className="cloud-map-meta">
+                          {formatDistance(m.widthM)} × {formatDistance(m.heightM)} · {m.featureCount}{' '}
+                          要素
+                        </span>
+                        <span className="cloud-map-date">
+                          更新于 {new Date(m.updatedAt + 'Z').toLocaleString('zh-CN')}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="cloud-map-delete"
+                        title="删除"
+                        onClick={() => handleDeleteCloud(m.id, m.name)}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : (
+            <section className="cloud-maps-section">
+              <p className="muted">本地模式：进度自动写入浏览器缓存，刷新后继续编辑</p>
+            </section>
+          )}
 
           <label className="setup-field">
             <span>城市名称</span>
@@ -238,7 +252,11 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
               {formatDistance(preview.widthM)} × {formatDistance(preview.heightM)} · 1 :
               {preview.scale.toLocaleString()}
             </p>
-            <p className="muted">绘制范围固定在此矩形内 · 自动保存到云端 SQLite</p>
+            <p className="muted">
+              {user && !localOnly
+                ? '绘制范围固定在此矩形内 · 自动保存到云端 SQLite'
+                : '绘制范围固定在此矩形内 · 自动写入浏览器本地缓存'}
+            </p>
           </div>
         </div>
 

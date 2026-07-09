@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { hasLocalSession } from '../io/localStore';
 
-export function AuthScreen() {
+type Props = {
+  onContinueLocal: () => void;
+};
+
+export function AuthScreen({ onContinueLocal }: Props) {
   const { login, register } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -9,6 +14,7 @@ export function AuthScreen() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const hasDraft = hasLocalSession();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,8 +38,13 @@ export function AuthScreen() {
       <div className="setup-card auth-card">
         <header className="setup-header">
           <h1>CityCanvas</h1>
-          <p>登录后地图自动保存到云端</p>
+          <p>本地自动续档 · 登录后可同步云端</p>
         </header>
+
+        <button type="button" className="primary auth-submit local-continue" onClick={onContinueLocal}>
+          {hasDraft ? '继续本地存档' : '本地模式开始'}
+        </button>
+        <p className="auth-divider">或登录账号</p>
 
         <div className="auth-tabs">
           <button
