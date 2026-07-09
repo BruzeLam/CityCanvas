@@ -24,16 +24,34 @@ type Props = {
   onPathDrawModeChange: (mode: PathDrawMode) => void;
 };
 
-const VIEW_TOOLS: { id: Tool; label: string; hint: string }[] = [
-  { id: 'eraser', label: '橡皮', hint: '点击删除要素' },
+const VIEW_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
+  { id: 'eraser', label: '橡皮', icon: '🧹', hint: '点击删除要素' },
 ];
 
-const TERRAIN_TOOLS: { id: Tool; label: string }[] = [
-  { id: 'land', label: '陆地' },
-  { id: 'ocean', label: '海洋' },
-  { id: 'mountain', label: '山地' },
-  { id: 'river', label: '河流' },
+const TERRAIN_TOOLS: { id: Tool; label: string; icon: string }[] = [
+  { id: 'land', label: '陆地', icon: '🏝️' },
+  { id: 'ocean', label: '海洋', icon: '🌊' },
+  { id: 'mountain', label: '山地', icon: '⛰️' },
+  { id: 'river', label: '河流', icon: '💧' },
 ];
+
+const LANDFORM_MODE_ICONS: Record<LandformDrawMode, string> = {
+  freehand: '✍️',
+  polygon: '⬡',
+  rectangle: '▭',
+};
+
+const PATH_MODE_ICONS: Record<PathDrawMode, string> = {
+  straight: '／',
+  curve: '⌒',
+};
+
+const ROAD_LEVEL_ICONS: Record<RoadLevel, string> = {
+  expressway: '🛣️',
+  arterial: '🛤️',
+  collector: '➖',
+  local: '┈',
+};
 
 const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   RoadLevel,
@@ -88,6 +106,9 @@ export function Toolbar({
           onClick={() => onToolChange('pan')}
           title="左键拖动地图 · 快捷键 H · 空格也可临时拖动"
         >
+          <span className="btn-emoji" aria-hidden>
+            ✋
+          </span>
           拖动
         </button>
         <button
@@ -96,6 +117,9 @@ export function Toolbar({
           onClick={() => onToolChange('select')}
           title="左键选中要素、拖动顶点 · 快捷键 V"
         >
+          <span className="btn-emoji" aria-hidden>
+            ✏️
+          </span>
           编辑
         </button>
       </div>
@@ -122,6 +146,9 @@ export function Toolbar({
                 onClick={() => onToolChange(t.id)}
                 title={t.hint}
               >
+                <span className="btn-emoji" aria-hidden>
+                  {t.icon}
+                </span>
                 {t.label}
               </button>
             ))}
@@ -144,6 +171,9 @@ export function Toolbar({
                   className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
                   onClick={() => onToolChange(t.id)}
                 >
+                  <span className="btn-emoji" aria-hidden>
+                    {t.icon}
+                  </span>
                   {t.label}
                 </button>
               ))}
@@ -160,6 +190,9 @@ export function Toolbar({
                       onClick={() => onLandformDrawModeChange(mode.id)}
                       title={mode.desc}
                     >
+                      <span className="btn-emoji" aria-hidden>
+                        {LANDFORM_MODE_ICONS[mode.id]}
+                      </span>
                       {mode.label}
                     </button>
                   ))}
@@ -183,6 +216,9 @@ export function Toolbar({
                 className={tool === 'road' ? 'tool-cell active' : 'tool-cell'}
                 onClick={() => onToolChange('road')}
               >
+                <span className="btn-emoji" aria-hidden>
+                  🛣️
+                </span>
                 道路
               </button>
               <button
@@ -190,6 +226,9 @@ export function Toolbar({
                 className={tool === 'railway' ? 'tool-cell active' : 'tool-cell'}
                 onClick={() => onToolChange('railway')}
               >
+                <span className="btn-emoji" aria-hidden>
+                  🚆
+                </span>
                 铁路
               </button>
             </div>
@@ -205,6 +244,9 @@ export function Toolbar({
                       className={roadLevel === level ? 'chip active' : 'chip'}
                       onClick={() => onRoadLevelChange(level)}
                     >
+                      <span className="btn-emoji" aria-hidden>
+                        {ROAD_LEVEL_ICONS[level]}
+                      </span>
                       <span
                         className="road-swatch"
                         style={{ background: style.color, borderColor: style.casing }}
@@ -229,6 +271,9 @@ export function Toolbar({
                         onClick={() => onPathDrawModeChange(mode.id)}
                         title={mode.desc}
                       >
+                        <span className="btn-emoji" aria-hidden>
+                          {PATH_MODE_ICONS[mode.id]}
+                        </span>
                         {mode.label}
                       </button>
                     ))}
@@ -289,6 +334,9 @@ export function Toolbar({
                 className={tool === 'label' ? 'tool-cell active' : 'tool-cell'}
                 onClick={() => onToolChange('label')}
               >
+                <span className="btn-emoji" aria-hidden>
+                  🏷️
+                </span>
                 文字
               </button>
             </div>
