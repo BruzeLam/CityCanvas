@@ -1,13 +1,21 @@
-import type { LandformDrawMode, RoadLevel, Tool } from '../types';
-import { LANDFORM_DRAW_MODES, LANDFORM_TOOLS, ROAD_STYLES } from '../types';
+import type { LandformDrawMode, PathDrawMode, RoadLevel, Tool } from '../types';
+import {
+  LANDFORM_DRAW_MODES,
+  LANDFORM_TOOLS,
+  PATH_DRAW_MODES,
+  PATH_GUIDED_TOOLS,
+  ROAD_STYLES,
+} from '../types';
 
 type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
   landformDrawMode: LandformDrawMode;
+  pathDrawMode: PathDrawMode;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
   onLandformDrawModeChange: (mode: LandformDrawMode) => void;
+  onPathDrawModeChange: (mode: PathDrawMode) => void;
 };
 
 const TERRAIN_ITEMS: { id: Tool; label: string; icon: string }[] = [
@@ -23,14 +31,17 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
 ][];
 
 const isLandformTool = (t: Tool) => LANDFORM_TOOLS.includes(t);
+const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
 
 export function Toolbar({
   tool,
   roadLevel,
   landformDrawMode,
+  pathDrawMode,
   onToolChange,
   onRoadLevelChange,
   onLandformDrawModeChange,
+  onPathDrawModeChange,
 }: Props) {
   return (
     <aside className="toolbar">
@@ -101,7 +112,7 @@ export function Toolbar({
           onClick={() => onToolChange('road')}
         >
           🛣️ 道路
-          <span className="tool-hint">折线</span>
+          <span className="tool-hint">直线 / 圆弧</span>
         </button>
         {tool === 'road' && (
           <div className="road-levels">
@@ -127,8 +138,25 @@ export function Toolbar({
           onClick={() => onToolChange('railway')}
         >
           🚆 铁路
-          <span className="tool-hint">折线</span>
+          <span className="tool-hint">直线 / 圆弧</span>
         </button>
+
+        {isPathGuided(tool) && (
+          <div className="draw-modes">
+            <p className="draw-modes-label">路径方式</p>
+            {PATH_DRAW_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                className={pathDrawMode === mode.id ? 'active draw-mode-chip' : 'draw-mode-chip'}
+                onClick={() => onPathDrawModeChange(mode.id)}
+                title={mode.desc}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="tool-section">

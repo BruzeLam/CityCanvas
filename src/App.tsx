@@ -10,7 +10,7 @@ import { downloadMapMd, loadMapFromFile } from './io/mapFile';
 import { payloadToProject, projectToPayload } from './io/mapPayload';
 import { exportToPng } from './engine/renderer';
 import { downloadSvg } from './engine/svgExport';
-import type { CityProject, LandformDrawMode, LayerKey, MapStyle, RoadLevel, Tool } from './types';
+import type { CityProject, LandformDrawMode, LayerKey, MapStyle, PathDrawMode, RoadLevel, Tool } from './types';
 import { getLayers } from './types';
 import './App.css';
 
@@ -20,6 +20,7 @@ function App() {
   const [tool, setTool] = useState<Tool>('land');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [landformDrawMode, setLandformDrawMode] = useState<LandformDrawMode>('freehand');
+  const [pathDrawMode, setPathDrawMode] = useState<PathDrawMode>('straight');
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
   const [, setHistory] = useState<CityProject[]>([]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -231,12 +232,14 @@ function App() {
           tool={tool}
           roadLevel={roadLevel}
           landformDrawMode={landformDrawMode}
+          pathDrawMode={pathDrawMode}
           onToolChange={(t) => {
             setTool(t);
             if (t !== 'select') setSelectedFeatureId(null);
           }}
           onRoadLevelChange={setRoadLevel}
           onLandformDrawModeChange={setLandformDrawMode}
+          onPathDrawModeChange={setPathDrawMode}
         />
         <MapCanvas
           key={`${project.cloudId ?? 'local'}-${project.settings.widthM}-${project.settings.heightM}`}
@@ -244,6 +247,7 @@ function App() {
           tool={tool}
           roadLevel={roadLevel}
           landformDrawMode={landformDrawMode}
+          pathDrawMode={pathDrawMode}
           selectedFeatureId={selectedFeatureId}
           onSelectFeature={setSelectedFeatureId}
           onProjectChange={updateProject}

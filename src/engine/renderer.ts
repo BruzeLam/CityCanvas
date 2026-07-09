@@ -9,6 +9,7 @@ import type {
 } from '../types';
 import { ROAD_STYLES, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
+import { sampleArcThrough } from './curveMath';
 
 type StylePalette = {
   outside: string;
@@ -432,6 +433,13 @@ export type PreviewState =
   | { mode: 'rect'; from: Point; to: Point }
   | { mode: 'region'; points: Point[]; cursor: Point | null; closed: boolean }
   | { mode: 'polyline'; points: Point[]; cursor: Point | null }
+  | {
+      mode: 'arc';
+      committed: Point[];
+      start: Point;
+      through: Point | null;
+      cursor: Point | null;
+    }
   | { mode: 'label'; point: Point; text: string };
 
 export type SelectionState = {
@@ -476,6 +484,54 @@ function drawSelection(
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 2;
     ctx.stroke();
+  }
+}
+
+function drawPreviewArc(
+  ctx: CanvasRenderingContext2D,
+  committed: Point[],
+  start: Point,
+  through: Point | null,
+  cursor: Point | null,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  if (committed.length >= 2) {
+    drawPreviewPolyline(ctx, committed, viewport, palette);
+  } else if (committed.length === 1) {
+    const p = toScreen(committed[0], viewport);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = palette.preview;
+    ctx.fill();
+  }
+
+  const marks = [start, through, cursor].filter(Boolean) as Point[];
+  for (const m of marks) {
+    const p = toScreen(m, viewport);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = palette.preview;
+    ctx.fill();
+  }
+
+  if (through && cursor) {
+    const arc = sampleArcThrough(start, through, cursor);
+    if (arc && arc.points.length >= 2) {
+      const screen = arc.points.map((p) => toScreen(p, viewport));
+      tracePath(ctx, screen, false);
+      ctx.strokeStyle = palette.preview;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      drawPreviewPolyline(ctx, [start, through, cursor], viewport, palette);
+    }
+  } else if (through) {
+    drawPreviewPolyline(ctx, [start, through], viewport, palette);
+  } else if (cursor) {
+    drawPreviewPolyline(ctx, [start, cursor], viewport, palette);
   }
 }
 
@@ -568,6 +624,16 @@ export function renderMap(
   } else if (preview.mode === 'polyline') {
     const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
     drawPreviewPolyline(ctx, pts, viewport, palette);
+  } else if (preview.mode === 'arc') {
+    drawPreviewArc(
+      ctx,
+      preview.committed,
+      preview.start,
+      preview.through,
+      preview.cursor,
+      viewport,
+      palette,
+    );
   } else if (preview.mode === 'label') {
     drawPreviewLabel(ctx, preview.point, preview.text, viewport, palette);
   }

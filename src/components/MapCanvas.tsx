@@ -4,17 +4,27 @@ import type {
   FeatureKind,
   LandformDrawMode,
   MapFeature,
+  PathDrawMode,
   Point,
   RoadLevel,
   Tool,
 } from '../types';
 import {
   LANDFORM_TOOLS,
+  PATH_GUIDED_TOOLS,
   POLYLINE_TOOLS,
   clampToMap,
   createId,
   rectFromCorners,
 } from '../types';
+import {
+  formatAngle,
+  formatLength,
+  formatRadius,
+  lineMetrics,
+  sampleArcThrough,
+  snapAnglePoint,
+} from '../engine/curveMath';
 import { findSnapPoint, screenToWorld } from '../engine/geometry';
 import { dist, polygonArea, prepareFreehandPath } from '../engine/pathUtils';
 import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
@@ -25,6 +35,7 @@ type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
   landformDrawMode: LandformDrawMode;
+  pathDrawMode: PathDrawMode;
   selectedFeatureId: string | null;
   onSelectFeature: (id: string | null) => void;
   onProjectChange: (project: CityProject, options?: { undoSnapshot?: CityProject }) => void;
@@ -51,6 +62,7 @@ export function MapCanvas({
   tool,
   roadLevel,
   landformDrawMode,
+  pathDrawMode,
   selectedFeatureId,
   onSelectFeature,
   onProjectChange,
@@ -59,10 +71,15 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const [polyDraft, setPolyDraft] = useState<Point[]>([]);
   const [polyCursor, setPolyCursor] = useState<Point | null>(null);
+  const [arcCommitted, setArcCommitted] = useState<Point[]>([]);
+  const [arcStart, setArcStart] = useState<Point | null>(null);
+  const [arcThrough, setArcThrough] = useState<Point | null>(null);
+  const [arcCursor, setArcCursor] = useState<Point | null>(null);
   const [regionDraft, setRegionDraft] = useState<Point[]>([]);
   const [regionCursor, setRegionCursor] = useState<Point | null>(null);
   const [rectStart, setRectStart] = useState<Point | null>(null);
   const [rectEnd, setRectEnd] = useState<Point | null>(null);
+  const [shiftSnap, setShiftSnap] = useState(false);
   const panning = useRef<{ start: Point; origin: Point } | null>(null);
   const freehandDrawing = useRef(false);
   const freehandPoints = useRef<Point[]>([]);
@@ -70,10 +87,12 @@ export function MapCanvas({
   const undoSnapshot = useRef<CityProject | null>(null);
   const projectRef = useRef(project);
   const spaceDown = useRef(false);
+  const shiftDown = useRef(false);
   const fitted = useRef(false);
 
   const allEndpoints = project.features.flatMap((f) => f.points);
   const isLandform = LANDFORM_TOOLS.includes(tool);
+  const isPathGuided = PATH_GUIDED_TOOLS.includes(tool);
 
   useEffect(() => {
     projectRef.current = project;
@@ -82,13 +101,17 @@ export function MapCanvas({
   useEffect(() => {
     setPolyDraft([]);
     setPolyCursor(null);
+    setArcCommitted([]);
+    setArcStart(null);
+    setArcThrough(null);
+    setArcCursor(null);
     setRegionDraft([]);
     setRegionCursor(null);
     setRectStart(null);
     setRectEnd(null);
     freehandDrawing.current = false;
     freehandPoints.current = [];
-  }, [tool, landformDrawMode]);
+  }, [tool, landformDrawMode, pathDrawMode]);
 
   const getWorldPoint = useCallback(
     (clientX: number, clientY: number): Point => {
@@ -115,6 +138,18 @@ export function MapCanvas({
           closed: false,
         };
       }
+    }
+    if (isPathGuided && pathDrawMode === 'arc' && arcStart) {
+      return {
+        mode: 'arc',
+        committed: arcCommitted,
+        start: arcStart,
+        through: arcThrough,
+        cursor: arcCursor,
+      };
+    }
+    if (isPathGuided && pathDrawMode === 'straight' && (polyDraft.length > 0 || polyCursor)) {
+      return { mode: 'polyline', points: polyDraft, cursor: polyCursor };
     }
     if (polyDraft.length > 0 || polyCursor) {
       return { mode: 'polyline', points: polyDraft, cursor: polyCursor };
@@ -206,6 +241,10 @@ export function MapCanvas({
   const resetDrafts = useCallback(() => {
     setPolyDraft([]);
     setPolyCursor(null);
+    setArcCommitted([]);
+    setArcStart(null);
+    setArcThrough(null);
+    setArcCursor(null);
     setRegionDraft([]);
     setRegionCursor(null);
     setRectStart(null);
@@ -236,22 +275,22 @@ export function MapCanvas({
 
   const finishPolyline = useCallback(() => {
     const kind = toolKind(tool);
-    if (!kind || polyDraft.length < 2) {
-      setPolyDraft([]);
-      setPolyCursor(null);
+    const useArc = isPathGuided && pathDrawMode === 'arc';
+    const points = useArc ? arcCommitted : polyDraft;
+    if (!kind || points.length < 2) {
+      resetDrafts();
       return;
     }
 
     addFeature({
       id: createId(),
       kind,
-      points: polyDraft,
+      points,
       closed: false,
       roadLevel: kind === 'road' ? roadLevel : undefined,
     });
-    setPolyDraft([]);
-    setPolyCursor(null);
-  }, [addFeature, polyDraft, roadLevel, tool]);
+    resetDrafts();
+  }, [addFeature, arcCommitted, isPathGuided, pathDrawMode, polyDraft, resetDrafts, roadLevel, tool]);
 
   const finishPolygon = useCallback(() => {
     if (regionDraft.length < 3) return;
@@ -385,6 +424,37 @@ export function MapCanvas({
 
     if (POLYLINE_TOOLS.includes(activeTool)) {
       const pt = snapPoint(world);
+
+      if (isPathGuided && pathDrawMode === 'straight') {
+        setPolyDraft((prev) => {
+          if (prev.length === 0) return [pt];
+          const last = prev[prev.length - 1];
+          const next = shiftDown.current ? snapAnglePoint(last, snapPoint(world, prev)) : pt;
+          return [...prev, next];
+        });
+        return;
+      }
+
+      if (isPathGuided && pathDrawMode === 'arc') {
+        if (!arcStart) {
+          setArcStart(pt);
+        } else if (!arcThrough) {
+          setArcThrough(pt);
+        } else {
+          const arc = sampleArcThrough(arcStart, arcThrough, pt);
+          if (arc) {
+            setArcCommitted((prev) => {
+              const segment = prev.length > 0 ? arc.points.slice(1) : arc.points;
+              return [...prev, ...segment];
+            });
+          }
+          setArcThrough(null);
+          setArcStart(pt);
+          setArcCursor(null);
+        }
+        return;
+      }
+
       setPolyDraft((prev) => [...prev, pt]);
     }
   };
@@ -438,8 +508,20 @@ export function MapCanvas({
       return;
     }
 
-    if (POLYLINE_TOOLS.includes(tool) && polyDraft.length > 0) {
-      setPolyCursor(snapPoint(world));
+    if (POLYLINE_TOOLS.includes(tool)) {
+      if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0) {
+        const last = polyDraft[polyDraft.length - 1];
+        const base = snapPoint(world, polyDraft);
+        setPolyCursor(shiftDown.current ? snapAnglePoint(last, base) : base);
+        return;
+      }
+      if (isPathGuided && pathDrawMode === 'arc' && arcStart) {
+        setArcCursor(snapPoint(world, arcCommitted));
+        return;
+      }
+      if (polyDraft.length > 0) {
+        setPolyCursor(snapPoint(world));
+      }
     }
   };
 
@@ -489,6 +571,10 @@ export function MapCanvas({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') spaceDown.current = true;
+      if (e.key === 'Shift') {
+        shiftDown.current = true;
+        setShiftSnap(true);
+      }
       if (e.key === 'Enter') {
         if (isLandform && landformDrawMode === 'polygon') finishPolygon();
         else finishPolyline();
@@ -504,8 +590,23 @@ export function MapCanvas({
         }
       }
       if (e.key === 'Backspace' && tool !== 'select') {
+        e.preventDefault();
         if (isLandform && landformDrawMode === 'polygon' && regionDraft.length > 0) {
           setRegionDraft((prev) => prev.slice(0, -1));
+        } else if (isPathGuided && pathDrawMode === 'arc') {
+          if (arcThrough) {
+            setArcThrough(null);
+          } else if (arcStart && arcCommitted.length === 0) {
+            setArcStart(null);
+            setArcCursor(null);
+          } else if (arcCommitted.length > 0) {
+            setArcCommitted((prev) => {
+              const next = prev.slice(0, -1);
+              setArcStart(next.length > 0 ? next[next.length - 1] : null);
+              return next;
+            });
+            setArcCursor(null);
+          }
         } else if (polyDraft.length > 0) {
           setPolyDraft((prev) => prev.slice(0, -1));
         }
@@ -513,6 +614,10 @@ export function MapCanvas({
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') spaceDown.current = false;
+      if (e.key === 'Shift') {
+        shiftDown.current = false;
+        setShiftSnap(false);
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -521,10 +626,15 @@ export function MapCanvas({
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [
+    arcCommitted.length,
+    arcStart,
+    arcThrough,
     finishPolyline,
     finishPolygon,
     isLandform,
+    isPathGuided,
     landformDrawMode,
+    pathDrawMode,
     polyDraft.length,
     regionDraft.length,
     resetDrafts,
@@ -541,8 +651,14 @@ export function MapCanvas({
     }
     if (tool === 'eraser') return '点击要素即可删除';
     if (tool === 'label') return '点击地图放置标注 · 输入区名 / 车站名';
-    if (tool === 'railway') {
-      return '点击添加铁路节点 · Enter 完成 · Esc 取消 · Backspace 撤销';
+    if (isPathGuided) {
+      if (pathDrawMode === 'straight') {
+        return '点击添加节点 · Shift 吸附角度 · Enter 完成 · Esc 取消 · Backspace 撤销';
+      }
+      if (pathDrawMode === 'arc') {
+        return '三点定弧 · 可连续多段 · Enter 完成 · Esc 取消 · Backspace 撤销';
+      }
+      return '点击添加节点 · Enter 完成 · Esc 取消 · Backspace 撤销节点';
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
@@ -559,6 +675,21 @@ export function MapCanvas({
     return '选择工具开始绘制';
   })();
 
+  const metrics = (() => {
+    if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {
+      const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);
+      const shiftHint = shiftSnap ? ' · Shift 吸附' : '';
+      return `长度 ${formatLength(m.lengthM)} · 角度 ${formatAngle(m.angleDeg)}${shiftHint}`;
+    }
+    if (isPathGuided && pathDrawMode === 'arc' && arcStart && arcThrough && arcCursor) {
+      const arc = sampleArcThrough(arcStart, arcThrough, arcCursor);
+      if (arc) {
+        return `半径 ${formatRadius(arc.radius)} · 圆心角 ${formatAngle(arc.sweepDeg)}`;
+      }
+    }
+    return null;
+  })();
+
   return (
     <div className="canvas-wrap" ref={containerRef}>
       <canvas
@@ -571,6 +702,7 @@ export function MapCanvas({
         onDoubleClick={POLYLINE_TOOLS.includes(tool) ? finishPolyline : undefined}
       />
       <div className="canvas-hint">{hint}</div>
+      {metrics && <div className="canvas-metrics">{metrics}</div>}
     </div>
   );
 }
