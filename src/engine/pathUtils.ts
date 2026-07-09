@@ -49,9 +49,13 @@ export function polygonArea(points: Point[]): number {
   return Math.abs(area) / 2;
 }
 
-export function prepareFreehandPath(raw: Point[], epsilon = 25): Point[] {
-  if (raw.length < 3) return raw;
+/** 简化手绘路径；minPoints=3 用于闭合地貌，=2 用于开放道路/铁路 */
+export function prepareFreehandPath(raw: Point[], epsilon = 25, minPoints = 3): Point[] {
+  if (raw.length < minPoints) return raw;
   const simplified = simplifyPath(raw, epsilon);
-  if (simplified.length < 3) return raw.slice(0, 3);
+  if (simplified.length < minPoints) {
+    if (simplified.length >= 2) return simplified;
+    return raw.length >= minPoints ? raw.slice(0, minPoints) : raw;
+  }
   return simplified;
 }

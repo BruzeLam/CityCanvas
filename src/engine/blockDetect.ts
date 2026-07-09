@@ -1,5 +1,5 @@
-import type { CityBlock, MapFeature, Point } from '../types';
-import { createId } from '../types';
+import type { CityBlock, FeatureGrade, MapFeature, Point } from '../types';
+import { createId, featureGrade } from '../types';
 import { dist } from './geometry';
 import { polygonArea } from './pathUtils';
 
@@ -62,6 +62,27 @@ export function detectBlocks(
   const roads = features.filter((f) => f.kind === 'road' && f.points.length >= 2);
   if (roads.length === 0) return [];
 
+  // 按标高分层建图：同层才围合街区，跨层上跨/下穿不参与
+  const byGrade = new Map<FeatureGrade, MapFeature[]>();
+  for (const road of roads) {
+    const g = featureGrade(road);
+    const list = byGrade.get(g) ?? [];
+    list.push(road);
+    byGrade.set(g, list);
+  }
+
+  const allBlocks: CityBlock[] = [];
+  for (const gradeRoads of byGrade.values()) {
+    allBlocks.push(...detectBlocksOnGrade(gradeRoads, mapWidthM, mapHeightM));
+  }
+  return allBlocks.slice(0, 200);
+}
+
+function detectBlocksOnGrade(
+  roads: MapFeature[],
+  mapWidthM: number,
+  mapHeightM: number,
+): CityBlock[] {
   const nodeMap = new Map<string, number>();
   const nodes: Node[] = [];
 

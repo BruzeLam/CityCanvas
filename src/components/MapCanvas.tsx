@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   CityProject,
+  FeatureGrade,
   FeatureKind,
   LandformDrawMode,
   MapFeature,
@@ -13,8 +14,11 @@ import {
   LANDFORM_TOOLS,
   PATH_GUIDED_TOOLS,
   POLYLINE_TOOLS,
+  clampGrade,
   clampToMap,
   createId,
+  featureGrade,
+  formatGrade,
   rectFromCorners,
 } from '../types';
 import {
@@ -26,6 +30,7 @@ import {
   snapAnglePoint,
 } from '../engine/curveMath';
 import { findSnapPoint, screenToWorld } from '../engine/geometry';
+import { weaveSameGradeCrossings } from '../engine/junctions';
 import { dist, polygonArea, prepareFreehandPath } from '../engine/pathUtils';
 import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
 import { fitViewport, renderMap, type PreviewState } from '../engine/renderer';
@@ -34,10 +39,12 @@ type Props = {
   project: CityProject;
   tool: Tool;
   roadLevel: RoadLevel;
+  drawGrade: FeatureGrade;
   landformDrawMode: LandformDrawMode;
   pathDrawMode: PathDrawMode;
   selectedFeatureId: string | null;
   onSelectFeature: (id: string | null) => void;
+  onDrawGradeChange: (grade: FeatureGrade) => void;
   onProjectChange: (project: CityProject, options?: { undoSnapshot?: CityProject }) => void;
 };
 
@@ -61,10 +68,12 @@ export function MapCanvas({
   project,
   tool,
   roadLevel,
+  drawGrade,
   landformDrawMode,
   pathDrawMode,
   selectedFeatureId,
   onSelectFeature,
+  onDrawGradeChange,
   onProjectChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -230,9 +239,13 @@ export function MapCanvas({
 
   const addFeature = useCallback(
     (feature: MapFeature) => {
+      const nextFeatures =
+        feature.kind === 'road' || feature.kind === 'railway'
+          ? weaveSameGradeCrossings(project.features, feature)
+          : [...project.features, feature];
       onProjectChange({
         ...project,
-        features: [...project.features, feature],
+        features: nextFeatures,
       });
     },
     [onProjectChange, project],
@@ -274,6 +287,8 @@ export function MapCanvas({
   );
 
   const finishPolyline = useCallback(() => {
+    if (isPathGuided && pathDrawMode === 'free') return;
+
     const kind = toolKind(tool);
     const useArc = isPathGuided && pathDrawMode === 'arc';
     const points = useArc ? arcCommitted : polyDraft;
@@ -288,9 +303,47 @@ export function MapCanvas({
       points,
       closed: false,
       roadLevel: kind === 'road' ? roadLevel : undefined,
+      grade: kind === 'road' || kind === 'railway' ? drawGrade : undefined,
     });
     resetDrafts();
-  }, [addFeature, arcCommitted, isPathGuided, pathDrawMode, polyDraft, resetDrafts, roadLevel, tool]);
+  }, [
+    addFeature,
+    arcCommitted,
+    drawGrade,
+    isPathGuided,
+    pathDrawMode,
+    polyDraft,
+    resetDrafts,
+    roadLevel,
+    tool,
+  ]);
+
+  const commitPathFreehand = useCallback(
+    (rawPoints: Point[]) => {
+      const kind = toolKind(tool);
+      if (!kind || !PATH_GUIDED_TOOLS.includes(tool)) {
+        resetDrafts();
+        return;
+      }
+
+      const points = prepareFreehandPath(rawPoints, 22, 2);
+      if (points.length < 2) {
+        resetDrafts();
+        return;
+      }
+
+      addFeature({
+        id: createId(),
+        kind,
+        points,
+        closed: false,
+        roadLevel: kind === 'road' ? roadLevel : undefined,
+        grade: drawGrade,
+      });
+      resetDrafts();
+    },
+    [addFeature, drawGrade, resetDrafts, roadLevel, tool],
+  );
 
   const finishPolygon = useCallback(() => {
     if (regionDraft.length < 3) return;
@@ -343,7 +396,43 @@ export function MapCanvas({
     });
   };
 
+  const nudgeGrade = useCallback(
+    (delta: number) => {
+      if (selectedFeatureId && tool === 'select') {
+        const selected = projectRef.current.features.find((f) => f.id === selectedFeatureId);
+        if (selected && (selected.kind === 'road' || selected.kind === 'railway')) {
+          const nextGrade = clampGrade(featureGrade(selected) + delta);
+          onProjectChange(
+            {
+              ...projectRef.current,
+              features: projectRef.current.features.map((f) =>
+                f.id === selectedFeatureId ? { ...f, grade: nextGrade } : f,
+              ),
+            },
+            { undoSnapshot: projectRef.current },
+          );
+          onDrawGradeChange(nextGrade);
+          return;
+        }
+      }
+      onDrawGradeChange(clampGrade(drawGrade + delta));
+    },
+    [drawGrade, onDrawGradeChange, onProjectChange, selectedFeatureId, tool],
+  );
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+  };
+
   const handlePointerDown = (e: React.PointerEvent) => {
+    // 右键：打断当前绘制（禁用浏览器菜单）
+    if (e.button === 2) {
+      e.preventDefault();
+      resetDrafts();
+      if (tool === 'select') onSelectFeature(null);
+      return;
+    }
+
     const activeTool = spaceDown.current ? 'pan' : tool;
 
     if (activeTool === 'pan') {
@@ -378,6 +467,9 @@ export function MapCanvas({
       }
       const hit = findFeatureAt(projectRef.current.features, world, projectRef.current.viewport.zoom);
       onSelectFeature(hit?.id ?? null);
+      if (hit && (hit.kind === 'road' || hit.kind === 'railway')) {
+        onDrawGradeChange(featureGrade(hit));
+      }
       return;
     }
 
@@ -423,6 +515,15 @@ export function MapCanvas({
     }
 
     if (POLYLINE_TOOLS.includes(activeTool)) {
+      if (isPathGuided && pathDrawMode === 'free') {
+        freehandDrawing.current = true;
+        freehandPoints.current = [world];
+        setPolyDraft([world]);
+        setPolyCursor(null);
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
       const pt = snapPoint(world);
 
       if (isPathGuided && pathDrawMode === 'straight') {
@@ -492,7 +593,8 @@ export function MapCanvas({
       const last = freehandPoints.current[freehandPoints.current.length - 1];
       if (!last || dist(last, world) >= MIN_FREEHAND_SAMPLE_M) {
         freehandPoints.current = [...freehandPoints.current, world];
-        setRegionDraft(freehandPoints.current);
+        if (isLandform) setRegionDraft(freehandPoints.current);
+        else setPolyDraft(freehandPoints.current);
       }
       return;
     }
@@ -554,8 +656,14 @@ export function MapCanvas({
       freehandDrawing.current = false;
       const points = freehandPoints.current;
       freehandPoints.current = [];
-      if (points.length >= 3) commitRegion(points);
-      else resetDrafts();
+      if (isLandform) {
+        if (points.length >= 3) commitRegion(points);
+        else resetDrafts();
+      } else if (isPathGuided && pathDrawMode === 'free') {
+        commitPathFreehand(points);
+      } else {
+        resetDrafts();
+      }
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       return;
     }
@@ -582,6 +690,15 @@ export function MapCanvas({
       if (e.key === 'Escape') {
         resetDrafts();
         if (tool === 'select') onSelectFeature(null);
+      }
+      // Mac：加减号所在键（- / =）换标高
+      if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        nudgeGrade(-1);
+      }
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        nudgeGrade(1);
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedFeatureId && tool === 'select') {
         if (!e.metaKey && !e.ctrlKey) {
@@ -634,6 +751,7 @@ export function MapCanvas({
     isLandform,
     isPathGuided,
     landformDrawMode,
+    nudgeGrade,
     pathDrawMode,
     polyDraft.length,
     regionDraft.length,
@@ -647,30 +765,31 @@ export function MapCanvas({
   const hint = (() => {
     if (tool === 'pan') return '拖拽平移 · 滚轮缩放 · 左下角比例尺';
     if (tool === 'select') {
-      return '点击选中 · 拖拽顶点编辑 · Delete 删除 · Esc 取消选中';
+      return '点击选中 · 拖拽顶点 · -/= 换标高 · Delete 删除 · 右键取消选中';
     }
     if (tool === 'eraser') return '点击要素即可删除';
     if (tool === 'label') return '点击地图放置标注 · 输入区名 / 车站名';
     if (isPathGuided) {
+      const gradeHint = `标高 ${formatGrade(drawGrade)} · -/= 换层`;
       if (pathDrawMode === 'straight') {
-        return '点击添加节点 · Shift 吸附角度 · Enter 完成 · Esc 取消 · Backspace 撤销';
+        return `点击加点 · 双击完成 · 右键打断 · Shift 吸附 · ${gradeHint}`;
       }
       if (pathDrawMode === 'arc') {
-        return '三点定弧 · 可连续多段 · Enter 完成 · Esc 取消 · Backspace 撤销';
+        return `三点定弧 · 双击完成 · 右键打断 · ${gradeHint}`;
       }
-      return '点击添加节点 · Enter 完成 · Esc 取消 · Backspace 撤销节点';
+      return `按住拖拽 · 松开完成 · 右键打断 · ${gradeHint}`;
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
-        return '按住拖拽绘制轮廓 · 松开自动闭合 · Esc 取消';
+        return '按住拖拽绘制轮廓 · 松开自动闭合 · 右键打断';
       }
       if (landformDrawMode === 'polygon') {
-        return '点击添加顶点 · 点击起点或 Enter 闭合 · Backspace 撤销 · Esc 取消';
+        return '点击加点 · 双击/Enter 闭合 · 右键打断 · Backspace 撤销';
       }
-      return '拖拽框选矩形区域 · 松开完成';
+      return '拖拽框选矩形 · 松开完成 · 右键打断';
     }
     if (POLYLINE_TOOLS.includes(tool)) {
-      return '点击添加节点 · Enter 完成 · Esc 取消 · Backspace 撤销节点';
+      return '点击加点 · 双击完成 · 右键打断 · Backspace 撤销';
     }
     return '选择工具开始绘制';
   })();
@@ -699,7 +818,11 @@ export function MapCanvas({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onDoubleClick={POLYLINE_TOOLS.includes(tool) ? finishPolyline : undefined}
+        onContextMenu={handleContextMenu}
+        onDoubleClick={() => {
+          if (isLandform && landformDrawMode === 'polygon') finishPolygon();
+          else if (POLYLINE_TOOLS.includes(tool)) finishPolyline();
+        }}
       />
       <div className="canvas-hint">{hint}</div>
       {metrics && <div className="canvas-metrics">{metrics}</div>}

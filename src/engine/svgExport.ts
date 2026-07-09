@@ -1,5 +1,5 @@
 import type { CityProject, MapFeature, Point } from '../types';
-import { ROAD_STYLES, getLayers } from '../types';
+import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
 
 function esc(s: string): string {
@@ -14,6 +14,10 @@ function pathD(points: Point[], closed: boolean): string {
   if (points.length === 0) return '';
   const parts = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`);
   return parts.join(' ') + (closed ? ' Z' : '');
+}
+
+function byGradeAsc(a: MapFeature, b: MapFeature): number {
+  return featureGrade(a) - featureGrade(b);
 }
 
 /**
@@ -68,7 +72,7 @@ export function exportToSvg(project: CityProject): string {
   }
 
   if (layers.roads) {
-    for (const f of features.filter((x) => x.kind === 'road')) {
+    for (const f of features.filter((x) => x.kind === 'road').sort(byGradeAsc)) {
       const style = ROAD_STYLES[f.roadLevel ?? 'local'];
       parts.push(
         `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.casing}" stroke-width="${style.width + 8}" stroke-linecap="round" stroke-linejoin="round"/>`,
@@ -80,7 +84,7 @@ export function exportToSvg(project: CityProject): string {
   }
 
   if (layers.railways) {
-    for (const f of features.filter((x) => x.kind === 'railway')) {
+    for (const f of features.filter((x) => x.kind === 'railway').sort(byGradeAsc)) {
       parts.push(
         `<path d="${pathD(f.points, false)}" fill="none" stroke="#2a2a2a" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>`,
       );

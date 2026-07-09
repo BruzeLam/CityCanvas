@@ -1,19 +1,24 @@
-import type { LandformDrawMode, PathDrawMode, RoadLevel, Tool } from '../types';
+import type { FeatureGrade, LandformDrawMode, PathDrawMode, RoadLevel, Tool } from '../types';
 import {
+  FEATURE_GRADES,
   LANDFORM_DRAW_MODES,
   LANDFORM_TOOLS,
   PATH_DRAW_MODES,
   PATH_GUIDED_TOOLS,
   ROAD_STYLES,
+  clampGrade,
+  formatGrade,
 } from '../types';
 
 type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
+  drawGrade: FeatureGrade;
   landformDrawMode: LandformDrawMode;
   pathDrawMode: PathDrawMode;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
+  onDrawGradeChange: (grade: FeatureGrade) => void;
   onLandformDrawModeChange: (mode: LandformDrawMode) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
 };
@@ -36,10 +41,12 @@ const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
 export function Toolbar({
   tool,
   roadLevel,
+  drawGrade,
   landformDrawMode,
   pathDrawMode,
   onToolChange,
   onRoadLevelChange,
+  onDrawGradeChange,
   onLandformDrawModeChange,
   onPathDrawModeChange,
 }: Props) {
@@ -112,7 +119,7 @@ export function Toolbar({
           onClick={() => onToolChange('road')}
         >
           🛣️ 道路
-          <span className="tool-hint">直线 / 圆弧</span>
+          <span className="tool-hint">直线 / 圆弧 / 自由曲线</span>
         </button>
         {tool === 'road' && (
           <div className="road-levels">
@@ -138,24 +145,62 @@ export function Toolbar({
           onClick={() => onToolChange('railway')}
         >
           🚆 铁路
-          <span className="tool-hint">直线 / 圆弧</span>
+          <span className="tool-hint">直线 / 圆弧 / 自由曲线</span>
         </button>
 
         {isPathGuided(tool) && (
-          <div className="draw-modes">
-            <p className="draw-modes-label">路径方式</p>
-            {PATH_DRAW_MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                className={pathDrawMode === mode.id ? 'active draw-mode-chip' : 'draw-mode-chip'}
-                onClick={() => onPathDrawModeChange(mode.id)}
-                title={mode.desc}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="draw-modes">
+              <p className="draw-modes-label">路径方式</p>
+              {PATH_DRAW_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  className={pathDrawMode === mode.id ? 'active draw-mode-chip' : 'draw-mode-chip'}
+                  onClick={() => onPathDrawModeChange(mode.id)}
+                  title={mode.desc}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+            <div className="draw-modes">
+              <p className="draw-modes-label">标高 · -/=</p>
+              <div className="grade-row">
+                <button
+                  type="button"
+                  className="grade-step"
+                  onClick={() => onDrawGradeChange(clampGrade(drawGrade - 1))}
+                  title="降低一层 -"
+                >
+                  −
+                </button>
+                <span className="grade-current">{formatGrade(drawGrade)}</span>
+                <button
+                  type="button"
+                  className="grade-step"
+                  onClick={() => onDrawGradeChange(clampGrade(drawGrade + 1))}
+                  title="升高一层 ="
+                >
+                  +
+                </button>
+              </div>
+              <div className="grade-chips">
+                {FEATURE_GRADES.map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    className={drawGrade === g ? 'active draw-mode-chip' : 'draw-mode-chip'}
+                    onClick={() => onDrawGradeChange(g)}
+                    title={formatGrade(g)}
+                  >
+                    {g > 0 ? `+${g}` : `${g}`}
+                  </button>
+                ))}
+              </div>
+              <p className="tool-note">同层交叉成路口 · 异层上跨/下穿</p>
+            </div>
+          </>
         )}
       </section>
 
@@ -169,7 +214,7 @@ export function Toolbar({
           🏷️ 文字标注
           <span className="tool-hint">点击放置</span>
         </button>
-        <p className="tool-note">街区由道路围合自动识别，无需手绘</p>
+        <p className="tool-note">街区由同层道路围合自动识别</p>
       </section>
     </aside>
   );

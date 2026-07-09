@@ -1,11 +1,14 @@
 import { formatDistance } from '../constants/mapPresets';
 import { detectBlocks } from '../engine/blockDetect';
-import type { CityProject, LayerKey, MapStyle } from '../types';
+import type { CityProject, FeatureGrade, LayerKey, MapStyle } from '../types';
 import {
   DEFAULT_LAYERS,
+  FEATURE_GRADES,
   LAYER_LABELS,
   LAYER_TOGGLE_LABELS,
   ROAD_STYLES,
+  featureGrade,
+  formatGrade,
   getLayers,
 } from '../types';
 
@@ -16,6 +19,7 @@ type Props = {
   cloudSaved: boolean;
   localMode?: boolean;
   onDeleteSelected: () => void;
+  onSelectedGradeChange?: (grade: FeatureGrade) => void;
   onMapStyleChange: (style: MapStyle) => void;
   onLayerToggle: (key: LayerKey) => void;
   onSave: () => void;
@@ -42,6 +46,7 @@ export function SidePanel({
   cloudSaved,
   localMode = false,
   onDeleteSelected,
+  onSelectedGradeChange,
   onMapStyleChange,
   onLayerToggle,
   onSave,
@@ -95,8 +100,29 @@ export function SidePanel({
                 : LAYER_LABELS[selected.kind]}
           </p>
           <p className="selection-meta">
-            {selected.kind === 'label' ? '点击位置' : `${selected.points.length} 个顶点`}
+            {selected.kind === 'label'
+              ? '点击位置'
+              : selected.kind === 'road' || selected.kind === 'railway'
+                ? `${selected.points.length} 个顶点 · ${formatGrade(featureGrade(selected))}`
+                : `${selected.points.length} 个顶点`}
           </p>
+          {(selected.kind === 'road' || selected.kind === 'railway') && onSelectedGradeChange && (
+            <div className="grade-chips selection-grades">
+              {FEATURE_GRADES.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={
+                    featureGrade(selected) === g ? 'active draw-mode-chip' : 'draw-mode-chip'
+                  }
+                  onClick={() => onSelectedGradeChange(g)}
+                  title={formatGrade(g)}
+                >
+                  {g > 0 ? `+${g}` : `${g}`}
+                </button>
+              ))}
+            </div>
+          )}
           <button type="button" className="danger-btn" onClick={onDeleteSelected}>
             删除此要素
           </button>

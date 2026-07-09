@@ -17,6 +17,7 @@ import { exportToPng } from './engine/renderer';
 import { downloadSvg } from './engine/svgExport';
 import type {
   CityProject,
+  FeatureGrade,
   LandformDrawMode,
   LayerKey,
   MapStyle,
@@ -24,7 +25,7 @@ import type {
   RoadLevel,
   Tool,
 } from './types';
-import { getLayers } from './types';
+import { DEFAULT_GRADE, getLayers } from './types';
 import './App.css';
 
 type BootPhase = 'booting' | 'auth' | 'ready';
@@ -38,6 +39,7 @@ function App() {
   const [landformDrawMode, setLandformDrawMode] = useState<LandformDrawMode>('freehand');
   const [pathDrawMode, setPathDrawMode] = useState<PathDrawMode>('straight');
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
+  const [drawGrade, setDrawGrade] = useState<FeatureGrade>(DEFAULT_GRADE);
   const [, setHistory] = useState<CityProject[]>([]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [dirty, setDirty] = useState(false);
@@ -366,6 +368,7 @@ function App() {
         <Toolbar
           tool={tool}
           roadLevel={roadLevel}
+          drawGrade={drawGrade}
           landformDrawMode={landformDrawMode}
           pathDrawMode={pathDrawMode}
           onToolChange={(t) => {
@@ -373,6 +376,7 @@ function App() {
             if (t !== 'select') setSelectedFeatureId(null);
           }}
           onRoadLevelChange={setRoadLevel}
+          onDrawGradeChange={setDrawGrade}
           onLandformDrawModeChange={setLandformDrawMode}
           onPathDrawModeChange={setPathDrawMode}
         />
@@ -381,10 +385,12 @@ function App() {
           project={project}
           tool={tool}
           roadLevel={roadLevel}
+          drawGrade={drawGrade}
           landformDrawMode={landformDrawMode}
           pathDrawMode={pathDrawMode}
           selectedFeatureId={selectedFeatureId}
           onSelectFeature={setSelectedFeatureId}
+          onDrawGradeChange={setDrawGrade}
           onProjectChange={updateProject}
         />
         <SidePanel
@@ -403,6 +409,19 @@ function App() {
               { undoSnapshot: project },
             );
             setSelectedFeatureId(null);
+          }}
+          onSelectedGradeChange={(grade: FeatureGrade) => {
+            if (!selectedFeatureId) return;
+            updateProject(
+              {
+                ...project,
+                features: project.features.map((f) =>
+                  f.id === selectedFeatureId ? { ...f, grade } : f,
+                ),
+              },
+              { undoSnapshot: project },
+            );
+            setDrawGrade(grade);
           }}
           onMapStyleChange={(style: MapStyle) => {
             setDirty(true);

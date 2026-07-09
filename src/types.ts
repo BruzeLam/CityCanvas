@@ -12,15 +12,43 @@ export type FeatureKind =
   | 'railway'
   | 'label';
 
+/** 路网标高：同层交叉成路口，不同层上跨/下穿。陆地默认 0，范围 -3…+3 */
+export type FeatureGrade = -3 | -2 | -1 | 0 | 1 | 2 | 3;
+
+export const GRADE_MIN = -3 as const;
+export const GRADE_MAX = 3 as const;
+export const DEFAULT_GRADE: FeatureGrade = 0;
+
+export const FEATURE_GRADES: FeatureGrade[] = [-3, -2, -1, 0, 1, 2, 3];
+
 export type MapFeature = {
   id: string;
   kind: FeatureKind;
   points: Point[];
   closed: boolean;
   roadLevel?: RoadLevel;
+  /** 路网标高（道路/铁路）；缺省视为 0 */
+  grade?: FeatureGrade;
   /** 标注文字（kind === 'label'） */
   labelText?: string;
 };
+
+export function featureGrade(f: Pick<MapFeature, 'grade'>): FeatureGrade {
+  const g = f.grade ?? DEFAULT_GRADE;
+  if (g < GRADE_MIN) return GRADE_MIN;
+  if (g > GRADE_MAX) return GRADE_MAX;
+  return g as FeatureGrade;
+}
+
+export function clampGrade(n: number): FeatureGrade {
+  return Math.max(GRADE_MIN, Math.min(GRADE_MAX, Math.round(n))) as FeatureGrade;
+}
+
+export function formatGrade(g: FeatureGrade): string {
+  if (g === 0) return '0 地面';
+  if (g > 0) return `+${g} 上跨`;
+  return `${g} 下穿`;
+}
 
 /** 路网围合自动识别的街区（不单独存档，由道路实时推算） */
 export type CityBlock = {
@@ -119,13 +147,13 @@ export const LANDFORM_TOOLS: Tool[] = ['ocean', 'land', 'mountain'];
 /** 折线点击绘制（河流 / 道路 / 铁路） */
 export const POLYLINE_TOOLS: Tool[] = ['river', 'road', 'railway'];
 
-/** 道路 / 铁路路径绘制方式（参照天际线 / TF2：直线角度 + 三点圆弧） */
+/** 道路 / 铁路路径绘制方式：直线 / 圆弧 / 自由曲线 */
 export type PathDrawMode = 'straight' | 'arc' | 'free';
 
 export const PATH_DRAW_MODES: { id: PathDrawMode; label: string; desc: string }[] = [
   { id: 'straight', label: '直线', desc: 'Shift 吸附角度 · 显示长度' },
   { id: 'arc', label: '圆弧', desc: '三点定弧 · 显示半径' },
-  { id: 'free', label: '折线', desc: '自由点选' },
+  { id: 'free', label: '自由曲线', desc: '按住拖拽手绘' },
 ];
 
 /** 支持直线/圆弧模式的工具 */

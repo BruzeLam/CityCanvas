@@ -7,9 +7,13 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, getLayers } from '../types';
+import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
 import { sampleArcThrough } from './curveMath';
+
+function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
+  return featureGrade(a) - featureGrade(b);
+}
 
 type StylePalette = {
   outside: string;
@@ -599,14 +603,16 @@ export function renderMap(
   }
 
   if (layers.roads) {
-    for (const feature of features) {
-      if (feature.kind === 'road') drawRoad(ctx, feature, viewport, project.mapStyle);
+    const roads = features.filter((f) => f.kind === 'road').sort(sortByGradeAsc);
+    for (const feature of roads) {
+      drawRoad(ctx, feature, viewport, project.mapStyle);
     }
   }
 
   if (layers.railways) {
-    for (const feature of features) {
-      if (feature.kind === 'railway') drawRailway(ctx, feature, viewport, palette);
+    const rails = features.filter((f) => f.kind === 'railway').sort(sortByGradeAsc);
+    for (const feature of rails) {
+      drawRailway(ctx, feature, viewport, palette);
     }
   }
 
