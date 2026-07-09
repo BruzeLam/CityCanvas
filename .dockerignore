@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-server
+data
+.git
+.vercel
+.env
+.env.local
+*.md
+!README.md
+.cursor
+coverage
+*.log

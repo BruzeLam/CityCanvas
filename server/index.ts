@@ -209,8 +209,9 @@ if (isProd && fs.existsSync(distPath)) {
 }
 
 const port = Number(process.env.PORT) || 3000;
+const hostname = process.env.HOST || '0.0.0.0';
 
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`CityCanvas server http://localhost:${info.port}`);
+serve({ fetch: app.fetch, port, hostname }, (info) => {
+  console.log(`CityCanvas server http://${hostname}:${info.port}`);
   if (isProd) console.log('Serving static frontend from dist/');
 });
