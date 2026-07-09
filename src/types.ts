@@ -2,8 +2,15 @@ export type Point = { x: number; y: number };
 
 export type RoadLevel = 'expressway' | 'arterial' | 'collector' | 'local';
 
-/** 地貌与人工要素 */
-export type FeatureKind = 'ocean' | 'land' | 'mountain' | 'river' | 'road';
+/** 地貌与人工要素（手绘，非 3D 导出） */
+export type FeatureKind =
+  | 'ocean'
+  | 'land'
+  | 'mountain'
+  | 'river'
+  | 'road'
+  | 'railway'
+  | 'label';
 
 export type MapFeature = {
   id: string;
@@ -11,6 +18,14 @@ export type MapFeature = {
   points: Point[];
   closed: boolean;
   roadLevel?: RoadLevel;
+  /** 标注文字（kind === 'label'） */
+  labelText?: string;
+};
+
+/** 路网围合自动识别的街区（不单独存档，由道路实时推算） */
+export type CityBlock = {
+  id: string;
+  points: Point[];
 };
 
 export type Tool =
@@ -21,7 +36,9 @@ export type Tool =
   | 'land'
   | 'mountain'
   | 'river'
-  | 'road';
+  | 'road'
+  | 'railway'
+  | 'label';
 
 export type MapStyle = 'navigation' | 'blueprint' | 'sketch';
 
@@ -40,6 +57,31 @@ export type MapSettings = {
   scale: number;
 };
 
+/** 图层开关（参照 CSLMV 可开关图层） */
+export type LayerKey = 'terrain' | 'blocks' | 'roads' | 'railways' | 'rivers' | 'labels' | 'grid';
+
+export type LayerVisibility = Record<LayerKey, boolean>;
+
+export const DEFAULT_LAYERS: LayerVisibility = {
+  terrain: true,
+  blocks: true,
+  roads: true,
+  railways: true,
+  rivers: true,
+  labels: true,
+  grid: true,
+};
+
+export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
+  terrain: '地貌',
+  blocks: '街区',
+  roads: '道路',
+  railways: '铁路',
+  rivers: '河流',
+  labels: '标注',
+  grid: '网格',
+};
+
 export type CityProject = {
   /** 云端存档 ID（登录后自动关联） */
   cloudId?: string;
@@ -48,6 +90,7 @@ export type CityProject = {
   features: MapFeature[];
   viewport: Viewport;
   mapStyle: MapStyle;
+  layers?: LayerVisibility;
 };
 
 export const ROAD_STYLES: Record<
@@ -66,13 +109,15 @@ export const LAYER_LABELS: Record<FeatureKind, string> = {
   mountain: '山地',
   river: '河流',
   road: '道路',
+  railway: '铁路',
+  label: '标注',
 };
 
 /** 地貌面状要素（海洋 / 陆地 / 山地） */
 export const LANDFORM_TOOLS: Tool[] = ['ocean', 'land', 'mountain'];
 
-/** 折线点击绘制（河流 / 道路） */
-export const POLYLINE_TOOLS: Tool[] = ['river', 'road'];
+/** 折线点击绘制（河流 / 道路 / 铁路） */
+export const POLYLINE_TOOLS: Tool[] = ['river', 'road', 'railway'];
 
 /** 地貌绘制方式 */
 export type LandformDrawMode = 'freehand' | 'polygon' | 'rectangle';
@@ -98,14 +143,27 @@ export function createProject(
     features: [],
     viewport: { x: 0, y: 0, zoom: 1 },
     mapStyle,
+    layers: { ...DEFAULT_LAYERS },
   };
+}
+
+export function getLayers(project: CityProject): LayerVisibility {
+  return { ...DEFAULT_LAYERS, ...project.layers };
 }
 
 /** 兼容旧版 feature kind */
 export function normalizeFeatureKind(kind: string): FeatureKind {
   if (kind === 'coastline') return 'ocean';
   if (kind === 'greenbelt') return 'mountain';
-  if (kind === 'ocean' || kind === 'land' || kind === 'mountain' || kind === 'river' || kind === 'road') {
+  if (
+    kind === 'ocean' ||
+    kind === 'land' ||
+    kind === 'mountain' ||
+    kind === 'river' ||
+    kind === 'road' ||
+    kind === 'railway' ||
+    kind === 'label'
+  ) {
     return kind;
   }
   return 'land';

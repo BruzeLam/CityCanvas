@@ -9,6 +9,7 @@ type MapFilePayload = {
   settings: CityProject['settings'];
   mapStyle: MapStyle;
   features: MapFeature[];
+  layers?: CityProject['layers'];
 };
 
 function parseFrontmatter(md: string): Record<string, string> {
@@ -35,6 +36,7 @@ export function serializeMapToMd(project: CityProject): string {
     settings: project.settings,
     mapStyle: project.mapStyle,
     features: project.features,
+    layers: project.layers,
   };
 
   const { widthM, heightM, scale } = project.settings;
@@ -88,6 +90,7 @@ export function parseMapFromMd(text: string): CityProject {
         kind: normalizeFeatureKind(f.kind as string),
       })),
       viewport: { x: 0, y: 0, zoom: 1 },
+      layers: payload.layers,
     };
   }
 

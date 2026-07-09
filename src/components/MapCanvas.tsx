@@ -36,6 +36,8 @@ function toolKind(tool: Tool): FeatureKind | null {
   if (tool === 'mountain') return 'mountain';
   if (tool === 'river') return 'river';
   if (tool === 'road') return 'road';
+  if (tool === 'railway') return 'railway';
+  if (tool === 'label') return 'label';
   return null;
 }
 
@@ -340,6 +342,19 @@ export function MapCanvas({
       return;
     }
 
+    if (activeTool === 'label') {
+      const text = window.prompt('标注文字', '新区')?.trim();
+      if (!text) return;
+      addFeature({
+        id: createId(),
+        kind: 'label',
+        points: [world],
+        closed: false,
+        labelText: text,
+      });
+      return;
+    }
+
     if (LANDFORM_TOOLS.includes(activeTool)) {
       if (landformDrawMode === 'rectangle') {
         setRectStart(world);
@@ -525,6 +540,10 @@ export function MapCanvas({
       return '点击选中 · 拖拽顶点编辑 · Delete 删除 · Esc 取消选中';
     }
     if (tool === 'eraser') return '点击要素即可删除';
+    if (tool === 'label') return '点击地图放置标注 · 输入区名 / 车站名';
+    if (tool === 'railway') {
+      return '点击添加铁路节点 · Enter 完成 · Esc 取消 · Backspace 撤销';
+    }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
         return '按住拖拽绘制轮廓 · 松开自动闭合 · Esc 取消';

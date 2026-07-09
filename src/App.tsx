@@ -9,7 +9,9 @@ import { api } from './io/api';
 import { downloadMapMd, loadMapFromFile } from './io/mapFile';
 import { payloadToProject, projectToPayload } from './io/mapPayload';
 import { exportToPng } from './engine/renderer';
-import type { CityProject, LandformDrawMode, MapStyle, RoadLevel, Tool } from './types';
+import { downloadSvg } from './engine/svgExport';
+import type { CityProject, LandformDrawMode, LayerKey, MapStyle, RoadLevel, Tool } from './types';
+import { getLayers } from './types';
 import './App.css';
 
 function App() {
@@ -85,6 +87,11 @@ function App() {
     link.download = `${project.name || 'city'}.png`;
     link.href = dataUrl;
     link.click();
+  };
+
+  const handleExportSvg = () => {
+    if (!project) return;
+    downloadSvg(project);
   };
 
   const handleExportMd = () => {
@@ -261,8 +268,17 @@ function App() {
             setDirty(true);
             setProject((p) => (p ? { ...p, mapStyle: style } : p));
           }}
+          onLayerToggle={(key: LayerKey) => {
+            setDirty(true);
+            setProject((p) => {
+              if (!p) return p;
+              const layers = getLayers(p);
+              return { ...p, layers: { ...layers, [key]: !layers[key] } };
+            });
+          }}
           onSave={handleSave}
           onExport={handleExport}
+          onExportSvg={handleExportSvg}
           onExportMd={handleExportMd}
           onUndo={handleUndo}
           onNewMap={() => {

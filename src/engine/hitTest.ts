@@ -28,6 +28,10 @@ export function pointInPolygon(p: Point, polygon: Point[]): boolean {
 export function hitTestFeature(feature: MapFeature, p: Point, zoom: number): boolean {
   const lineThreshold = snapThreshold(zoom) * 2;
 
+  if (feature.kind === 'label' && feature.points[0]) {
+    return dist(p, feature.points[0]) < snapThreshold(zoom) * 2.5;
+  }
+
   if (feature.closed && feature.points.length >= 3) {
     return pointInPolygon(p, feature.points);
   }
@@ -40,7 +44,15 @@ export function hitTestFeature(feature: MapFeature, p: Point, zoom: number): boo
   return false;
 }
 
-const HIT_ORDER: FeatureKind[] = ['road', 'river', 'mountain', 'land', 'ocean'];
+const HIT_ORDER: FeatureKind[] = [
+  'label',
+  'railway',
+  'road',
+  'river',
+  'mountain',
+  'land',
+  'ocean',
+];
 
 export function findFeatureAt(
   features: MapFeature[],

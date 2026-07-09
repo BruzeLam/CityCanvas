@@ -1,0 +1,119 @@
+import type { CityProject, MapFeature, Point } from '../types';
+import { ROAD_STYLES, getLayers } from '../types';
+import { detectBlocks } from './blockDetect';
+
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function pathD(points: Point[], closed: boolean): string {
+  if (points.length === 0) return '';
+  const parts = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`);
+  return parts.join(' ') + (closed ? ' Z' : '');
+}
+
+/**
+ * 导出 SVG（世界坐标，单位米）。
+ * 视觉参照 CSLMV：扁平色块 + 分级路网 + 铁路虚线 + 街区填充。
+ */
+export function exportToSvg(project: CityProject): string {
+  const { widthM, heightM } = project.settings;
+  const layers = getLayers(project);
+  const features = project.features;
+  const parts: string[] = [];
+
+  parts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${widthM} ${heightM}" width="${widthM}" height="${heightM}">`,
+  );
+  parts.push(`<title>${esc(project.name)}</title>`);
+  parts.push(`<rect width="100%" height="100%" fill="#e8f0d8"/>`);
+
+  if (layers.terrain) {
+    for (const f of features.filter((x) => x.kind === 'ocean')) {
+      parts.push(
+        `<path d="${pathD(f.points, true)}" fill="#8ec4e8" stroke="#5a9fc4" stroke-width="8" fill-rule="evenodd"/>`,
+      );
+    }
+    for (const f of features.filter((x) => x.kind === 'land')) {
+      parts.push(
+        `<path d="${pathD(f.points, true)}" fill="#e8f0d8" stroke="#888880" stroke-width="4"/>`,
+      );
+    }
+    for (const f of features.filter((x) => x.kind === 'mountain')) {
+      parts.push(
+        `<path d="${pathD(f.points, true)}" fill="#c5d9a8" stroke="#7aa862" stroke-width="6"/>`,
+      );
+    }
+  }
+
+  if (layers.blocks) {
+    const blocks = detectBlocks(features, widthM, heightM);
+    for (const b of blocks) {
+      parts.push(
+        `<path d="${pathD(b.points, true)}" fill="rgba(236,236,232,0.92)" stroke="rgba(180,180,170,0.5)" stroke-width="2"/>`,
+      );
+    }
+  }
+
+  if (layers.rivers) {
+    for (const f of features.filter((x) => x.kind === 'river')) {
+      parts.push(
+        `<path d="${pathD(f.points, false)}" fill="none" stroke="#5a9fc4" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>`,
+      );
+    }
+  }
+
+  if (layers.roads) {
+    for (const f of features.filter((x) => x.kind === 'road')) {
+      const style = ROAD_STYLES[f.roadLevel ?? 'local'];
+      parts.push(
+        `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.casing}" stroke-width="${style.width + 8}" stroke-linecap="round" stroke-linejoin="round"/>`,
+      );
+      parts.push(
+        `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`,
+      );
+    }
+  }
+
+  if (layers.railways) {
+    for (const f of features.filter((x) => x.kind === 'railway')) {
+      parts.push(
+        `<path d="${pathD(f.points, false)}" fill="none" stroke="#2a2a2a" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>`,
+      );
+      parts.push(
+        `<path d="${pathD(f.points, false)}" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="24 20"/>`,
+      );
+    }
+  }
+
+  if (layers.labels) {
+    for (const f of features.filter((x) => x.kind === 'label')) {
+      const p = f.points[0];
+      if (!p) continue;
+      const text = esc(f.labelText?.trim() || '标注');
+      parts.push(
+        `<text x="${p.x.toFixed(1)}" y="${p.y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-family="PingFang SC, Helvetica Neue, sans-serif" font-size="80" font-weight="600" fill="#1f2937" stroke="#ffffff" stroke-width="8" paint-order="stroke">${text}</text>`,
+      );
+    }
+  }
+
+  parts.push(`</svg>`);
+  return parts.join('\n');
+}
+
+export function downloadSvg(project: CityProject) {
+  const svg = exportToSvg(project);
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = `${project.name || 'city'}.svg`;
+  link.href = url;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export type { MapFeature };

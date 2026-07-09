@@ -9,6 +9,7 @@ export type MapPayload = {
   settings: CityProject['settings'];
   mapStyle: MapStyle;
   features: MapFeature[];
+  layers?: CityProject['layers'];
 };
 
 export function projectToPayload(project: CityProject): MapPayload {
@@ -18,6 +19,7 @@ export function projectToPayload(project: CityProject): MapPayload {
     settings: project.settings,
     mapStyle: project.mapStyle,
     features: project.features,
+    layers: project.layers,
   };
 }
 
@@ -32,5 +34,6 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
       kind: normalizeFeatureKind(f.kind as string),
     })),
     viewport: { x: 0, y: 0, zoom: 1 },
+    layers: payload.layers,
   };
 }

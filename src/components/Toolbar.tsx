@@ -121,6 +121,27 @@ export function Toolbar({
             ))}
           </div>
         )}
+        <button
+          type="button"
+          className={tool === 'railway' ? 'active' : ''}
+          onClick={() => onToolChange('railway')}
+        >
+          🚆 铁路
+          <span className="tool-hint">折线</span>
+        </button>
+      </section>
+
+      <section className="tool-section">
+        <h3>步骤 4 · 标注</h3>
+        <button
+          type="button"
+          className={tool === 'label' ? 'active' : ''}
+          onClick={() => onToolChange('label')}
+        >
+          🏷️ 文字标注
+          <span className="tool-hint">点击放置</span>
+        </button>
+        <p className="tool-note">街区由道路围合自动识别，无需手绘</p>
       </section>
     </aside>
   );

@@ -1,5 +1,14 @@
-import type { CityProject, MapFeature, MapStyle, Point, Viewport } from '../types';
-import { ROAD_STYLES } from '../types';
+import type {
+  CityBlock,
+  CityProject,
+  LayerVisibility,
+  MapFeature,
+  MapStyle,
+  Point,
+  Viewport,
+} from '../types';
+import { ROAD_STYLES, getLayers } from '../types';
+import { detectBlocks } from './blockDetect';
 
 type StylePalette = {
   outside: string;
@@ -14,22 +23,32 @@ type StylePalette = {
   previewFill: string;
   scaleBar: string;
   scaleText: string;
+  blockFill: string;
+  blockStroke: string;
+  railway: string;
+  label: string;
+  labelHalo: string;
 };
 
 const PALETTES: Record<MapStyle, StylePalette> = {
   navigation: {
     outside: '#2a2a2e',
-    land: '#f0ebe0',
-    water: '#9ec9e8',
-    waterStroke: '#6ba3c7',
-    mountain: '#b8d4a8',
+    land: '#e8f0d8',
+    water: '#8ec4e8',
+    waterStroke: '#5a9fc4',
+    mountain: '#c5d9a8',
     mountainStroke: '#7aa862',
     border: '#888880',
-    grid: 'rgba(0,0,0,0.06)',
+    grid: 'rgba(0,0,0,0.05)',
     preview: 'rgba(60,100,200,0.8)',
     previewFill: 'rgba(60,100,200,0.15)',
     scaleBar: '#333',
     scaleText: '#555',
+    blockFill: 'rgba(236, 236, 232, 0.92)',
+    blockStroke: 'rgba(180, 180, 170, 0.5)',
+    railway: '#2a2a2a',
+    label: '#1f2937',
+    labelHalo: 'rgba(255,255,255,0.85)',
   },
   blueprint: {
     outside: '#0f2035',
@@ -44,6 +63,11 @@ const PALETTES: Record<MapStyle, StylePalette> = {
     previewFill: 'rgba(120,200,255,0.12)',
     scaleBar: '#8ec5ff',
     scaleText: '#a8d4ff',
+    blockFill: 'rgba(40, 70, 100, 0.55)',
+    blockStroke: 'rgba(110, 180, 255, 0.35)',
+    railway: '#c8e0ff',
+    label: '#e8f4ff',
+    labelHalo: 'rgba(10,30,50,0.7)',
   },
   sketch: {
     outside: '#eee',
@@ -58,6 +82,11 @@ const PALETTES: Record<MapStyle, StylePalette> = {
     previewFill: 'rgba(80,80,80,0.08)',
     scaleBar: '#666',
     scaleText: '#666',
+    blockFill: 'rgba(245, 245, 240, 0.9)',
+    blockStroke: 'rgba(160, 160, 150, 0.45)',
+    railway: '#333',
+    label: '#333',
+    labelHalo: 'rgba(255,255,255,0.9)',
   },
 };
 
@@ -170,6 +199,24 @@ function drawRegion(
   }
 }
 
+function drawBlocks(
+  ctx: CanvasRenderingContext2D,
+  blocks: CityBlock[],
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  for (const block of blocks) {
+    const pts = block.points.map((p) => toScreen(p, viewport));
+    if (pts.length < 3) continue;
+    tracePath(ctx, pts, true);
+    ctx.fillStyle = palette.blockFill;
+    ctx.fill();
+    ctx.strokeStyle = palette.blockStroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
 function drawRiver(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
@@ -213,6 +260,60 @@ function drawRoad(
   ctx.strokeStyle = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
   ctx.lineWidth = style === 'sketch' ? Math.max(1, width * 0.5) : width;
   ctx.stroke();
+}
+
+function drawRailway(
+  ctx: CanvasRenderingContext2D,
+  feature: MapFeature,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  const points = feature.points.map((p) => toScreen(p, viewport));
+  if (points.length < 2) return;
+
+  const w = Math.max(2, 3.5 * viewport.zoom);
+
+  tracePath(ctx, points, false);
+  ctx.strokeStyle = palette.railway;
+  ctx.lineWidth = w;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // CSLMV 风格：黑白虚线轨枕感
+  ctx.setLineDash([Math.max(4, 6 * viewport.zoom), Math.max(4, 5 * viewport.zoom)]);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = Math.max(1, w * 0.45);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawLabel(
+  ctx: CanvasRenderingContext2D,
+  feature: MapFeature,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  if (feature.points.length === 0) return;
+  const text = feature.labelText?.trim() || '标注';
+  const p = toScreen(feature.points[0], viewport);
+  const fontSize = Math.max(11, Math.min(22, 14 * Math.sqrt(viewport.zoom)));
+
+  ctx.font = `600 ${fontSize}px "PingFang SC", "Helvetica Neue", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = palette.labelHalo;
+  ctx.strokeText(text, p.x, p.y);
+  ctx.fillStyle = palette.label;
+  ctx.fillText(text, p.x, p.y);
+
+  // 小圆点锚点
+  ctx.beginPath();
+  ctx.arc(p.x, p.y + fontSize * 0.85, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = palette.label;
+  ctx.fill();
 }
 
 function drawPreviewRect(
@@ -330,7 +431,8 @@ export type PreviewState =
   | { mode: 'none' }
   | { mode: 'rect'; from: Point; to: Point }
   | { mode: 'region'; points: Point[]; cursor: Point | null; closed: boolean }
-  | { mode: 'polyline'; points: Point[]; cursor: Point | null };
+  | { mode: 'polyline'; points: Point[]; cursor: Point | null }
+  | { mode: 'label'; point: Point; text: string };
 
 export type SelectionState = {
   featureId: string;
@@ -342,6 +444,20 @@ function drawSelection(
   viewport: Viewport,
 ) {
   const points = feature.points.map((p) => toScreen(p, viewport));
+  if (points.length === 0) return;
+
+  if (feature.kind === 'label') {
+    const p = points[0];
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    return;
+  }
+
   if (points.length < 2) return;
 
   tracePath(ctx, points, feature.closed);
@@ -363,6 +479,21 @@ function drawSelection(
   }
 }
 
+function drawPreviewLabel(
+  ctx: CanvasRenderingContext2D,
+  point: Point,
+  text: string,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  drawLabel(
+    ctx,
+    { id: 'preview', kind: 'label', points: [point], closed: false, labelText: text || '标注' },
+    viewport,
+    palette,
+  );
+}
+
 export function renderMap(
   ctx: CanvasRenderingContext2D,
   canvasW: number,
@@ -373,14 +504,13 @@ export function renderMap(
 ) {
   const palette = PALETTES[project.mapStyle];
   const { viewport, features } = project;
+  const layers = getLayers(project);
 
   ctx.fillStyle = '#0a0b0e';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
   drawMapBase(ctx, project, viewport, palette);
-  drawGrid(ctx, project, viewport, palette);
-
-  const order: Array<MapFeature['kind']> = ['ocean', 'land', 'mountain', 'river', 'road'];
+  if (layers.grid) drawGrid(ctx, project, viewport, palette);
 
   const tl = toScreen({ x: 0, y: 0 }, viewport);
   const br = toScreen({ x: project.settings.widthM, y: project.settings.heightM }, viewport);
@@ -389,12 +519,44 @@ export function renderMap(
   ctx.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
   ctx.clip();
 
-  for (const kind of order) {
+  if (layers.terrain) {
+    for (const kind of ['ocean', 'land', 'mountain'] as const) {
+      for (const feature of features) {
+        if (feature.kind === kind) drawRegion(ctx, feature, viewport, palette);
+      }
+    }
+  }
+
+  if (layers.blocks) {
+    const blocks = detectBlocks(
+      features,
+      project.settings.widthM,
+      project.settings.heightM,
+    );
+    drawBlocks(ctx, blocks, viewport, palette);
+  }
+
+  if (layers.rivers) {
     for (const feature of features) {
-      if (feature.kind !== kind) continue;
-      if (kind === 'road') drawRoad(ctx, feature, viewport, project.mapStyle);
-      else if (kind === 'river') drawRiver(ctx, feature, viewport, palette);
-      else drawRegion(ctx, feature, viewport, palette);
+      if (feature.kind === 'river') drawRiver(ctx, feature, viewport, palette);
+    }
+  }
+
+  if (layers.roads) {
+    for (const feature of features) {
+      if (feature.kind === 'road') drawRoad(ctx, feature, viewport, project.mapStyle);
+    }
+  }
+
+  if (layers.railways) {
+    for (const feature of features) {
+      if (feature.kind === 'railway') drawRailway(ctx, feature, viewport, palette);
+    }
+  }
+
+  if (layers.labels) {
+    for (const feature of features) {
+      if (feature.kind === 'label') drawLabel(ctx, feature, viewport, palette);
     }
   }
 
@@ -404,10 +566,10 @@ export function renderMap(
     const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
     drawPreviewRegion(ctx, pts, preview.closed, viewport, palette);
   } else if (preview.mode === 'polyline') {
-    const pts = preview.cursor
-      ? [...preview.points, preview.cursor]
-      : preview.points;
+    const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
     drawPreviewPolyline(ctx, pts, viewport, palette);
+  } else if (preview.mode === 'label') {
+    drawPreviewLabel(ctx, preview.point, preview.text, viewport, palette);
   }
 
   if (selection) {
@@ -428,11 +590,7 @@ export function exportToPng(project: CityProject, size = 2048): string {
   canvas.height = aspect >= 1 ? Math.round(size / aspect) : size;
 
   const ctx = canvas.getContext('2d')!;
-  const padding = 0;
-  const zoom = Math.min(
-    (canvas.width - padding * 2) / widthM,
-    (canvas.height - padding * 2) / heightM,
-  );
+  const zoom = Math.min(canvas.width / widthM, canvas.height / heightM);
 
   const exportProject: CityProject = {
     ...project,
@@ -464,3 +622,5 @@ export function fitViewport(
     zoom: Math.max(0.01, zoom),
   };
 }
+
+export type { LayerVisibility };

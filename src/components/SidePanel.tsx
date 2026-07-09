@@ -1,6 +1,13 @@
 import { formatDistance } from '../constants/mapPresets';
-import type { CityProject, MapStyle } from '../types';
-import { LAYER_LABELS, ROAD_STYLES } from '../types';
+import { detectBlocks } from '../engine/blockDetect';
+import type { CityProject, LayerKey, MapStyle } from '../types';
+import {
+  DEFAULT_LAYERS,
+  LAYER_LABELS,
+  LAYER_TOGGLE_LABELS,
+  ROAD_STYLES,
+  getLayers,
+} from '../types';
 
 type Props = {
   project: CityProject;
@@ -9,8 +16,10 @@ type Props = {
   cloudSaved: boolean;
   onDeleteSelected: () => void;
   onMapStyleChange: (style: MapStyle) => void;
+  onLayerToggle: (key: LayerKey) => void;
   onSave: () => void;
   onExport: () => void;
+  onExportSvg: () => void;
   onExportMd: () => void;
   onUndo: () => void;
   onNewMap: () => void;
@@ -22,6 +31,8 @@ const STYLES: { id: MapStyle; label: string }[] = [
   { id: 'sketch', label: '线稿' },
 ];
 
+const LAYER_KEYS = Object.keys(DEFAULT_LAYERS) as LayerKey[];
+
 export function SidePanel({
   project,
   mapStyle,
@@ -29,12 +40,21 @@ export function SidePanel({
   cloudSaved,
   onDeleteSelected,
   onMapStyleChange,
+  onLayerToggle,
   onSave,
   onExport,
+  onExportSvg,
   onExportMd,
   onUndo,
   onNewMap,
 }: Props) {
+  const layers = getLayers(project);
+  const blockCount = detectBlocks(
+    project.features,
+    project.settings.widthM,
+    project.settings.heightM,
+  ).length;
+
   const counts = project.features.reduce<Record<string, number>>((acc, f) => {
     const key = f.kind === 'road' ? `道路 (${f.roadLevel ?? 'local'})` : LAYER_LABELS[f.kind];
     acc[key] = (acc[key] ?? 0) + 1;
@@ -66,9 +86,13 @@ export function SidePanel({
           <p className="selection-kind">
             {selected.kind === 'road'
               ? `道路 · ${ROAD_STYLES[selected.roadLevel ?? 'local'].label}`
-              : LAYER_LABELS[selected.kind]}
+              : selected.kind === 'label'
+                ? `标注 · ${selected.labelText || '未命名'}`
+                : LAYER_LABELS[selected.kind]}
           </p>
-          <p className="selection-meta">{selected.points.length} 个顶点</p>
+          <p className="selection-meta">
+            {selected.kind === 'label' ? '点击位置' : `${selected.points.length} 个顶点`}
+          </p>
           <button type="button" className="danger-btn" onClick={onDeleteSelected}>
             删除此要素
           </button>
@@ -92,6 +116,22 @@ export function SidePanel({
       </section>
 
       <section>
+        <h3>图层（CSLMV 风格）</h3>
+        <div className="layer-toggles">
+          {LAYER_KEYS.map((key) => (
+            <label key={key} className="layer-toggle">
+              <input
+                type="checkbox"
+                checked={layers[key]}
+                onChange={() => onLayerToggle(key)}
+              />
+              <span>{LAYER_TOGGLE_LABELS[key]}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section>
         <h3>地图风格</h3>
         <div className="style-tabs">
           {STYLES.map((s) => (
@@ -111,6 +151,7 @@ export function SidePanel({
         <h3>统计</h3>
         <ul className="stats">
           <li>要素数量：{project.features.length}</li>
+          <li>识别街区：{blockCount}</li>
           <li>路网长度：{formatDistance(roadLengthM)}</li>
         </ul>
         {Object.keys(counts).length > 0 && (
@@ -131,6 +172,9 @@ export function SidePanel({
         <button type="button" onClick={onExport}>
           ⬇ 导出 PNG
         </button>
+        <button type="button" onClick={onExportSvg}>
+          ⬇ 导出 SVG
+        </button>
         <button type="button" onClick={onExportMd}>
           💾 导出 .md 备份
         </button>
@@ -143,8 +187,8 @@ export function SidePanel({
       </section>
 
       <footer className="panel-footer">
-        <p>自动保存 · 3 秒无操作后同步</p>
-        <p className="muted">数据存储在服务端 SQLite</p>
+        <p>手绘地图 · 参照 CSLMV 视觉</p>
+        <p className="muted">街区由道路围合自动识别</p>
       </footer>
     </aside>
   );

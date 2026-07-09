@@ -726,3 +726,32 @@ input {
 .cloud-status.saved {
   color: #86efac !important;
 }
+
+.layer-toggles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.layer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #1c1f28;
+  font-size: 12px;
+  color: #d1d5db;
+  cursor: pointer;
+}
+
+.layer-toggle input {
+  accent-color: #3b82f6;
+}
+
+.tool-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.4;
+}
