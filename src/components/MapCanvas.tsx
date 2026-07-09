@@ -22,11 +22,13 @@ import {
   rectFromCorners,
 } from '../types';
 import {
+  bearingRad,
   formatAngle,
   formatLength,
   formatRadius,
   lineMetrics,
-  sampleArcThrough,
+  curveFromTangent,
+  headingFromPolyline,
   snapAnglePoint,
 } from '../engine/curveMath';
 import { findSnapPoint, screenToWorld } from '../engine/geometry';
@@ -80,10 +82,7 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const [polyDraft, setPolyDraft] = useState<Point[]>([]);
   const [polyCursor, setPolyCursor] = useState<Point | null>(null);
-  const [arcCommitted, setArcCommitted] = useState<Point[]>([]);
-  const [arcStart, setArcStart] = useState<Point | null>(null);
-  const [arcThrough, setArcThrough] = useState<Point | null>(null);
-  const [arcCursor, setArcCursor] = useState<Point | null>(null);
+  const [curveHeading, setCurveHeading] = useState<number | null>(null);
   const [regionDraft, setRegionDraft] = useState<Point[]>([]);
   const [regionCursor, setRegionCursor] = useState<Point | null>(null);
   const [rectStart, setRectStart] = useState<Point | null>(null);
@@ -110,10 +109,7 @@ export function MapCanvas({
   useEffect(() => {
     setPolyDraft([]);
     setPolyCursor(null);
-    setArcCommitted([]);
-    setArcStart(null);
-    setArcThrough(null);
-    setArcCursor(null);
+    setCurveHeading(null);
     setRegionDraft([]);
     setRegionCursor(null);
     setRectStart(null);
@@ -148,14 +144,8 @@ export function MapCanvas({
         };
       }
     }
-    if (isPathGuided && pathDrawMode === 'arc' && arcStart) {
-      return {
-        mode: 'arc',
-        committed: arcCommitted,
-        start: arcStart,
-        through: arcThrough,
-        cursor: arcCursor,
-      };
+    if (isPathGuided && pathDrawMode === 'curve' && (polyDraft.length > 0 || polyCursor)) {
+      return { mode: 'curve', points: polyDraft, heading: curveHeading, cursor: polyCursor };
     }
     if (isPathGuided && pathDrawMode === 'straight' && (polyDraft.length > 0 || polyCursor)) {
       return { mode: 'polyline', points: polyDraft, cursor: polyCursor };
@@ -254,10 +244,7 @@ export function MapCanvas({
   const resetDrafts = useCallback(() => {
     setPolyDraft([]);
     setPolyCursor(null);
-    setArcCommitted([]);
-    setArcStart(null);
-    setArcThrough(null);
-    setArcCursor(null);
+    setCurveHeading(null);
     setRegionDraft([]);
     setRegionCursor(null);
     setRectStart(null);
@@ -287,12 +274,8 @@ export function MapCanvas({
   );
 
   const finishPolyline = useCallback(() => {
-    if (isPathGuided && pathDrawMode === 'free') return;
-
     const kind = toolKind(tool);
-    const useArc = isPathGuided && pathDrawMode === 'arc';
-    const points = useArc ? arcCommitted : polyDraft;
-    if (!kind || points.length < 2) {
+    if (!kind || polyDraft.length < 2) {
       resetDrafts();
       return;
     }
@@ -300,50 +283,13 @@ export function MapCanvas({
     addFeature({
       id: createId(),
       kind,
-      points,
+      points: polyDraft,
       closed: false,
       roadLevel: kind === 'road' ? roadLevel : undefined,
       grade: kind === 'road' || kind === 'railway' ? drawGrade : undefined,
     });
     resetDrafts();
-  }, [
-    addFeature,
-    arcCommitted,
-    drawGrade,
-    isPathGuided,
-    pathDrawMode,
-    polyDraft,
-    resetDrafts,
-    roadLevel,
-    tool,
-  ]);
-
-  const commitPathFreehand = useCallback(
-    (rawPoints: Point[]) => {
-      const kind = toolKind(tool);
-      if (!kind || !PATH_GUIDED_TOOLS.includes(tool)) {
-        resetDrafts();
-        return;
-      }
-
-      const points = prepareFreehandPath(rawPoints, 22, 2);
-      if (points.length < 2) {
-        resetDrafts();
-        return;
-      }
-
-      addFeature({
-        id: createId(),
-        kind,
-        points,
-        closed: false,
-        roadLevel: kind === 'road' ? roadLevel : undefined,
-        grade: drawGrade,
-      });
-      resetDrafts();
-    },
-    [addFeature, drawGrade, resetDrafts, roadLevel, tool],
-  );
+  }, [addFeature, drawGrade, polyDraft, resetDrafts, roadLevel, tool]);
 
   const finishPolygon = useCallback(() => {
     if (regionDraft.length < 3) return;
@@ -515,15 +461,6 @@ export function MapCanvas({
     }
 
     if (POLYLINE_TOOLS.includes(activeTool)) {
-      if (isPathGuided && pathDrawMode === 'free') {
-        freehandDrawing.current = true;
-        freehandPoints.current = [world];
-        setPolyDraft([world]);
-        setPolyCursor(null);
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
-        return;
-      }
-
       const pt = snapPoint(world);
 
       if (isPathGuided && pathDrawMode === 'straight') {
@@ -536,22 +473,21 @@ export function MapCanvas({
         return;
       }
 
-      if (isPathGuided && pathDrawMode === 'arc') {
-        if (!arcStart) {
-          setArcStart(pt);
-        } else if (!arcThrough) {
-          setArcThrough(pt);
+      if (isPathGuided && pathDrawMode === 'curve') {
+        if (polyDraft.length === 0) {
+          setPolyDraft([pt]);
+          setCurveHeading(null);
+        } else if (polyDraft.length === 1 || curveHeading === null) {
+          const next = shiftDown.current ? snapAnglePoint(polyDraft[0], pt) : pt;
+          setPolyDraft([polyDraft[0], next]);
+          setCurveHeading(bearingRad(polyDraft[0], next));
         } else {
-          const arc = sampleArcThrough(arcStart, arcThrough, pt);
-          if (arc) {
-            setArcCommitted((prev) => {
-              const segment = prev.length > 0 ? arc.points.slice(1) : arc.points;
-              return [...prev, ...segment];
-            });
+          const start = polyDraft[polyDraft.length - 1];
+          const curve = curveFromTangent(start, curveHeading, pt);
+          if (curve) {
+            setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
+            setCurveHeading(curve.endHeading);
           }
-          setArcThrough(null);
-          setArcStart(pt);
-          setArcCursor(null);
         }
         return;
       }
@@ -617,8 +553,8 @@ export function MapCanvas({
         setPolyCursor(shiftDown.current ? snapAnglePoint(last, base) : base);
         return;
       }
-      if (isPathGuided && pathDrawMode === 'arc' && arcStart) {
-        setArcCursor(snapPoint(world, arcCommitted));
+      if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length > 0) {
+        setPolyCursor(snapPoint(world, polyDraft));
         return;
       }
       if (polyDraft.length > 0) {
@@ -659,8 +595,6 @@ export function MapCanvas({
       if (isLandform) {
         if (points.length >= 3) commitRegion(points);
         else resetDrafts();
-      } else if (isPathGuided && pathDrawMode === 'free') {
-        commitPathFreehand(points);
       } else {
         resetDrafts();
       }
@@ -710,22 +644,10 @@ export function MapCanvas({
         e.preventDefault();
         if (isLandform && landformDrawMode === 'polygon' && regionDraft.length > 0) {
           setRegionDraft((prev) => prev.slice(0, -1));
-        } else if (isPathGuided && pathDrawMode === 'arc') {
-          if (arcThrough) {
-            setArcThrough(null);
-          } else if (arcStart && arcCommitted.length === 0) {
-            setArcStart(null);
-            setArcCursor(null);
-          } else if (arcCommitted.length > 0) {
-            setArcCommitted((prev) => {
-              const next = prev.slice(0, -1);
-              setArcStart(next.length > 0 ? next[next.length - 1] : null);
-              return next;
-            });
-            setArcCursor(null);
-          }
         } else if (polyDraft.length > 0) {
-          setPolyDraft((prev) => prev.slice(0, -1));
+          const next = polyDraft.slice(0, -1);
+          setPolyDraft(next);
+          setCurveHeading(headingFromPolyline(next));
         }
       }
     };
@@ -743,17 +665,12 @@ export function MapCanvas({
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [
-    arcCommitted.length,
-    arcStart,
-    arcThrough,
     finishPolyline,
     finishPolygon,
     isLandform,
-    isPathGuided,
     landformDrawMode,
     nudgeGrade,
-    pathDrawMode,
-    polyDraft.length,
+    polyDraft,
     regionDraft.length,
     resetDrafts,
     onSelectFeature,
@@ -774,10 +691,7 @@ export function MapCanvas({
       if (pathDrawMode === 'straight') {
         return `点击加点 · 双击完成 · 右键打断 · Shift 吸附 · ${gradeHint}`;
       }
-      if (pathDrawMode === 'arc') {
-        return `三点定弧 · 双击完成 · 右键打断 · ${gradeHint}`;
-      }
-      return `按住拖拽 · 松开完成 · 右键打断 · ${gradeHint}`;
+      return `点击延伸弯道 · 首段定方向 · 双击完成 · 右键打断 · ${gradeHint}`;
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
@@ -800,11 +714,26 @@ export function MapCanvas({
       const shiftHint = shiftSnap ? ' · Shift 吸附' : '';
       return `长度 ${formatLength(m.lengthM)} · 角度 ${formatAngle(m.angleDeg)}${shiftHint}`;
     }
-    if (isPathGuided && pathDrawMode === 'arc' && arcStart && arcThrough && arcCursor) {
-      const arc = sampleArcThrough(arcStart, arcThrough, arcCursor);
-      if (arc) {
-        return `半径 ${formatRadius(arc.radius)} · 圆心角 ${formatAngle(arc.sweepDeg)}`;
+    if (
+      isPathGuided &&
+      pathDrawMode === 'curve' &&
+      polyDraft.length > 0 &&
+      curveHeading !== null &&
+      polyCursor
+    ) {
+      const curve = curveFromTangent(polyDraft[polyDraft.length - 1], curveHeading, polyCursor);
+      if (curve) {
+        if (!Number.isFinite(curve.radius)) {
+          const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);
+          return `直线 · 长度 ${formatLength(m.lengthM)}`;
+        }
+        return `半径 ${formatRadius(curve.radius)} · 圆心角 ${formatAngle(curve.sweepDeg)}`;
       }
+    }
+    if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length === 1 && polyCursor) {
+      const m = lineMetrics(polyDraft[0], polyCursor);
+      const shiftHint = shiftSnap ? ' · Shift 吸附' : '';
+      return `首段 ${formatLength(m.lengthM)} · 角度 ${formatAngle(m.angleDeg)}${shiftHint}`;
     }
     return null;
   })();

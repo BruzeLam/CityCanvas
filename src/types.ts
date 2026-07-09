@@ -147,16 +147,15 @@ export const LANDFORM_TOOLS: Tool[] = ['ocean', 'land', 'mountain'];
 /** 折线点击绘制（河流 / 道路 / 铁路） */
 export const POLYLINE_TOOLS: Tool[] = ['river', 'road', 'railway'];
 
-/** 道路 / 铁路路径绘制方式：直线 / 圆弧 / 自由曲线 */
-export type PathDrawMode = 'straight' | 'arc' | 'free';
+/** 道路 / 铁路路径：直线 或 弯道（切线连续圆弧，参照天际线 / TF2） */
+export type PathDrawMode = 'straight' | 'curve';
 
 export const PATH_DRAW_MODES: { id: PathDrawMode; label: string; desc: string }[] = [
   { id: 'straight', label: '直线', desc: 'Shift 吸附角度 · 显示长度' },
-  { id: 'arc', label: '圆弧', desc: '三点定弧 · 显示半径' },
-  { id: 'free', label: '自由曲线', desc: '按住拖拽手绘' },
+  { id: 'curve', label: '弯道', desc: '沿切线画弧 · 显示半径' },
 ];
 
-/** 支持直线/圆弧模式的工具 */
+/** 支持直线/弯道模式的工具 */
 export const PATH_GUIDED_TOOLS: Tool[] = ['road', 'railway'];
 
 /** 地貌绘制方式 */
