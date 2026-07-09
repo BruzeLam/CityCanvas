@@ -37,8 +37,8 @@ type StylePalette = {
 
 const PALETTES: Record<MapStyle, StylePalette> = {
   navigation: {
-    outside: '#2a2a2e',
-    land: '#e8f0d8',
+    outside: '#e7e5e4',
+    land: '#f4f1ea',
     water: '#8ec4e8',
     waterStroke: '#5a9fc4',
     mountain: '#c5d9a8',
@@ -566,7 +566,7 @@ export function renderMap(
   const { viewport, features } = project;
   const layers = getLayers(project);
 
-  ctx.fillStyle = '#0a0b0e';
+  ctx.fillStyle = '#e7e5e4';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
   drawMapBase(ctx, project, viewport, palette);

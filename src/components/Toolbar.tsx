@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { FeatureGrade, LandformDrawMode, PathDrawMode, RoadLevel, Tool } from '../types';
 import {
   FEATURE_GRADES,
@@ -23,11 +24,17 @@ type Props = {
   onPathDrawModeChange: (mode: PathDrawMode) => void;
 };
 
-const TERRAIN_ITEMS: { id: Tool; label: string; icon: string }[] = [
-  { id: 'land', label: '陆地', icon: '🏝️' },
-  { id: 'ocean', label: '海洋', icon: '🌊' },
-  { id: 'mountain', label: '山地', icon: '⛰️' },
-  { id: 'river', label: '河流', icon: '💧' },
+const VIEW_TOOLS: { id: Tool; label: string }[] = [
+  { id: 'pan', label: '平移' },
+  { id: 'select', label: '选择' },
+  { id: 'eraser', label: '橡皮' },
+];
+
+const TERRAIN_TOOLS: { id: Tool; label: string }[] = [
+  { id: 'land', label: '陆地' },
+  { id: 'ocean', label: '海洋' },
+  { id: 'mountain', label: '山地' },
+  { id: 'river', label: '河流' },
 ];
 
 const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
@@ -37,6 +44,8 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
 
 const isLandformTool = (t: Tool) => LANDFORM_TOOLS.includes(t);
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
+
+type SectionId = 'view' | 'terrain' | 'network' | 'label';
 
 export function Toolbar({
   tool,
@@ -50,61 +59,45 @@ export function Toolbar({
   onLandformDrawModeChange,
   onPathDrawModeChange,
 }: Props) {
+  const [open, setOpen] = useState<Record<SectionId, boolean>>({
+    view: true,
+    terrain: true,
+    network: true,
+    label: true,
+  });
+
+  useEffect(() => {
+    if (isLandformTool(tool) || tool === 'river') {
+      setOpen((o) => ({ ...o, terrain: true }));
+    }
+    if (isPathGuided(tool)) {
+      setOpen((o) => ({ ...o, network: true }));
+    }
+  }, [tool]);
+
+  const toggle = (id: SectionId) => {
+    setOpen((o) => ({ ...o, [id]: !o[id] }));
+  };
+
   return (
     <aside className="toolbar">
-      <section className="tool-section">
-        <h3>步骤 1 · 视图</h3>
-        <button
-          type="button"
-          className={tool === 'pan' ? 'active' : ''}
-          onClick={() => onToolChange('pan')}
-        >
-          ✋ 平移
-        </button>
-        <button
-          type="button"
-          className={tool === 'select' ? 'active' : ''}
-          onClick={() => onToolChange('select')}
-        >
-          🎯 选择
-          <span className="tool-hint">编辑</span>
-        </button>
-        <button
-          type="button"
-          className={tool === 'eraser' ? 'active' : ''}
-          onClick={() => onToolChange('eraser')}
-        >
-          🧹 橡皮擦
-          <span className="tool-hint">删除</span>
-        </button>
-      </section>
+      <p className="toolbar-kicker">图板</p>
 
       <section className="tool-section">
-        <h3>步骤 2 · 地貌</h3>
-        {TERRAIN_ITEMS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={tool === t.id ? 'active' : ''}
-            onClick={() => onToolChange(t.id)}
-          >
-            {t.icon} {t.label}
-            <span className="tool-hint">{t.id === 'river' ? '折线' : '面状'}</span>
-          </button>
-        ))}
-
-        {isLandformTool(tool) && (
-          <div className="draw-modes">
-            <p className="draw-modes-label">绘制方式</p>
-            {LANDFORM_DRAW_MODES.map((mode) => (
+        <button type="button" className="section-toggle" onClick={() => toggle('view')}>
+          <span>视图</span>
+          <span className="section-chevron">{open.view ? '−' : '+'}</span>
+        </button>
+        {open.view && (
+          <div className="tool-grid">
+            {VIEW_TOOLS.map((t) => (
               <button
-                key={mode.id}
+                key={t.id}
                 type="button"
-                className={landformDrawMode === mode.id ? 'active draw-mode-chip' : 'draw-mode-chip'}
-                onClick={() => onLandformDrawModeChange(mode.id)}
-                title={mode.desc}
+                className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
+                onClick={() => onToolChange(t.id)}
               >
-                {mode.label}
+                {t.label}
               </button>
             ))}
           </div>
@@ -112,109 +105,171 @@ export function Toolbar({
       </section>
 
       <section className="tool-section">
-        <h3>步骤 3 · 路网</h3>
-        <button
-          type="button"
-          className={tool === 'road' ? 'active' : ''}
-          onClick={() => onToolChange('road')}
-        >
-          🛣️ 道路
-          <span className="tool-hint">直线 / 圆弧 / 自由曲线</span>
+        <button type="button" className="section-toggle" onClick={() => toggle('terrain')}>
+          <span>地貌</span>
+          <span className="section-chevron">{open.terrain ? '−' : '+'}</span>
         </button>
-        {tool === 'road' && (
-          <div className="road-levels">
-            {ROAD_LEVELS.map(([level, style]) => (
-              <button
-                key={level}
-                type="button"
-                className={roadLevel === level ? 'active road-chip' : 'road-chip'}
-                onClick={() => onRoadLevelChange(level)}
-              >
-                <span
-                  className="road-swatch"
-                  style={{ background: style.color, borderColor: style.casing }}
-                />
-                {style.label}
-              </button>
-            ))}
-          </div>
-        )}
-        <button
-          type="button"
-          className={tool === 'railway' ? 'active' : ''}
-          onClick={() => onToolChange('railway')}
-        >
-          🚆 铁路
-          <span className="tool-hint">直线 / 圆弧 / 自由曲线</span>
-        </button>
-
-        {isPathGuided(tool) && (
+        {open.terrain && (
           <>
-            <div className="draw-modes">
-              <p className="draw-modes-label">路径方式</p>
-              {PATH_DRAW_MODES.map((mode) => (
+            <div className="tool-grid">
+              {TERRAIN_TOOLS.map((t) => (
                 <button
-                  key={mode.id}
+                  key={t.id}
                   type="button"
-                  className={pathDrawMode === mode.id ? 'active draw-mode-chip' : 'draw-mode-chip'}
-                  onClick={() => onPathDrawModeChange(mode.id)}
-                  title={mode.desc}
+                  className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
+                  onClick={() => onToolChange(t.id)}
                 >
-                  {mode.label}
+                  {t.label}
                 </button>
               ))}
             </div>
-            <div className="draw-modes">
-              <p className="draw-modes-label">标高 · -/=</p>
-              <div className="grade-row">
-                <button
-                  type="button"
-                  className="grade-step"
-                  onClick={() => onDrawGradeChange(clampGrade(drawGrade - 1))}
-                  title="降低一层 -"
-                >
-                  −
-                </button>
-                <span className="grade-current">{formatGrade(drawGrade)}</span>
-                <button
-                  type="button"
-                  className="grade-step"
-                  onClick={() => onDrawGradeChange(clampGrade(drawGrade + 1))}
-                  title="升高一层 ="
-                >
-                  +
-                </button>
+            {isLandformTool(tool) && (
+              <div className="option-block">
+                <p className="option-label">画法</p>
+                <div className="chip-row">
+                  {LANDFORM_DRAW_MODES.map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      className={landformDrawMode === mode.id ? 'chip active' : 'chip'}
+                      onClick={() => onLandformDrawModeChange(mode.id)}
+                      title={mode.desc}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="grade-chips">
-                {FEATURE_GRADES.map((g) => (
-                  <button
-                    key={g}
-                    type="button"
-                    className={drawGrade === g ? 'active draw-mode-chip' : 'draw-mode-chip'}
-                    onClick={() => onDrawGradeChange(g)}
-                    title={formatGrade(g)}
-                  >
-                    {g > 0 ? `+${g}` : `${g}`}
-                  </button>
-                ))}
-              </div>
-              <p className="tool-note">同层交叉成路口 · 异层上跨/下穿</p>
-            </div>
+            )}
           </>
         )}
       </section>
 
       <section className="tool-section">
-        <h3>步骤 4 · 标注</h3>
-        <button
-          type="button"
-          className={tool === 'label' ? 'active' : ''}
-          onClick={() => onToolChange('label')}
-        >
-          🏷️ 文字标注
-          <span className="tool-hint">点击放置</span>
+        <button type="button" className="section-toggle" onClick={() => toggle('network')}>
+          <span>路网</span>
+          <span className="section-chevron">{open.network ? '−' : '+'}</span>
         </button>
-        <p className="tool-note">街区由同层道路围合自动识别</p>
+        {open.network && (
+          <>
+            <div className="tool-grid">
+              <button
+                type="button"
+                className={tool === 'road' ? 'tool-cell active' : 'tool-cell'}
+                onClick={() => onToolChange('road')}
+              >
+                道路
+              </button>
+              <button
+                type="button"
+                className={tool === 'railway' ? 'tool-cell active' : 'tool-cell'}
+                onClick={() => onToolChange('railway')}
+              >
+                铁路
+              </button>
+            </div>
+
+            {tool === 'road' && (
+              <div className="option-block">
+                <p className="option-label">等级</p>
+                <div className="chip-row">
+                  {ROAD_LEVELS.map(([level, style]) => (
+                    <button
+                      key={level}
+                      type="button"
+                      className={roadLevel === level ? 'chip active' : 'chip'}
+                      onClick={() => onRoadLevelChange(level)}
+                    >
+                      <span
+                        className="road-swatch"
+                        style={{ background: style.color, borderColor: style.casing }}
+                      />
+                      {style.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isPathGuided(tool) && (
+              <>
+                <div className="option-block">
+                  <p className="option-label">路径</p>
+                  <div className="chip-row">
+                    {PATH_DRAW_MODES.map((mode) => (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        className={pathDrawMode === mode.id ? 'chip active' : 'chip'}
+                        onClick={() => onPathDrawModeChange(mode.id)}
+                        title={mode.desc}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="option-block">
+                  <p className="option-label">标高 · -/=</p>
+                  <div className="grade-row">
+                    <button
+                      type="button"
+                      className="grade-step"
+                      onClick={() => onDrawGradeChange(clampGrade(drawGrade - 1))}
+                      title="降低一层 -"
+                    >
+                      −
+                    </button>
+                    <span className="grade-current">{formatGrade(drawGrade)}</span>
+                    <button
+                      type="button"
+                      className="grade-step"
+                      onClick={() => onDrawGradeChange(clampGrade(drawGrade + 1))}
+                      title="升高一层 ="
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div className="chip-row grade-chips">
+                    {FEATURE_GRADES.map((g) => (
+                      <button
+                        key={g}
+                        type="button"
+                        className={drawGrade === g ? 'chip active' : 'chip'}
+                        onClick={() => onDrawGradeChange(g)}
+                        title={formatGrade(g)}
+                      >
+                        {g > 0 ? `+${g}` : `${g}`}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="tool-note">同层成路口 · 异层上跨/下穿</p>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="tool-section">
+        <button type="button" className="section-toggle" onClick={() => toggle('label')}>
+          <span>标注</span>
+          <span className="section-chevron">{open.label ? '−' : '+'}</span>
+        </button>
+        {open.label && (
+          <>
+            <div className="tool-grid">
+              <button
+                type="button"
+                className={tool === 'label' ? 'tool-cell active' : 'tool-cell'}
+                onClick={() => onToolChange('label')}
+              >
+                文字
+              </button>
+            </div>
+            <p className="tool-note">街区由同层道路围合自动识别</p>
+          </>
+        )}
       </section>
     </aside>
   );

@@ -107,14 +107,12 @@ export function SidePanel({
                 : `${selected.points.length} 个顶点`}
           </p>
           {(selected.kind === 'road' || selected.kind === 'railway') && onSelectedGradeChange && (
-            <div className="grade-chips selection-grades">
+            <div className="chip-row grade-chips selection-grades">
               {FEATURE_GRADES.map((g) => (
                 <button
                   key={g}
                   type="button"
-                  className={
-                    featureGrade(selected) === g ? 'active draw-mode-chip' : 'draw-mode-chip'
-                  }
+                  className={featureGrade(selected) === g ? 'chip active' : 'chip'}
                   onClick={() => onSelectedGradeChange(g)}
                   title={formatGrade(g)}
                 >
@@ -151,7 +149,7 @@ export function SidePanel({
       </section>
 
       <section>
-        <h3>图层（CSLMV 风格）</h3>
+        <h3>图层</h3>
         <div className="layer-toggles">
           {LAYER_KEYS.map((key) => (
             <label key={key} className="layer-toggle">
