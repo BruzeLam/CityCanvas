@@ -616,7 +616,16 @@ export function MapCanvas({
   };
 
   useEffect(() => {
+    const isTypingTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
+      // 顶栏改名等输入框：不要拦截退格 / 空格 / 字母
+      if (isTypingTarget(e.target)) return;
+
       if (e.code === 'Space') spaceDown.current = true;
       if (e.key === 'Shift') {
         shiftDown.current = true;
