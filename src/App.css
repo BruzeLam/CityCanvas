@@ -79,6 +79,39 @@ input {
   letter-spacing: 0.04em;
 }
 
+.city-title-input {
+  min-width: 96px;
+  max-width: 220px;
+  padding: 3px 8px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 1px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  outline: none;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.city-title-input:hover {
+  border-color: var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.city-title-input:focus {
+  border-color: var(--accent-line);
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 80%, transparent);
+}
+
+.city-title-input::placeholder {
+  color: var(--muted);
+}
+
 .workspace {
   flex: 1;
   display: grid;

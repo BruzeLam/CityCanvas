@@ -336,7 +336,43 @@ function App() {
       <header className="app-header">
         <div className="brand">
           <span className="logo">CityCanvas</span>
-          <span className="tagline">{project.name}</span>
+          <input
+            className="city-title-input"
+            type="text"
+            value={project.name}
+            maxLength={48}
+            aria-label="城市名称"
+            title="点击修改城市名称"
+            placeholder="未命名城市"
+            onChange={(e) => {
+              const name = e.target.value;
+              setDirty(true);
+              setSaveState('idle');
+              setProject((p) => {
+                if (!p) return p;
+                const next = { ...p, name };
+                persistLocal(next);
+                return next;
+              });
+            }}
+            onBlur={(e) => {
+              const trimmed = e.target.value.trim() || '未命名城市';
+              if (trimmed === project.name) return;
+              setDirty(true);
+              setSaveState('idle');
+              setProject((p) => {
+                if (!p) return p;
+                const next = { ...p, name: trimmed };
+                persistLocal(next);
+                return next;
+              });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Escape') {
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+          />
           {dirty && <span className="dirty-dot" title="有未保存更改" />}
         </div>
         <div className="header-actions">
