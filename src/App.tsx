@@ -44,6 +44,8 @@ function App() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [dirty, setDirty] = useState(false);
   const [localOnly, setLocalOnly] = useState(false);
+  /** 从编辑页进入登录 / 我的地图时，可返回的上一张图 */
+  const [resumeProject, setResumeProject] = useState<CityProject | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -53,6 +55,7 @@ function App() {
 
   const openProject = useCallback((p: CityProject, opts?: { dirty?: boolean; saved?: boolean }) => {
     setProject(p);
+    setResumeProject(null);
     setTool('pan');
     setSelectedFeatureId(null);
     setHistory([]);
@@ -242,13 +245,24 @@ function App() {
   };
 
   const handleContinueLocal = () => {
-    const session = loadLocalSession();
     setLocalOnly(true);
+    const session = loadLocalSession();
     if (session) {
       openProject(session.project, { saved: true });
+    } else if (resumeProject) {
+      openProject(resumeProject, { dirty: true });
+    } else {
+      setResumeProject(null);
     }
     setBoot('ready');
   };
+
+  const handleBackFromOverlay = useCallback(() => {
+    if (!resumeProject) return;
+    setProject(resumeProject);
+    setResumeProject(null);
+    setBoot('ready');
+  }, [resumeProject]);
 
   const handleLogout = () => {
     if (project) saveLocalSession(project);
@@ -288,7 +302,10 @@ function App() {
   if (boot === 'auth' && !user) {
     return (
       <>
-        <AuthScreen onContinueLocal={handleContinueLocal} />
+        <AuthScreen
+          onContinueLocal={handleContinueLocal}
+          onBack={resumeProject ? handleBackFromOverlay : undefined}
+        />
         <input
           ref={fileInputRef}
           type="file"
@@ -308,6 +325,7 @@ function App() {
           onOpenCloud={handleOpenCloud}
           onOpenFile={handleOpenFile}
           localOnly={localOnly || !user}
+          onBack={resumeProject ? handleBackFromOverlay : undefined}
         />
         <input
           ref={fileInputRef}
@@ -394,7 +412,8 @@ function App() {
             type="button"
             className="header-btn"
             onClick={() => {
-              if (project) saveLocalSession(project);
+              saveLocalSession(project);
+              setResumeProject(project);
               setProject(null);
               setHistory([]);
               setDirty(false);
@@ -412,7 +431,8 @@ function App() {
               type="button"
               className="header-btn"
               onClick={() => {
-                if (project) saveLocalSession(project);
+                saveLocalSession(project);
+                setResumeProject(project);
                 setBoot('auth');
               }}
             >
@@ -506,7 +526,8 @@ function App() {
           onUndo={handleUndo}
           onNewMap={() => {
             if (dirty && !confirm('返回地图列表？当前进度已写入浏览器缓存')) return;
-            if (project) saveLocalSession(project);
+            saveLocalSession(project);
+            setResumeProject(project);
             setProject(null);
             setHistory([]);
             setDirty(false);

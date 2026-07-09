@@ -893,6 +893,21 @@ input {
   text-decoration: underline;
 }
 
+.overlay-back {
+  font-size: 13px !important;
+  color: var(--ink-soft) !important;
+  white-space: nowrap;
+}
+
+.auth-footer {
+  padding-top: 0 !important;
+  justify-content: center;
+}
+
+.auth-footer .secondary {
+  width: 100%;
+}
+
 .auth-card {
   width: min(400px, 100%);
 }

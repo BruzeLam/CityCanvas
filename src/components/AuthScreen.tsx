@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { hasLocalSession } from '../io/localStore';
 
 type Props = {
   onContinueLocal: () => void;
+  /** 从编辑页进入登录时，可返回地图 */
+  onBack?: () => void;
 };
 
-export function AuthScreen({ onContinueLocal }: Props) {
+export function AuthScreen({ onContinueLocal, onBack }: Props) {
   const { login, register } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -15,6 +17,15 @@ export function AuthScreen({ onContinueLocal }: Props) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const hasDraft = hasLocalSession();
+
+  useEffect(() => {
+    if (!onBack) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onBack();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onBack]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,9 +47,16 @@ export function AuthScreen({ onContinueLocal }: Props) {
   return (
     <div className="setup-overlay">
       <div className="setup-card auth-card">
-        <header className="setup-header">
-          <h1>CityCanvas</h1>
-          <p>本地自动续档 · 登录后可同步云端</p>
+        <header className="setup-header setup-header-row">
+          <div>
+            <h1>CityCanvas</h1>
+            <p>本地自动续档 · 登录后可同步云端</p>
+          </div>
+          {onBack && (
+            <button type="button" className="link-btn overlay-back" onClick={onBack}>
+              ← 返回地图
+            </button>
+          )}
         </header>
 
         <button type="button" className="primary auth-submit local-continue" onClick={onContinueLocal}>
@@ -106,6 +124,14 @@ export function AuthScreen({ onContinueLocal }: Props) {
             {submitting ? '请稍候…' : mode === 'login' ? '登录' : '注册并进入'}
           </button>
         </form>
+
+        {onBack && (
+          <footer className="setup-footer auth-footer">
+            <button type="button" className="secondary" onClick={onBack}>
+              取消，返回地图
+            </button>
+          </footer>
+        )}
       </div>
     </div>
   );

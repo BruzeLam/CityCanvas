@@ -16,9 +16,17 @@ type Props = {
   onOpenCloud: (mapId: string) => void;
   onOpenFile: () => void;
   localOnly?: boolean;
+  /** 从编辑页进入「我的地图」时，可返回当前图 */
+  onBack?: () => void;
 };
 
-export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile, localOnly = false }: Props) {
+export function ProjectSetup({
+  onCreate,
+  onOpenCloud,
+  onOpenFile,
+  localOnly = false,
+  onBack,
+}: Props) {
   const { user, logout } = useAuth();
   const [name, setName] = useState('未命名城市');
   const [presetIdx, setPresetIdx] = useState(1);
@@ -30,6 +38,15 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile, localOnly = fa
   const [scaleValue, setScaleValue] = useState(10000);
   const [cloudMaps, setCloudMaps] = useState<CloudMapSummary[]>([]);
   const [loadingMaps, setLoadingMaps] = useState(false);
+
+  useEffect(() => {
+    if (!onBack) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onBack();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onBack]);
 
   const loadCloudMaps = useCallback(async () => {
     if (!user || localOnly) {
@@ -91,6 +108,11 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile, localOnly = fa
             <p>开始绘制前，先设定地图范围与比例尺</p>
           </div>
           <div className="setup-user">
+            {onBack && (
+              <button type="button" className="link-btn overlay-back" onClick={onBack}>
+                ← 返回地图
+              </button>
+            )}
             <span>{user && !localOnly ? user.displayName || user.email : '本地模式'}</span>
             {user && !localOnly ? (
               <button type="button" className="link-btn" onClick={logout}>
@@ -261,9 +283,20 @@ export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile, localOnly = fa
         </div>
 
         <footer className="setup-footer">
-          <button type="button" className="secondary" onClick={onOpenFile}>
-            导入本地 .md…
-          </button>
+          {onBack ? (
+            <button type="button" className="secondary" onClick={onBack}>
+              取消，返回地图
+            </button>
+          ) : (
+            <button type="button" className="secondary" onClick={onOpenFile}>
+              导入本地 .md…
+            </button>
+          )}
+          {onBack && (
+            <button type="button" className="secondary" onClick={onOpenFile}>
+              导入 .md…
+            </button>
+          )}
           <button type="button" className="primary" onClick={handleCreate}>
             新建并绘制
           </button>
