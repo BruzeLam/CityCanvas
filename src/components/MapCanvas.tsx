@@ -88,6 +88,7 @@ export function MapCanvas({
   const [rectStart, setRectStart] = useState<Point | null>(null);
   const [rectEnd, setRectEnd] = useState<Point | null>(null);
   const [shiftSnap, setShiftSnap] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
   const panning = useRef<{ start: Point; origin: Point } | null>(null);
   const freehandDrawing = useRef(false);
   const freehandPoints = useRef<Point[]>([]);
@@ -388,6 +389,7 @@ export function MapCanvas({
         start: { x: e.clientX, y: e.clientY },
         origin: { x: project.viewport.x, y: project.viewport.y },
       };
+      setIsPanning(true);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       return;
     }
@@ -586,6 +588,7 @@ export function MapCanvas({
 
     if (panning.current) {
       panning.current = null;
+      setIsPanning(false);
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       return;
     }
@@ -682,33 +685,36 @@ export function MapCanvas({
   ]);
 
   const hint = (() => {
-    if (tool === 'pan') return '拖拽平移 · 滚轮缩放 · 左下角比例尺';
+    if (tool === 'pan') return '拖动模式 · 左键拖地图 · 滚轮缩放 · 切到「编辑」可改顶点';
     if (tool === 'select') {
-      return '点击选中 · 拖拽顶点 · -/= 换标高 · Delete 删除 · 右键取消选中';
+      return '编辑模式 · 点击选中 · 拖顶点 · -/= 换标高 · Delete 删除 · 右键取消';
     }
-    if (tool === 'eraser') return '点击要素即可删除';
-    if (tool === 'label') return '点击地图放置标注 · 输入区名 / 车站名';
+    if (tool === 'eraser') return '点击要素即可删除 · 空格临时拖图';
+    if (tool === 'label') return '点击地图放置标注 · 空格临时拖图';
     if (isPathGuided) {
       const gradeHint = `标高 ${formatGrade(drawGrade)} · -/= 换层`;
       if (pathDrawMode === 'straight') {
-        return `点击加点 · 双击完成 · 右键打断 · Shift 吸附 · ${gradeHint}`;
+        return `点击加点 · 双击完成 · 右键打断 · Shift 吸附 · 空格拖图 · ${gradeHint}`;
       }
-      return `点击延伸弯道 · 首段定方向 · 双击完成 · 右键打断 · ${gradeHint}`;
+      return `点击延伸弯道 · 首段定方向 · 双击完成 · 右键打断 · 空格拖图 · ${gradeHint}`;
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
-        return '按住拖拽绘制轮廓 · 松开自动闭合 · 右键打断';
+        return '按住拖拽绘制轮廓 · 松开闭合 · 右键打断 · 空格拖图';
       }
       if (landformDrawMode === 'polygon') {
-        return '点击加点 · 双击/Enter 闭合 · 右键打断 · Backspace 撤销';
+        return '点击加点 · 双击/Enter 闭合 · 右键打断 · 空格拖图';
       }
-      return '拖拽框选矩形 · 松开完成 · 右键打断';
+      return '拖拽框选矩形 · 松开完成 · 右键打断 · 空格拖图';
     }
     if (POLYLINE_TOOLS.includes(tool)) {
-      return '点击加点 · 双击完成 · 右键打断 · Backspace 撤销';
+      return '点击加点 · 双击完成 · 右键打断 · 空格拖图';
     }
     return '选择工具开始绘制';
   })();
+
+  const canvasCursor =
+    tool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : tool === 'select' ? 'default' : tool === 'eraser' ? 'pointer' : 'crosshair';
 
   const metrics = (() => {
     if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {
@@ -745,6 +751,7 @@ export function MapCanvas({
       <canvas
         ref={canvasRef}
         className="map-canvas"
+        style={{ cursor: canvasCursor }}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

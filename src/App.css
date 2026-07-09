@@ -119,6 +119,54 @@ input {
   color: var(--muted);
 }
 
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin: 0 0 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-deep);
+}
+
+.mode-btn {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0 !important;
+  padding: 9px 6px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--muted) !important;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.mode-btn + .mode-btn {
+  border-left: 1px solid var(--line) !important;
+}
+
+.mode-btn:hover {
+  color: var(--ink) !important;
+  background: #fff !important;
+}
+
+.mode-btn.active {
+  background: var(--ink) !important;
+  color: #fff !important;
+}
+
+.mode-hint {
+  margin: 0 0 12px;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
 .tool-section {
   margin-bottom: 6px;
   border-bottom: 1px solid var(--line);

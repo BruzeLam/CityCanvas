@@ -34,7 +34,7 @@ function App() {
   const { user, loading: authLoading, logout } = useAuth();
   const [boot, setBoot] = useState<BootPhase>('booting');
   const [project, setProject] = useState<CityProject | null>(null);
-  const [tool, setTool] = useState<Tool>('land');
+  const [tool, setTool] = useState<Tool>('pan');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [landformDrawMode, setLandformDrawMode] = useState<LandformDrawMode>('freehand');
   const [pathDrawMode, setPathDrawMode] = useState<PathDrawMode>('straight');
@@ -53,7 +53,7 @@ function App() {
 
   const openProject = useCallback((p: CityProject, opts?: { dirty?: boolean; saved?: boolean }) => {
     setProject(p);
-    setTool('land');
+    setTool('pan');
     setSelectedFeatureId(null);
     setHistory([]);
     setDirty(opts?.dirty ?? false);
@@ -255,6 +255,27 @@ function App() {
     logout();
     setLocalOnly(true);
   };
+
+  // H = 拖动，V = 编辑
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        setTool('pan');
+        setSelectedFeatureId(null);
+      }
+      if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        setTool('select');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   if (authLoading || boot === 'booting') {
     return (

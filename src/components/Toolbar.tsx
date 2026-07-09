@@ -24,10 +24,8 @@ type Props = {
   onPathDrawModeChange: (mode: PathDrawMode) => void;
 };
 
-const VIEW_TOOLS: { id: Tool; label: string }[] = [
-  { id: 'pan', label: '平移' },
-  { id: 'select', label: '选择' },
-  { id: 'eraser', label: '橡皮' },
+const VIEW_TOOLS: { id: Tool; label: string; hint: string }[] = [
+  { id: 'eraser', label: '橡皮', hint: '点击删除要素' },
 ];
 
 const TERRAIN_TOOLS: { id: Tool; label: string }[] = [
@@ -83,9 +81,35 @@ export function Toolbar({
     <aside className="toolbar">
       <p className="toolbar-kicker">图板</p>
 
+      <div className="mode-switch" role="group" aria-label="鼠标左键模式">
+        <button
+          type="button"
+          className={tool === 'pan' ? 'mode-btn active' : 'mode-btn'}
+          onClick={() => onToolChange('pan')}
+          title="左键拖动地图 · 快捷键 H · 空格也可临时拖动"
+        >
+          拖动
+        </button>
+        <button
+          type="button"
+          className={tool === 'select' ? 'mode-btn active' : 'mode-btn'}
+          onClick={() => onToolChange('select')}
+          title="左键选中要素、拖动顶点 · 快捷键 V"
+        >
+          编辑
+        </button>
+      </div>
+      <p className="mode-hint">
+        {tool === 'pan'
+          ? '左键 = 拖地图 · H'
+          : tool === 'select'
+            ? '左键 = 选中 / 改顶点 · V'
+            : '绘制中 · 空格可临时拖图'}
+      </p>
+
       <section className="tool-section">
         <button type="button" className="section-toggle" onClick={() => toggle('view')}>
-          <span>视图</span>
+          <span>工具</span>
           <span className="section-chevron">{open.view ? '−' : '+'}</span>
         </button>
         {open.view && (
@@ -96,6 +120,7 @@ export function Toolbar({
                 type="button"
                 className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
                 onClick={() => onToolChange(t.id)}
+                title={t.hint}
               >
                 {t.label}
               </button>
