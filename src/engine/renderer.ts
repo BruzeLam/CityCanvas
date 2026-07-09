@@ -10,9 +10,37 @@ import type {
 import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
 import { curveFromTangent } from './curveMath';
+import { collectJunctionNodes } from './junctions';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
   return featureGrade(a) - featureGrade(b);
+}
+
+/** 同层先画完所有路缘，再画路面，避免后画的路「盖住」路口 */
+function drawRoadsMerged(
+  ctx: CanvasRenderingContext2D,
+  roads: MapFeature[],
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  const byGrade = new Map<number, MapFeature[]>();
+  for (const road of roads) {
+    const g = featureGrade(road);
+    const list = byGrade.get(g) ?? [];
+    list.push(road);
+    byGrade.set(g, list);
+  }
+  const grades = [...byGrade.keys()].sort((a, b) => a - b);
+
+  for (const g of grades) {
+    const group = byGrade.get(g)!;
+    for (const feature of group) {
+      drawRoadCasing(ctx, feature, viewport, style);
+    }
+    for (const feature of group) {
+      drawRoadFill(ctx, feature, viewport, style);
+    }
+  }
 }
 
 type StylePalette = {
@@ -239,7 +267,28 @@ function drawRiver(
   ctx.stroke();
 }
 
-function drawRoad(
+function drawRoadCasing(
+  ctx: CanvasRenderingContext2D,
+  feature: MapFeature,
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  if (style === 'sketch') return;
+  const level = feature.roadLevel ?? 'local';
+  const roadStyle = ROAD_STYLES[level];
+  const points = feature.points.map((p) => toScreen(p, viewport));
+  if (points.length < 2) return;
+
+  const width = roadStyle.width * viewport.zoom;
+  tracePath(ctx, points, false);
+  ctx.strokeStyle = roadStyle.casing;
+  ctx.lineWidth = width + 2 * viewport.zoom;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.stroke();
+}
+
+function drawRoadFill(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
   viewport: Viewport,
@@ -248,23 +297,36 @@ function drawRoad(
   const level = feature.roadLevel ?? 'local';
   const roadStyle = ROAD_STYLES[level];
   const points = feature.points.map((p) => toScreen(p, viewport));
-
   if (points.length < 2) return;
 
   const width = roadStyle.width * viewport.zoom;
   tracePath(ctx, points, false);
-
-  if (style !== 'sketch') {
-    ctx.strokeStyle = roadStyle.casing;
-    ctx.lineWidth = width + 2 * viewport.zoom;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
   ctx.strokeStyle = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
   ctx.lineWidth = style === 'sketch' ? Math.max(1, width * 0.5) : width;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
   ctx.stroke();
+}
+
+function drawJunctionNodes(
+  ctx: CanvasRenderingContext2D,
+  features: MapFeature[],
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  const nodes = collectJunctionNodes(features);
+  for (const node of nodes) {
+    const p = toScreen(node.point, viewport);
+    const r = Math.max(2.5, 3.2 * viewport.zoom);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r + 1.2 * viewport.zoom, 0, Math.PI * 2);
+    ctx.fillStyle = style === 'blueprint' ? '#0b1e33' : '#888888';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = style === 'blueprint' ? '#e8f4ff' : '#ffffff';
+    ctx.fill();
+  }
 }
 
 function drawRailway(
@@ -607,9 +669,7 @@ export function renderMap(
 
   if (layers.roads) {
     const roads = features.filter((f) => f.kind === 'road').sort(sortByGradeAsc);
-    for (const feature of roads) {
-      drawRoad(ctx, feature, viewport, project.mapStyle);
-    }
+    drawRoadsMerged(ctx, roads, viewport, project.mapStyle);
   }
 
   if (layers.railways) {
@@ -617,6 +677,14 @@ export function renderMap(
     for (const feature of rails) {
       drawRailway(ctx, feature, viewport, palette);
     }
+  }
+
+  if (layers.roads || layers.railways) {
+    const paths = features.filter(
+      (f) =>
+        (layers.roads && f.kind === 'road') || (layers.railways && f.kind === 'railway'),
+    );
+    drawJunctionNodes(ctx, paths, viewport, project.mapStyle);
   }
 
   if (layers.labels) {

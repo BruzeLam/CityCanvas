@@ -1,5 +1,6 @@
 import type { CityProject } from '../types';
 import { normalizeFeatureKind } from '../types';
+import { reweaveAllCrossings } from '../engine/junctions';
 import { MAP_PAYLOAD_VERSION, type MapPayload } from './mapPayload';
 
 const SESSION_KEY = 'citycanvas_session_v1';
@@ -12,12 +13,13 @@ export type LocalSession = {
 };
 
 function sanitizeProject(raw: CityProject): CityProject {
+  const features = (raw.features ?? []).map((f) => ({
+    ...f,
+    kind: normalizeFeatureKind(f.kind as string),
+  }));
   return {
     ...raw,
-    features: (raw.features ?? []).map((f) => ({
-      ...f,
-      kind: normalizeFeatureKind(f.kind as string),
-    })),
+    features: reweaveAllCrossings(features),
     viewport: raw.viewport ?? { x: 0, y: 0, zoom: 1 },
   };
 }

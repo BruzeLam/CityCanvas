@@ -32,7 +32,7 @@ import {
   snapAnglePoint,
 } from '../engine/curveMath';
 import { findSnapPoint, screenToWorld } from '../engine/geometry';
-import { weaveSameGradeCrossings } from '../engine/junctions';
+import { weaveSameGradeCrossings, reweaveAllCrossings } from '../engine/junctions';
 import { dist, polygonArea, prepareFreehandPath } from '../engine/pathUtils';
 import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
 import { fitViewport, renderMap, type PreviewState } from '../engine/renderer';
@@ -209,14 +209,16 @@ export function MapCanvas({
   const updateFeaturePoint = useCallback(
     (featureId: string, index: number, point: Point, commit = false) => {
       const current = projectRef.current;
-      const next = {
-        ...current,
-        features: current.features.map((f) =>
-          f.id === featureId
-            ? { ...f, points: f.points.map((p, i) => (i === index ? point : p)) }
-            : f,
-        ),
-      };
+      let nextFeatures = current.features.map((f) =>
+        f.id === featureId
+          ? { ...f, points: f.points.map((p, i) => (i === index ? point : p)) }
+          : f,
+      );
+      // 拖拽结束：同层交叉重新织路口节点
+      if (commit) {
+        nextFeatures = reweaveAllCrossings(nextFeatures);
+      }
+      const next = { ...current, features: nextFeatures };
       if (commit && undoSnapshot.current) {
         onProjectChange(next, { undoSnapshot: undoSnapshot.current });
         undoSnapshot.current = null;

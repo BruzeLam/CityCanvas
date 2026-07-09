@@ -1,6 +1,7 @@
 import type { CityProject, MapFeature, Point } from '../types';
 import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
+import { collectJunctionNodes } from './junctions';
 
 function esc(s: string): string {
   return s
@@ -72,14 +73,29 @@ export function exportToSvg(project: CityProject): string {
   }
 
   if (layers.roads) {
-    for (const f of features.filter((x) => x.kind === 'road').sort(byGradeAsc)) {
-      const style = ROAD_STYLES[f.roadLevel ?? 'local'];
-      parts.push(
-        `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.casing}" stroke-width="${style.width + 8}" stroke-linecap="round" stroke-linejoin="round"/>`,
-      );
-      parts.push(
-        `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`,
-      );
+    const roads = features.filter((x) => x.kind === 'road').sort(byGradeAsc);
+    // 同层：先全部路缘，再全部路面，避免后画道路盖住路口
+    const byGrade = new Map<number, typeof roads>();
+    for (const f of roads) {
+      const g = featureGrade(f);
+      const list = byGrade.get(g) ?? [];
+      list.push(f);
+      byGrade.set(g, list);
+    }
+    for (const g of [...byGrade.keys()].sort((a, b) => a - b)) {
+      const group = byGrade.get(g)!;
+      for (const f of group) {
+        const style = ROAD_STYLES[f.roadLevel ?? 'local'];
+        parts.push(
+          `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.casing}" stroke-width="${style.width + 8}" stroke-linecap="round" stroke-linejoin="round"/>`,
+        );
+      }
+      for (const f of group) {
+        const style = ROAD_STYLES[f.roadLevel ?? 'local'];
+        parts.push(
+          `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`,
+        );
+      }
     }
   }
 
@@ -90,6 +106,20 @@ export function exportToSvg(project: CityProject): string {
       );
       parts.push(
         `<path d="${pathD(f.points, false)}" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="24 20"/>`,
+      );
+    }
+  }
+
+  // 路口节点
+  if (layers.roads || layers.railways) {
+    const paths = features.filter(
+      (f) =>
+        (layers.roads && f.kind === 'road') || (layers.railways && f.kind === 'railway'),
+    );
+    for (const node of collectJunctionNodes(paths)) {
+      const p = node.point;
+      parts.push(
+        `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="6" fill="#ffffff" stroke="#888888" stroke-width="3"/>`,
       );
     }
   }
