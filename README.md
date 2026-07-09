@@ -1,57 +1,45 @@
 # CityCanvas
 
-**架空城市地图绘制器** — 专注城市尺度的自然地理与路网规划，而非大陆级世界构建。
+**架空城市地图绘制器** — 专注城市尺度的自然地理与路网规划。
 
-与 Azgaar、Wonderdraft 等工具不同，CityCanvas 面向「城市 / 都市圈」尺度：画海岸线、河流、绿带，规划分级道路网，导出导航图风格的成品地图。不涉及人口、经济、产业等社会经济层。
+## 功能
 
-## 定位对比
+- 地貌绘制：陆地 / 海洋 / 山地（自由手绘、多边形、矩形）
+- 河流与四级道路网
+- 选择编辑、橡皮擦、顶点拖拽
+- **账号系统**：邮箱注册登录
+- **云端存档**：SQLite 持久化，自动保存
+- 导出 PNG / 本地 .md 备份
 
-| 工具 | 尺度 | CityCanvas |
-|------|------|------------|
-| Azgaar's Fantasy Map Generator | 大陆 / 国家 | ❌ |
-| Wonderdraft | 世界 / 区域 | ❌ |
-| CSL Map View | 游戏内城市导出 | 参考其地图美学 |
-| **CityCanvas** | **城市 / 路网** | ✅ |
-
-## 功能（v0.1）
-
-- 自然层：海岸线、河流、绿带（闭合多边形自动填充）
-- 路网层：快速路 / 主干 / 次干 / 支路（四级，不同线宽配色）
-- 端点吸附：道路与河流节点自动连接
-- 视图：平移、滚轮缩放
-- 地图风格：导航图 / 蓝图 / 线稿
-- 导出 PNG（2048×2048）
-- 基础统计：要素数量、路网长度
-
-## 开发
+## 本地开发
 
 ```bash
 npm install
+cp .env.example .env
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`
+- 前端：http://localhost:5173
+- API：http://localhost:3000（Vite 代理 `/api`）
 
-## 操作
+## 生产部署（Zeabur / Railway / Docker）
 
-| 操作 | 说明 |
+```bash
+docker build -t citycanvas .
+docker run -p 3000:3000 -v citycanvas-data:/data \
+  -e JWT_SECRET=你的随机密钥 \
+  citycanvas
+```
+
+环境变量：
+
+| 变量 | 说明 |
 |------|------|
-| 点击 | 添加节点 |
-| 双击 / Enter | 完成当前线条 |
-| 靠近首点点击 | 闭合多边形（自然层） |
-| Esc | 取消当前绘制 |
-| Backspace | 撤销上一个节点 |
-| 空格 + 拖拽 | 平移画布 |
-| 滚轮 | 缩放 |
+| `JWT_SECRET` | JWT 签名密钥（必填） |
+| `DATABASE_PATH` | SQLite 路径，默认 `/data/citycanvas.db` |
+| `PORT` | 端口，默认 `3000` |
 
-## 路线图
-
-- [ ] 地块（block）自动识别与着色
-- [ ] 城市档案保存 / 加载（`.citycanvas` JSON）
-- [ ] SVG 导出
-- [ ] 导入底图参考
-- [ ] 成就与里程碑（游戏化反馈）
-- [ ] 桥梁 / 铁路图层
+单体服务同时提供 API 和静态前端，SQLite 文件需挂载持久卷。
 
 ## License
 

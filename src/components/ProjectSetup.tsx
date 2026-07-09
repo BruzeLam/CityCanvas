@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   MAP_SIZE_PRESETS,
   SCALE_PRESETS,
@@ -6,15 +6,19 @@ import {
   clampScale,
   formatDistance,
 } from '../constants/mapPresets';
+import { useAuth } from '../context/AuthContext';
+import { api, type CloudMapSummary } from '../io/api';
 import type { MapSettings } from '../types';
 import { createProject } from '../types';
 
 type Props = {
   onCreate: (project: ReturnType<typeof createProject>) => void;
+  onOpenCloud: (mapId: string) => void;
   onOpenFile: () => void;
 };
 
-export function ProjectSetup({ onCreate, onOpenFile }: Props) {
+export function ProjectSetup({ onCreate, onOpenCloud, onOpenFile }: Props) {
+  const { user, logout } = useAuth();
   const [name, setName] = useState('未命名城市');
   const [presetIdx, setPresetIdx] = useState(1);
   const [customSize, setCustomSize] = useState(false);
@@ -23,6 +27,24 @@ export function ProjectSetup({ onCreate, onOpenFile }: Props) {
   const [scalePresetIdx, setScalePresetIdx] = useState(2);
   const [customScale, setCustomScale] = useState(false);
   const [scaleValue, setScaleValue] = useState(10000);
+  const [cloudMaps, setCloudMaps] = useState<CloudMapSummary[]>([]);
+  const [loadingMaps, setLoadingMaps] = useState(true);
+
+  const loadCloudMaps = useCallback(async () => {
+    setLoadingMaps(true);
+    try {
+      const { maps } = await api.listMaps();
+      setCloudMaps(maps);
+    } catch {
+      setCloudMaps([]);
+    } finally {
+      setLoadingMaps(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCloudMaps();
+  }, [loadCloudMaps]);
 
   const buildSettings = (): MapSettings => {
     if (customSize) {
@@ -46,15 +68,70 @@ export function ProjectSetup({ onCreate, onOpenFile }: Props) {
     onCreate(createProject(name.trim() || '未命名城市', preview));
   };
 
+  const handleDeleteCloud = async (id: string, mapName: string) => {
+    if (!confirm(`删除云端地图「${mapName}」？此操作不可恢复。`)) return;
+    await api.deleteMap(id);
+    await loadCloudMaps();
+  };
+
+  if (!user) return null;
+
   return (
     <div className="setup-overlay">
-      <div className="setup-card">
-        <header className="setup-header">
-          <h1>CityCanvas</h1>
-          <p>开始绘制前，先设定地图范围与比例尺</p>
+      <div className="setup-card setup-card-wide">
+        <header className="setup-header setup-header-row">
+          <div>
+            <h1>CityCanvas</h1>
+            <p>开始绘制前，先设定地图范围与比例尺</p>
+          </div>
+          <div className="setup-user">
+            <span>{user.displayName || user.email}</span>
+            <button type="button" className="link-btn" onClick={logout}>
+              退出
+            </button>
+          </div>
         </header>
 
         <div className="setup-body">
+          <section className="cloud-maps-section">
+            <div className="cloud-maps-head">
+              <strong>我的云端地图</strong>
+              <button type="button" className="link-btn" onClick={loadCloudMaps}>
+                刷新
+              </button>
+            </div>
+            {loadingMaps ? (
+              <p className="muted">加载中…</p>
+            ) : cloudMaps.length === 0 ? (
+              <p className="muted">还没有云端地图，在下方创建第一张吧</p>
+            ) : (
+              <ul className="cloud-map-list">
+                {cloudMaps.map((m) => (
+                  <li key={m.id} className="cloud-map-item">
+                    <button type="button" className="cloud-map-open" onClick={() => onOpenCloud(m.id)}>
+                      <span className="cloud-map-name">{m.name}</span>
+                      <span className="cloud-map-meta">
+                        {formatDistance(m.widthM)} × {formatDistance(m.heightM)} · {m.featureCount}{' '}
+                        要素
+                      </span>
+                      <span className="cloud-map-date">
+                        更新于 {new Date(m.updatedAt + 'Z').toLocaleString('zh-CN')}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="cloud-map-delete"
+                      title="删除"
+                      onClick={() => handleDeleteCloud(m.id, m.name)}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <label className="setup-field">
             <span>城市名称</span>
             <input
@@ -161,16 +238,16 @@ export function ProjectSetup({ onCreate, onOpenFile }: Props) {
               {formatDistance(preview.widthM)} × {formatDistance(preview.heightM)} · 1 :
               {preview.scale.toLocaleString()}
             </p>
-            <p className="muted">绘制范围固定在此矩形内 · 存档保存为本地 .md 文件</p>
+            <p className="muted">绘制范围固定在此矩形内 · 自动保存到云端 SQLite</p>
           </div>
         </div>
 
         <footer className="setup-footer">
           <button type="button" className="secondary" onClick={onOpenFile}>
-            打开存档…
+            导入本地 .md…
           </button>
           <button type="button" className="primary" onClick={handleCreate}>
-            开始绘制
+            新建并绘制
           </button>
         </footer>
       </div>

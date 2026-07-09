@@ -41,6 +41,8 @@ export type MapSettings = {
 };
 
 export type CityProject = {
+  /** 云端存档 ID（登录后自动关联） */
+  cloudId?: string;
   name: string;
   settings: MapSettings;
   features: MapFeature[];

@@ -6,10 +6,12 @@ type Props = {
   project: CityProject;
   mapStyle: MapStyle;
   selectedFeatureId: string | null;
+  cloudSaved: boolean;
   onDeleteSelected: () => void;
   onMapStyleChange: (style: MapStyle) => void;
   onSave: () => void;
   onExport: () => void;
+  onExportMd: () => void;
   onUndo: () => void;
   onNewMap: () => void;
 };
@@ -24,10 +26,12 @@ export function SidePanel({
   project,
   mapStyle,
   selectedFeatureId,
+  cloudSaved,
   onDeleteSelected,
   onMapStyleChange,
   onSave,
   onExport,
+  onExportMd,
   onUndo,
   onNewMap,
 }: Props) {
@@ -79,6 +83,11 @@ export function SidePanel({
             {formatDistance(widthM)} × {formatDistance(heightM)}
           </p>
           <p>比例尺 1 : {scale.toLocaleString()}</p>
+          {project.cloudId && (
+            <p className={cloudSaved ? 'cloud-status saved' : 'cloud-status'}>
+              {cloudSaved ? '☁️ 已同步云端' : '☁️ 等待保存…'}
+            </p>
+          )}
         </div>
       </section>
 
@@ -117,22 +126,25 @@ export function SidePanel({
 
       <section className="actions">
         <button type="button" className="primary" onClick={onSave}>
-          💾 保存存档 (.md)
+          ☁️ 保存到云端
         </button>
         <button type="button" onClick={onExport}>
           ⬇ 导出 PNG
+        </button>
+        <button type="button" onClick={onExportMd}>
+          💾 导出 .md 备份
         </button>
         <button type="button" onClick={onUndo} disabled={project.features.length === 0}>
           ↩ 撤销
         </button>
         <button type="button" className="secondary" onClick={onNewMap}>
-          新建地图…
+          我的地图…
         </button>
       </section>
 
       <footer className="panel-footer">
-        <p>绘制 → 保存 .md → 打开继续</p>
-        <p className="muted">本地存档 · 暂不上云</p>
+        <p>自动保存 · 3 秒无操作后同步</p>
+        <p className="muted">数据存储在服务端 SQLite</p>
       </footer>
     </aside>
   );
