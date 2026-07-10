@@ -86,7 +86,15 @@ export type MapSettings = {
 };
 
 /** 图层开关（参照 CSLMV 可开关图层） */
-export type LayerKey = 'terrain' | 'blocks' | 'roads' | 'railways' | 'rivers' | 'labels' | 'grid';
+export type LayerKey =
+  | 'terrain'
+  | 'blocks'
+  | 'roads'
+  | 'railways'
+  | 'rivers'
+  | 'labels'
+  | 'junctions'
+  | 'grid';
 
 export type LayerVisibility = Record<LayerKey, boolean>;
 
@@ -97,6 +105,7 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   railways: true,
   rivers: true,
   labels: true,
+  junctions: true,
   grid: true,
 };
 
@@ -107,6 +116,7 @@ export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
   railways: '铁路',
   rivers: '河流',
   labels: '标注',
+  junctions: '路口',
   grid: '网格',
 };
 

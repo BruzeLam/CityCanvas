@@ -31,7 +31,7 @@ import {
   headingFromPolyline,
   snapAnglePoint,
 } from '../engine/curveMath';
-import { findSnapPoint, screenToWorld } from '../engine/geometry';
+import { findPerpendicularSnap, findSnapPoint, screenToWorld } from '../engine/geometry';
 import { weaveSameGradeCrossings, reweaveAllCrossings } from '../engine/junctions';
 import { dist, polygonArea, prepareFreehandPath } from '../engine/pathUtils';
 import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
@@ -100,6 +100,15 @@ export function MapCanvas({
   const fitted = useRef(false);
 
   const allEndpoints = project.features.flatMap((f) => f.points);
+  const pathSegments = project.features
+    .filter((f) => f.kind === 'road' || f.kind === 'railway')
+    .flatMap((f) => {
+      const segs: { a: Point; b: Point }[] = [];
+      for (let i = 1; i < f.points.length; i++) {
+        segs.push({ a: f.points[i - 1], b: f.points[i] });
+      }
+      return segs;
+    });
   const isLandform = LANDFORM_TOOLS.includes(tool);
   const isPathGuided = PATH_GUIDED_TOOLS.includes(tool);
 
@@ -320,11 +329,19 @@ export function MapCanvas({
   );
 
   const snapPoint = useCallback(
-    (pt: Point, extraTargets: Point[] = []): Point => {
+    (pt: Point, extraTargets: Point[] = [], from?: Point | null) => {
       const targets = [...allEndpoints, ...extraTargets];
-      return findSnapPoint(pt, targets, project.viewport.zoom) ?? pt;
+      const endpoint = findSnapPoint(pt, targets, project.viewport.zoom);
+      if (endpoint) return endpoint;
+
+      // 道路/铁路：优先垂直交汇到已有路段
+      if (from && isPathGuided && pathSegments.length > 0) {
+        const perp = findPerpendicularSnap(from, pt, pathSegments, project.viewport.zoom);
+        if (perp) return perp;
+      }
+      return pt;
     },
-    [allEndpoints, project.viewport.zoom],
+    [allEndpoints, isPathGuided, pathSegments, project.viewport.zoom],
   );
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -465,13 +482,15 @@ export function MapCanvas({
     }
 
     if (POLYLINE_TOOLS.includes(activeTool)) {
-      const pt = snapPoint(world);
+      const from = polyDraft.length > 0 ? polyDraft[polyDraft.length - 1] : null;
+      const pt = snapPoint(world, [], from);
 
       if (isPathGuided && pathDrawMode === 'straight') {
         setPolyDraft((prev) => {
           if (prev.length === 0) return [pt];
           const last = prev[prev.length - 1];
-          const next = shiftDown.current ? snapAnglePoint(last, snapPoint(world, prev)) : pt;
+          const snapped = snapPoint(world, prev, last);
+          const next = shiftDown.current ? snapAnglePoint(last, snapped) : snapped;
           return [...prev, next];
         });
         return;
@@ -482,12 +501,14 @@ export function MapCanvas({
           setPolyDraft([pt]);
           setCurveHeading(null);
         } else if (polyDraft.length === 1 || curveHeading === null) {
-          const next = shiftDown.current ? snapAnglePoint(polyDraft[0], pt) : pt;
+          const snapped = snapPoint(world, [], polyDraft[0]);
+          const next = shiftDown.current ? snapAnglePoint(polyDraft[0], snapped) : snapped;
           setPolyDraft([polyDraft[0], next]);
           setCurveHeading(bearingRad(polyDraft[0], next));
         } else {
           const start = polyDraft[polyDraft.length - 1];
-          const curve = curveFromTangent(start, curveHeading, pt);
+          const snapped = snapPoint(world, [], start);
+          const curve = curveFromTangent(start, curveHeading, snapped);
           if (curve) {
             setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
             setCurveHeading(curve.endHeading);
@@ -553,16 +574,17 @@ export function MapCanvas({
     if (POLYLINE_TOOLS.includes(tool)) {
       if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0) {
         const last = polyDraft[polyDraft.length - 1];
-        const base = snapPoint(world, polyDraft);
+        const base = snapPoint(world, polyDraft, last);
         setPolyCursor(shiftDown.current ? snapAnglePoint(last, base) : base);
         return;
       }
       if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length > 0) {
-        setPolyCursor(snapPoint(world, polyDraft));
+        const last = polyDraft[polyDraft.length - 1];
+        setPolyCursor(snapPoint(world, polyDraft, last));
         return;
       }
       if (polyDraft.length > 0) {
-        setPolyCursor(snapPoint(world));
+        setPolyCursor(snapPoint(world, [], polyDraft[polyDraft.length - 1]));
       }
     }
   };
@@ -703,9 +725,9 @@ export function MapCanvas({
     if (isPathGuided) {
       const gradeHint = `标高 ${formatGrade(drawGrade)} · -/= 换层`;
       if (pathDrawMode === 'straight') {
-        return `点击加点 · 双击完成 · 右键打断 · Shift 吸附 · 空格拖图 · ${gradeHint}`;
+        return `点击加点 · 靠近路段自动垂直吸附 · 双击完成 · Shift 角度 · ${gradeHint}`;
       }
-      return `点击延伸弯道 · 首段定方向 · 双击完成 · 右键打断 · 空格拖图 · ${gradeHint}`;
+      return `点击延伸弯道 · 靠近路段垂直吸附 · 双击完成 · ${gradeHint}`;
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {

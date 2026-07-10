@@ -680,11 +680,13 @@ export function renderMap(
   }
 
   if (layers.roads || layers.railways) {
-    const paths = features.filter(
-      (f) =>
-        (layers.roads && f.kind === 'road') || (layers.railways && f.kind === 'railway'),
-    );
-    drawJunctionNodes(ctx, paths, viewport, project.mapStyle);
+    if (layers.junctions !== false) {
+      const paths = features.filter(
+        (f) =>
+          (layers.roads && f.kind === 'road') || (layers.railways && f.kind === 'railway'),
+      );
+      drawJunctionNodes(ctx, paths, viewport, project.mapStyle);
+    }
   }
 
   if (layers.labels) {

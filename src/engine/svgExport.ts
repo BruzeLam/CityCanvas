@@ -110,8 +110,8 @@ export function exportToSvg(project: CityProject): string {
     }
   }
 
-  // 路口节点
-  if (layers.roads || layers.railways) {
+  // 路口节点（可在图层中关闭）
+  if ((layers.roads || layers.railways) && layers.junctions !== false) {
     const paths = features.filter(
       (f) =>
         (layers.roads && f.kind === 'road') || (layers.railways && f.kind === 'railway'),
