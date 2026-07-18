@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
 import {
   FEATURE_GRADES,
@@ -88,21 +88,19 @@ export function Toolbar({
     keys: true,
   });
 
-  useEffect(() => {
-    if (isTerrainBrush(tool) || tool === 'river') {
-      setOpen((o) => ({ ...o, terrain: true }));
-    }
-    if (isPathGuided(tool)) {
-      setOpen((o) => ({ ...o, network: true }));
-    }
-  }, [tool]);
-
   const toggle = (id: SectionId) => {
     setOpen((o) => ({ ...o, [id]: !o[id] }));
   };
 
   return (
-    <aside className="toolbar">
+    <aside
+      className="toolbar"
+      onMouseDown={(e) => {
+        // 按钮点击不抢焦点，避免空格误触；滑条仍可聚焦
+        const t = e.target as HTMLElement;
+        if (t.closest('button')) e.preventDefault();
+      }}
+    >
       <p className="toolbar-kicker">图板</p>
 
       <div className="mode-switch" role="group" aria-label="鼠标左键模式">

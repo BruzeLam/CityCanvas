@@ -448,6 +448,9 @@ export function MapCanvas({
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    // 焦点回到画布，避免空格/WASD 落到侧栏按钮上
+    canvasRef.current?.focus({ preventScroll: true });
+
     // 右键：打断当前绘制（禁用浏览器菜单）
     if (e.button === 2) {
       e.preventDefault();
@@ -766,16 +769,23 @@ export function MapCanvas({
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      // 顶栏改名等输入框：不要拦截退格 / 空格 / 字母
       if (isTypingTarget(e.target)) return;
+      // 忽略浏览器组合键，避免和撤销等冲突
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-      if (e.code === 'Space') spaceDown.current = true;
+      // 空格：只用于临时拖图，禁止激活侧栏按钮
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (!e.repeat) spaceDown.current = true;
+        return;
+      }
+
       if (e.key === 'Shift') {
         shiftDown.current = true;
         setShiftSnap(true);
       }
 
-      // WASD / 方向键平移地图（屏幕像素，随按键连发）
+      // WASD / 方向键平移（capture 阶段已 preventDefault，避免侧栏滚动）
       const panKey = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       const panStep = 56;
       let panDx = 0;
@@ -805,7 +815,6 @@ export function MapCanvas({
         resetDrafts();
         if (tool === 'select') onSelectFeature(null);
       }
-      // Mac：加减号所在键（- / =）换标高
       if (e.key === '-' || e.key === '_') {
         e.preventDefault();
         nudgeGrade(-1);
@@ -815,10 +824,8 @@ export function MapCanvas({
         nudgeGrade(1);
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedFeatureId && tool === 'select') {
-        if (!e.metaKey && !e.ctrlKey) {
-          e.preventDefault();
-          removeFeature(selectedFeatureId);
-        }
+        e.preventDefault();
+        removeFeature(selectedFeatureId);
       }
       if (e.key === 'Backspace' && tool !== 'select') {
         e.preventDefault();
@@ -833,17 +840,21 @@ export function MapCanvas({
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceDown.current = false;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        spaceDown.current = false;
+      }
       if (e.key === 'Shift') {
         shiftDown.current = false;
         setShiftSnap(false);
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
+    // capture：抢在侧栏滚动/按钮激活之前处理
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
     };
   }, [
     finishPolyline,
@@ -993,6 +1004,7 @@ export function MapCanvas({
       <canvas
         ref={canvasRef}
         className="map-canvas"
+        tabIndex={0}
         style={{ cursor: canvasCursor }}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
