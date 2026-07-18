@@ -542,7 +542,8 @@ export function MapCanvas({
           if (prev.length === 0) return [pt];
           const last = prev[prev.length - 1];
           const snapped = snapPoint(world, prev, last);
-          const next = shiftDown.current ? snapAnglePoint(last, snapped) : snapped;
+          // 默认正交；按住 Shift 取消角度锁，可任意方向
+          const next = shiftDown.current ? snapped : snapAnglePoint(last, snapped, 90);
           return [...prev, next];
         });
         return;
@@ -699,7 +700,7 @@ export function MapCanvas({
       if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0) {
         const last = polyDraft[polyDraft.length - 1];
         const base = snapPoint(world, polyDraft, last);
-        setPolyCursor(shiftDown.current ? snapAnglePoint(last, base) : base);
+        setPolyCursor(shiftDown.current ? base : snapAnglePoint(last, base, 90));
         return;
       }
       if (isPathGuided && pathDrawMode === 'curve') {
@@ -870,7 +871,7 @@ export function MapCanvas({
     if (isPathGuided) {
       const gradeHint = `标高 ${formatGrade(drawGrade)} · -/= 换层`;
       if (pathDrawMode === 'straight') {
-        return `点击加点 · 中心线/垂直/平行吸附 · 双击完成 · Shift 角度 · ${gradeHint}`;
+        return `直线默认水平/垂直 · Shift 自由角度 · 双击完成 · ${gradeHint}`;
       }
       if (!polyDraft.length) {
         return `弯道：点起点（吸到直线端点则锁定切线锚点）· ${gradeHint}`;
@@ -907,10 +908,11 @@ export function MapCanvas({
 
     if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {
       const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);
+      const angleLock = shiftSnap ? ' · 自由角度' : ' · 正交';
       return {
         lines: [
           `长度 ${formatLength(m.lengthM)}`,
-          `方位 ${formatAngle(m.angleDeg)}${tagText}${shiftHint}`,
+          `方位 ${formatAngle(m.angleDeg)}${tagText}${angleLock}`,
         ],
       };
     }

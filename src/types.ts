@@ -172,7 +172,7 @@ export const POLYLINE_TOOLS: Tool[] = ['river', 'road', 'railway'];
 export type PathDrawMode = 'straight' | 'curve';
 
 export const PATH_DRAW_MODES: { id: PathDrawMode; label: string; desc: string }[] = [
-  { id: 'straight', label: '直线', desc: '中心线/垂直/平行吸附 · Shift 角度' },
+  { id: 'straight', label: '直线', desc: '默认水平/垂直 · Shift 自由角度' },
   { id: 'curve', label: '弯道', desc: '端点锁切线 · 空白三点定半径' },
 ];
 
