@@ -18,6 +18,7 @@ type Props = {
   brushSizeM: number;
   brushThickness: number;
   showJunctions: boolean;
+  canUndo: boolean;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
@@ -25,6 +26,7 @@ type Props = {
   onBrushSizeChange: (m: number) => void;
   onBrushThicknessChange: (t: number) => void;
   onShowJunctionsChange: (show: boolean) => void;
+  onUndo: () => void;
 };
 
 const VIEW_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
@@ -58,7 +60,7 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
 const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t);
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
 
-type SectionId = 'view' | 'terrain' | 'network' | 'label';
+type SectionId = 'view' | 'terrain' | 'network' | 'label' | 'keys';
 
 export function Toolbar({
   tool,
@@ -68,6 +70,7 @@ export function Toolbar({
   brushSizeM,
   brushThickness,
   showJunctions,
+  canUndo,
   onToolChange,
   onRoadLevelChange,
   onDrawGradeChange,
@@ -75,12 +78,14 @@ export function Toolbar({
   onBrushSizeChange,
   onBrushThicknessChange,
   onShowJunctionsChange,
+  onUndo,
 }: Props) {
   const [open, setOpen] = useState<Record<SectionId, boolean>>({
     view: true,
     terrain: true,
     network: true,
     label: true,
+    keys: true,
   });
 
   useEffect(() => {
@@ -126,10 +131,10 @@ export function Toolbar({
       </div>
       <p className="mode-hint">
         {tool === 'pan'
-          ? '左键 = 拖地图 · H'
+          ? '左键拖图 · WASD 平移 · H'
           : tool === 'select'
-            ? '左键 = 选中 / 改顶点 · V'
-            : '绘制中 · 空格可临时拖图'}
+            ? '左键选中 / 改顶点 · V'
+            : '绘制中 · 空格临时拖图 · WASD 平移'}
       </p>
 
       <section className="tool-section">
@@ -153,6 +158,30 @@ export function Toolbar({
                 {t.label}
               </button>
             ))}
+            <button
+              type="button"
+              className="tool-cell"
+              onClick={onUndo}
+              disabled={!canUndo}
+              title="撤销上一步 · Ctrl/⌘ Z"
+            >
+              <span className="btn-emoji" aria-hidden>
+                ↩️
+              </span>
+              撤销
+            </button>
+            <button type="button" className="tool-cell soon" disabled title="即将推出">
+              <span className="btn-emoji" aria-hidden>
+                🏢
+              </span>
+              建筑
+            </button>
+            <button type="button" className="tool-cell soon" disabled title="即将推出">
+              <span className="btn-emoji" aria-hidden>
+                🚌
+              </span>
+              公交
+            </button>
           </div>
         )}
       </section>
@@ -363,6 +392,51 @@ export function Toolbar({
               </span>
               标注
             </button>
+            <button type="button" className="tool-cell soon" disabled title="即将推出">
+              <span className="btn-emoji" aria-hidden>
+                📏
+              </span>
+              尺规
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="tool-section">
+        <button type="button" className="section-toggle" onClick={() => toggle('keys')}>
+          <span>快捷键</span>
+          <span className="section-chevron">{open.keys ? '−' : '+'}</span>
+        </button>
+        {open.keys && (
+          <div className="option-block">
+            <ul className="shortcut-list">
+              <li>
+                <span>平移地图</span>
+                <span>
+                  <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>
+                </span>
+              </li>
+              <li>
+                <span>拖动 / 编辑</span>
+                <span>
+                  <kbd>H</kbd> / <kbd>V</kbd>
+                </span>
+              </li>
+              <li>
+                <span>临时拖图</span>
+                <kbd>Space</kbd>
+              </li>
+              <li>
+                <span>路网标高</span>
+                <span>
+                  <kbd>-</kbd> / <kbd>=</kbd>
+                </span>
+              </li>
+              <li>
+                <span>完成折线</span>
+                <kbd>Enter</kbd>
+              </li>
+            </ul>
           </div>
         )}
       </section>

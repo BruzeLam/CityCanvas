@@ -115,7 +115,7 @@ input {
 .workspace {
   flex: 1;
   display: grid;
-  grid-template-columns: 196px 1fr 228px;
+  grid-template-columns: 268px 1fr 240px;
   min-height: 0;
   gap: 0;
   padding: 10px 10px 10px;
@@ -125,13 +125,17 @@ input {
 .side-panel {
   background: var(--panel);
   border: 1px solid var(--line);
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .toolbar {
   border-radius: 2px 0 0 2px;
   border-right: none;
-  padding: 12px 10px 16px;
+  padding: 12px 12px 28px;
 }
 
 .side-panel {
@@ -212,6 +216,50 @@ input {
 .brush-slider input[type='range'] {
   width: 100%;
   accent-color: var(--accent-line);
+}
+
+.shortcut-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.shortcut-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.shortcut-list kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 2px;
+  background: #fff;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+.tool-cell.soon {
+  opacity: 0.48;
+  cursor: not-allowed !important;
+}
+
+.tool-cell.soon:hover {
+  border-color: var(--line) !important;
+  color: var(--ink-soft) !important;
+  background: var(--paper) !important;
 }
 
 .tool-section {

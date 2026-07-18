@@ -45,7 +45,7 @@ function App() {
   const [brushThickness, setBrushThickness] = useState(DEFAULT_BRUSH_THICKNESS);
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
   const [drawGrade, setDrawGrade] = useState<FeatureGrade>(DEFAULT_GRADE);
-  const [, setHistory] = useState<CityProject[]>([]);
+  const [history, setHistory] = useState<CityProject[]>([]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [dirty, setDirty] = useState(false);
   const [localOnly, setLocalOnly] = useState(false);
@@ -455,6 +455,7 @@ function App() {
           brushSizeM={brushSizeM}
           brushThickness={brushThickness}
           showJunctions={getLayers(project).junctions !== false}
+          canUndo={history.length > 0}
           onToolChange={(t) => {
             setTool(t);
             if (t !== 'select') setSelectedFeatureId(null);
@@ -470,6 +471,7 @@ function App() {
               layers: { ...getLayers(project), junctions: show },
             });
           }}
+          onUndo={handleUndo}
         />
         <MapCanvas
           key={`${project.cloudId ?? 'local'}-${project.settings.widthM}-${project.settings.heightM}`}

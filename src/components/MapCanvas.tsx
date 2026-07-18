@@ -773,6 +773,30 @@ export function MapCanvas({
         shiftDown.current = true;
         setShiftSnap(true);
       }
+
+      // WASD / 方向键平移地图（屏幕像素，随按键连发）
+      const panKey = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const panStep = 56;
+      let panDx = 0;
+      let panDy = 0;
+      if (panKey === 'a' || panKey === 'ArrowLeft') panDx = panStep;
+      if (panKey === 'd' || panKey === 'ArrowRight') panDx = -panStep;
+      if (panKey === 'w' || panKey === 'ArrowUp') panDy = panStep;
+      if (panKey === 's' || panKey === 'ArrowDown') panDy = -panStep;
+      if (panDx !== 0 || panDy !== 0) {
+        e.preventDefault();
+        const current = projectRef.current;
+        onProjectChange({
+          ...current,
+          viewport: {
+            ...current.viewport,
+            x: current.viewport.x + panDx,
+            y: current.viewport.y + panDy,
+          },
+        });
+        return;
+      }
+
       if (e.key === 'Enter') {
         finishPolyline();
       }
@@ -823,6 +847,7 @@ export function MapCanvas({
   }, [
     finishPolyline,
     nudgeGrade,
+    onProjectChange,
     polyDraft,
     curveControl,
     resetDrafts,
@@ -833,7 +858,7 @@ export function MapCanvas({
   ]);
 
   const hint = (() => {
-    if (tool === 'pan') return '拖动模式 · 左键拖地图 · 滚轮缩放 · 切到「编辑」可改顶点';
+    if (tool === 'pan') return '拖动模式 · 左键拖图 · WASD/方向键平移 · 滚轮缩放';
     if (tool === 'select') {
       return '编辑模式 · 点击选中 · 拖顶点 · -/= 换标高 · Delete 删除 · 右键取消';
     }
