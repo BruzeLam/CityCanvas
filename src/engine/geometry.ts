@@ -212,7 +212,10 @@ export function findPathGuideSnap(
   return { point: cursor, kind: 'none' };
 }
 
-/** 估算某端点处路段切线（用于弯道接到已有节点） */
+/**
+ * 估算端点处「向外延伸」的切线方向（从路段指向端点外侧）。
+ * 用于从已有道路端点继续画弯道时锁定锚点航向。
+ */
 export function headingAtPoint(
   point: Point,
   segments: Segment[],
@@ -225,13 +228,14 @@ export function headingAtPoint(
   for (const seg of segments) {
     const da = dist(point, seg.a);
     const db = dist(point, seg.b);
+    // 在 a 端：沿 b→a 向外；在 b 端：沿 a→b 向外
     if (da < bestDist) {
       bestDist = da;
-      bestDir = Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x);
+      bestDir = Math.atan2(seg.a.y - seg.b.y, seg.a.x - seg.b.x);
     }
     if (db < bestDist) {
       bestDist = db;
-      bestDir = Math.atan2(seg.a.y - seg.b.y, seg.a.x - seg.b.x);
+      bestDir = Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x);
     }
   }
   return bestDir;

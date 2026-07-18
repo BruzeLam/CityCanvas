@@ -9,7 +9,11 @@ import type {
 } from '../types';
 import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
-import { curveAdaptiveViaControl, curveFromThreePoints } from './curveMath';
+import {
+  curveAdaptiveViaControl,
+  curveFromThreePoints,
+  curveFromTangent,
+} from './curveMath';
 import type { GuideSnap, Segment } from './geometry';
 import { collectJunctionNodes } from './junctions';
 
@@ -647,7 +651,47 @@ function drawPreviewCurve(
 
   const a = points[points.length - 1];
 
-  // 尚未点 B：A → 光标
+  // 锚点切线模式：从已有直线/路段端点延伸（TF 式单半径弧）
+  if (!control && startHeading != null) {
+    const hx = Math.cos(startHeading);
+    const hy = Math.sin(startHeading);
+    const origin = toScreen(a, viewport);
+    ctx.save();
+    ctx.setLineDash([4, 5]);
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(origin.x - hx * 90, origin.y - hy * 90);
+    ctx.lineTo(origin.x + hx * 140, origin.y + hy * 140);
+    ctx.stroke();
+    ctx.restore();
+
+    const curve = curveFromTangent(a, startHeading, cursor);
+    if (curve && curve.points.length >= 2) {
+      const screen = curve.points.map((p) => toScreen(p, viewport));
+      tracePath(ctx, screen, false);
+      ctx.strokeStyle = palette.preview;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const tip = toScreen(curve.points[curve.points.length - 1], viewport);
+      const ex = Math.cos(curve.endHeading) * 18;
+      const ey = Math.sin(curve.endHeading) * 18;
+      ctx.beginPath();
+      ctx.moveTo(tip.x, tip.y);
+      ctx.lineTo(tip.x + ex, tip.y + ey);
+      ctx.strokeStyle = palette.preview;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else {
+      drawPreviewPolyline(ctx, [a, cursor], viewport, palette);
+    }
+    return;
+  }
+
+  // 自由三点：尚未点 B
   if (!control) {
     drawPreviewPolyline(ctx, [a, cursor], viewport, palette);
     return;
@@ -676,11 +720,11 @@ function drawPreviewCurve(
     ctx.setLineDash([]);
 
     const tip = toScreen(curve.points[curve.points.length - 1], viewport);
-    const hx = Math.cos(curve.endHeading) * 18;
-    const hy = Math.sin(curve.endHeading) * 18;
+    const ex = Math.cos(curve.endHeading) * 18;
+    const ey = Math.sin(curve.endHeading) * 18;
     ctx.beginPath();
     ctx.moveTo(tip.x, tip.y);
-    ctx.lineTo(tip.x + hx, tip.y + hy);
+    ctx.lineTo(tip.x + ex, tip.y + ey);
     ctx.strokeStyle = palette.preview;
     ctx.lineWidth = 1.5;
     ctx.stroke();

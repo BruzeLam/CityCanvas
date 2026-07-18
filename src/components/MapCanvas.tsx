@@ -28,6 +28,7 @@ import {
   lineMetrics,
   curveFromThreePoints,
   curveAdaptiveViaControl,
+  curveFromTangent,
   headingFromPolyline,
   snapAnglePoint,
 } from '../engine/curveMath';
@@ -88,8 +89,10 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const [polyDraft, setPolyDraft] = useState<Point[]>([]);
   const [polyCursor, setPolyCursor] = useState<Point | null>(null);
-  /** 三点弯中间点 B */
+  /** 三点弯中间点 B（自由模式）；有锚点切线时不用 */
   const [curveControl, setCurveControl] = useState<Point | null>(null);
+  /** 从直线/已有端点延伸时的切线航向（弧度） */
+  const [curveAnchorHeading, setCurveAnchorHeading] = useState<number | null>(null);
   const [lastSnapKind, setLastSnapKind] = useState<SnapKind>('none');
   const [activeGuide, setActiveGuide] = useState<PreviewGuide | null>(null);
   const [regionDraft, setRegionDraft] = useState<Point[]>([]);
@@ -129,6 +132,7 @@ export function MapCanvas({
     setPolyDraft([]);
     setPolyCursor(null);
     setCurveControl(null);
+    setCurveAnchorHeading(null);
     setLastSnapKind('none');
     setActiveGuide(null);
     setRegionDraft([]);
@@ -166,7 +170,8 @@ export function MapCanvas({
       }
     }
     if (isPathGuided && pathDrawMode === 'curve' && (polyDraft.length > 0 || polyCursor || curveControl)) {
-      const startHeading = headingFromPolyline(polyDraft);
+      const startHeading =
+        curveAnchorHeading ?? headingFromPolyline(polyDraft);
       const endHeading =
         polyCursor && lastSnapKind === 'endpoint'
           ? headingAtPoint(polyCursor, pathSegments, project.viewport.zoom)
@@ -174,11 +179,14 @@ export function MapCanvas({
       return {
         mode: 'curve',
         points: polyDraft,
-        control: curveControl,
+        control: curveAnchorHeading != null ? null : curveControl,
         cursor: polyCursor,
         startHeading,
         endHeading,
-        adaptivePreview: lastSnapKind === 'endpoint' && curveControl != null,
+        adaptivePreview:
+          curveAnchorHeading == null &&
+          lastSnapKind === 'endpoint' &&
+          curveControl != null,
         guide: activeGuide,
       };
     }
@@ -282,6 +290,7 @@ export function MapCanvas({
     setPolyDraft([]);
     setPolyCursor(null);
     setCurveControl(null);
+    setCurveAnchorHeading(null);
     setLastSnapKind('none');
     setActiveGuide(null);
     setRegionDraft([]);
@@ -548,20 +557,59 @@ export function MapCanvas({
       }
 
       if (isPathGuided && pathDrawMode === 'curve') {
-        // 三点弯：A → B → C；完成后继续下一段从 C 再点 B
+        // 有锚点切线（从直线端点延伸）：A 已定，再点终点即可
+        // 无切线（空白/中段开岔）：自由三点 A → B → C
         if (polyDraft.length === 0) {
-          setPolyDraft([pt]);
+          const hit = applyGuideSnap(world, [], null);
+          setLastSnapKind(hit.kind);
+          const anchor =
+            hit.kind === 'endpoint'
+              ? headingAtPoint(hit.point, pathSegments, project.viewport.zoom)
+              : null;
+          setPolyDraft([hit.point]);
           setCurveControl(null);
+          setCurveAnchorHeading(anchor);
+          if (hit.kind === 'centerline' && hit.ref) {
+            setActiveGuide({
+              kind: 'centerline',
+              from: hit.point,
+              to: hit.point,
+              ref: hit.ref,
+            });
+          } else {
+            setActiveGuide(null);
+          }
+          return;
+        }
+
+        const a = polyDraft[polyDraft.length - 1];
+        const tangentHeading =
+          curveAnchorHeading ?? headingFromPolyline(polyDraft);
+
+        // 切线锚点模式（从直线端点延伸 / 连续弯道）：点终点即可
+        if (curveControl == null && tangentHeading != null) {
+          const hit = applyGuideSnap(world, polyDraft, a);
+          setLastSnapKind(hit.kind);
+          const c = hit.point;
+          if (dist(a, c) < 4) return;
+
+          const curve = curveFromTangent(a, tangentHeading, c);
+          if (curve && curve.points.length >= 2) {
+            setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
+            setCurveControl(null);
+            setCurveAnchorHeading(curve.endHeading);
+            setActiveGuide(null);
+          }
           return;
         }
 
         if (!curveControl) {
-          const a = polyDraft[polyDraft.length - 1];
           const hit = applyGuideSnap(world, polyDraft, a);
           setLastSnapKind(hit.kind);
           const next = shiftDown.current ? snapAnglePoint(a, hit.point) : hit.point;
           if (dist(a, next) < 4) return;
           setCurveControl(next);
+          setCurveAnchorHeading(null);
           if (hit.kind === 'centerline' && hit.ref) {
             setActiveGuide({
               kind: 'centerline',
@@ -582,7 +630,6 @@ export function MapCanvas({
           return;
         }
 
-        const a = polyDraft[polyDraft.length - 1];
         const b = curveControl;
         const hit = applyGuideSnap(world, polyDraft, a);
         setLastSnapKind(hit.kind);
@@ -602,6 +649,7 @@ export function MapCanvas({
         if (curve && curve.points.length >= 2) {
           setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
           setCurveControl(null);
+          setCurveAnchorHeading(curve.endHeading);
           setActiveGuide(null);
         }
         return;
@@ -779,8 +827,10 @@ export function MapCanvas({
         } else if (curveControl) {
           setCurveControl(null);
         } else if (polyDraft.length > 0) {
-          setPolyDraft((prev) => prev.slice(0, -1));
+          const next = polyDraft.slice(0, -1);
+          setPolyDraft(next);
           setCurveControl(null);
+          setCurveAnchorHeading(headingFromPolyline(next));
         }
       }
     };
@@ -825,12 +875,15 @@ export function MapCanvas({
         return `点击加点 · 中心线/垂直/平行吸附 · 双击完成 · Shift 角度 · ${gradeHint}`;
       }
       if (!polyDraft.length) {
-        return `弯道：点起点 A（可吸中心线开岔）· ${gradeHint}`;
+        return `弯道：点起点（吸到直线端点则锁定切线锚点）· ${gradeHint}`;
+      }
+      if (curveAnchorHeading != null || headingFromPolyline(polyDraft) != null) {
+        return `弯道：锚点已锁定 · 点终点拉弧 · 双击完成 · ${gradeHint}`;
       }
       if (!curveControl) {
-        return `弯道：点中间点 B · Backspace 撤销 · ${gradeHint}`;
+        return `弯道：自由三点 · 点中间点 B · ${gradeHint}`;
       }
-      return `弯道：点终点 C（定半径；接已有节点则变半径）· ${gradeHint}`;
+      return `弯道：点终点 C · ${gradeHint}`;
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
@@ -875,6 +928,29 @@ export function MapCanvas({
 
     if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length > 0 && polyCursor) {
       const a = polyDraft[polyDraft.length - 1];
+      const tangentHeading = curveAnchorHeading ?? headingFromPolyline(polyDraft);
+
+      if (!curveControl && tangentHeading != null) {
+        const curve = curveFromTangent(a, tangentHeading, polyCursor);
+        if (curve) {
+          if (!Number.isFinite(curve.radius)) {
+            const m = lineMetrics(a, polyCursor);
+            return {
+              lines: [
+                `长度 ${formatLength(m.lengthM)}`,
+                `锚点切线 · 直线${tagText}`,
+              ],
+            };
+          }
+          return {
+            lines: [
+              formatRadius(curve.radius),
+              `弯曲 ${formatAngle(curve.sweepDeg)} · 锚点切线${tagText}`,
+            ],
+          };
+        }
+      }
+
       if (!curveControl) {
         const m = lineMetrics(a, polyCursor);
         return {
@@ -884,6 +960,7 @@ export function MapCanvas({
           ],
         };
       }
+
       const startHeading = headingFromPolyline(polyDraft);
       const endHeading =
         lastSnapKind === 'endpoint'
@@ -911,8 +988,10 @@ export function MapCanvas({
       }
     }
 
-    if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length === 0 && polyCursor && tag) {
-      return { lines: [`吸附 ${tag}`] };
+    if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length === 0 && polyCursor) {
+      return {
+        lines: [tag ? `吸附 ${tag}` : '移动以选择起点', '端点=切线锚点'],
+      };
     }
 
     return null;
