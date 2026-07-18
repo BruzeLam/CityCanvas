@@ -256,6 +256,11 @@ input {
   letter-spacing: 0.04em;
 }
 
+.shortcut-note {
+  font-size: 10px;
+  color: var(--muted);
+}
+
 .tool-cell.soon {
   opacity: 0.48;
   cursor: not-allowed !important;

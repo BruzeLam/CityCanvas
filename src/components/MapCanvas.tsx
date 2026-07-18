@@ -39,9 +39,11 @@ import {
 } from '../engine/geometry';
 import {
   findPathTipAt,
+  findNearestAnyGradeAttachment,
   tryMergeHeadToTail,
-  weaveSameGradeCrossings,
+  attachCrossGradeTips,
   reweaveAllCrossings,
+  RAMP_ATTACH_M,
 } from '../engine/junctions';
 import { dist } from '../engine/pathUtils';
 import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
@@ -145,6 +147,7 @@ export function MapCanvas({
   const projectRef = useRef(project);
   const spaceDown = useRef(false);
   const shiftDown = useRef(false);
+  const altDown = useRef(false);
   const fitted = useRef(false);
 
   const allEndpoints = project.features.flatMap((f) => f.points);
@@ -310,7 +313,7 @@ export function MapCanvas({
         }
         onProjectChange({
           ...project,
-          features: weaveSameGradeCrossings(project.features, feature),
+          features: attachCrossGradeTips(project.features, feature),
         });
         return;
       }
@@ -370,17 +373,36 @@ export function MapCanvas({
   const resolvePathGrades = useCallback(
     (points: Point[]): { grade: FeatureGrade; gradeEnd?: FeatureGrade } => {
       const startTip = findPathTipAt(projectRef.current.features, points[0]);
+      const startNear = findNearestAnyGradeAttachment(
+        projectRef.current.features,
+        points[0],
+        RAMP_ATTACH_M,
+      );
+      const startG =
+        draftStartGrade ??
+        (startTip
+          ? featureGrade(startTip.feature)
+          : startNear
+            ? startNear.grade
+            : drawGrade);
+
       const endTip = findPathTipAt(
         projectRef.current.features,
         points[points.length - 1],
       );
-      const startG =
-        draftStartGrade ??
-        (startTip ? featureGrade(startTip.feature) : drawGrade);
+      const endNear = findNearestAnyGradeAttachment(
+        projectRef.current.features,
+        points[points.length - 1],
+        RAMP_ATTACH_M,
+      );
+
       let endG = drawGrade;
       if (endTip) {
         endG = featureGrade(endTip.feature);
+      } else if (endNear) {
+        endG = endNear.grade;
       }
+
       if (endG !== startG) {
         return { grade: startG, gradeEnd: endG };
       }
@@ -415,13 +437,13 @@ export function MapCanvas({
 
   const applyGuideSnap = useCallback(
     (pt: Point, extraTargets: Point[] = [], from?: Point | null): GuideSnap => {
+      const soft = !altDown.current;
       if (!isPathGuided) {
         const targets = [...allEndpoints, ...extraTargets];
-        const hit = findPathGuideSnap(pt, targets, [], project.viewport.zoom, from);
-        return hit;
+        return findPathGuideSnap(pt, targets, [], project.viewport.zoom, from, soft);
       }
       const targets = [...allEndpoints, ...extraTargets];
-      return findPathGuideSnap(pt, targets, pathSegments, project.viewport.zoom, from);
+      return findPathGuideSnap(pt, targets, pathSegments, project.viewport.zoom, from, soft);
     },
     [allEndpoints, isPathGuided, pathSegments, project.viewport.zoom],
   );
@@ -894,6 +916,10 @@ export function MapCanvas({
         shiftDown.current = true;
         setShiftSnap(true);
       }
+      if (e.key === 'Alt') {
+        e.preventDefault();
+        altDown.current = true;
+      }
 
       // WASD / 方向键平移（capture 阶段已 preventDefault，避免侧栏滚动）
       const panKey = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -958,6 +984,9 @@ export function MapCanvas({
         shiftDown.current = false;
         setShiftSnap(false);
       }
+      if (e.key === 'Alt') {
+        altDown.current = false;
+      }
     };
     // capture：抢在侧栏滚动/按钮激活之前处理
     window.addEventListener('keydown', onKeyDown, true);
@@ -998,7 +1027,7 @@ export function MapCanvas({
           ? `匝道 ${startLabel} → ${endLabel} · -/= 换终点层`
           : `标高 ${endLabel} · -/= 换层`;
       if (pathDrawMode === 'straight') {
-        return `直线默认水平/垂直 · Shift 自由角度 · 双击完成 · ${gradeHint}`;
+        return `直线默认水平/垂直 · Shift 自由角度 · Alt 关软吸附（近距平行）· 双击完成 · ${gradeHint}`;
       }
       if (!polyDraft.length) {
         return `弯道：点起点（端点/中心线锁切线）· ${gradeHint}`;

@@ -1,10 +1,18 @@
 import type { Point } from '../types';
 
-const SNAP_BASE = 12;
+/** 世界坐标吸附基半径（米）：实际半径 = SNAP_BASE / zoom */
+export const SNAP_BASE_M = 12;
 /** 垂直吸附比端点吸附稍宽，便于对准路口 */
-const PERP_SNAP_FACTOR = 2.2;
-const CENTERLINE_SNAP_FACTOR = 1.8;
-const PARALLEL_SNAP_FACTOR = 2.0;
+const PERP_SNAP_FACTOR = 2.0;
+/** 中心线吸附收紧：过宽会把近距平行路吸到同一条上 */
+const CENTERLINE_SNAP_FACTOR = 0.95;
+const PARALLEL_SNAP_FACTOR = 1.6;
+
+/**
+ * 平行双线建议净距（中心线间距，米）。
+ * 小于中心线吸附半径时，落笔会被吸到邻路中心线——用 Alt 可临时关闭软吸附。
+ */
+export const PARALLEL_CLEAR_M = 16;
 
 export function dist(a: Point, b: Point): number {
   const dx = a.x - b.x;
@@ -13,7 +21,12 @@ export function dist(a: Point, b: Point): number {
 }
 
 export function snapThreshold(zoom: number): number {
-  return SNAP_BASE / zoom;
+  return SNAP_BASE_M / zoom;
+}
+
+/** 中心线吸附半径（米）——近于此距离会吸到邻路 */
+export function centerlineSnapRadiusM(zoom: number): number {
+  return snapThreshold(zoom) * CENTERLINE_SNAP_FACTOR;
 }
 
 export function findSnapPoint(
@@ -185,6 +198,7 @@ export function findParallelSnap(
 /**
  * 路径绘制统一吸附：端点 > 垂直 > 平行 > 中心线。
  * from 为空时（首点）仅端点 + 中心线。
+ * soft=false（按住 Alt）时只保留端点，便于画近距平行线。
  */
 export function findPathGuideSnap(
   cursor: Point,
@@ -192,10 +206,15 @@ export function findPathGuideSnap(
   segments: Segment[],
   zoom: number,
   from?: Point | null,
+  soft = true,
 ): GuideSnap {
   const endpoint = findSnapPoint(cursor, endpoints, zoom);
   if (endpoint) {
     return { point: endpoint, kind: 'endpoint' };
+  }
+
+  if (!soft) {
+    return { point: cursor, kind: 'none' };
   }
 
   if (from) {

@@ -9,6 +9,7 @@ import {
   clampGrade,
   formatGrade,
 } from '../types';
+import { PARALLEL_CLEAR_M } from '../engine/geometry';
 
 type Props = {
   tool: Tool;
@@ -429,6 +430,14 @@ export function Toolbar({
                 <span>
                   <kbd>-</kbd> / <kbd>=</kbd>
                 </span>
+              </li>
+              <li>
+                <span>关软吸附</span>
+                <kbd>Alt</kbd>
+              </li>
+              <li>
+                <span>平行净距</span>
+                <span className="shortcut-note">≥{PARALLEL_CLEAR_M} m 建议</span>
               </li>
               <li>
                 <span>完成折线</span>

@@ -1,11 +1,13 @@
 import type { FeatureGrade, MapFeature, Point } from '../types';
 import { featureGrade, featureGradeEnd, isRampFeature } from '../types';
-import { dist } from './geometry';
+import { closestOnSegment, dist } from './geometry';
 
 const EPS = 1e-6;
 /** 交点距已有顶点过近则合并到该顶点 */
 export const ENDPOINT_MERGE_M = 6;
 const JUNCTION_SNAP_M = 10;
+/** 匝道端点挂接到目标路（含中段）的搜索半径 */
+export const RAMP_ATTACH_M = 22;
 
 type SegHit = {
   featureId: string;
@@ -199,6 +201,182 @@ export function tryMergeHeadToTail(
 }
 
 /**
+ * 在任意标高路径上找最近挂接点（用于推断匝道终点层）。
+ */
+export function findNearestAnyGradeAttachment(
+  features: MapFeature[],
+  point: Point,
+  maxDist = RAMP_ATTACH_M,
+  excludeId?: string,
+): { feature: MapFeature; point: Point; grade: FeatureGrade; segIndex: number; t: number } | null {
+  let best: {
+    feature: MapFeature;
+    point: Point;
+    grade: FeatureGrade;
+    segIndex: number;
+    t: number;
+    dist: number;
+  } | null = null;
+
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2) continue;
+    if (excludeId && f.id === excludeId) continue;
+    const grade = featureGrade(f);
+    for (let i = 0; i < f.points.length - 1; i++) {
+      const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
+      if (hit.dist > maxDist) continue;
+      if (!best || hit.dist < best.dist) {
+        best = {
+          feature: f,
+          point: hit.point,
+          grade,
+          segIndex: i,
+          t: hit.t,
+          dist: hit.dist,
+        };
+      }
+    }
+  }
+  return best
+    ? {
+        feature: best.feature,
+        point: best.point,
+        grade: best.grade,
+        segIndex: best.segIndex,
+        t: best.t,
+      }
+    : null;
+}
+
+/**
+ * 在指定标高的路径上找最近点（端点优先，其次中心线），用于匝道挂接。
+ */
+export function findGradeAttachment(
+  features: MapFeature[],
+  point: Point,
+  grade: FeatureGrade,
+  maxDist = RAMP_ATTACH_M,
+  excludeId?: string,
+): { feature: MapFeature; point: Point; segIndex: number; t: number } | null {
+  let best: {
+    feature: MapFeature;
+    point: Point;
+    segIndex: number;
+    t: number;
+    score: number;
+  } | null = null;
+
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2) continue;
+    if (excludeId && f.id === excludeId) continue;
+    // 普通路：整条同层；匝道：两端各算一层
+    const gradesOnPath = isRampFeature(f)
+      ? [featureGrade(f), featureGradeEnd(f)]
+      : [featureGrade(f)];
+    if (!gradesOnPath.includes(grade)) continue;
+
+    for (let i = 0; i < f.points.length - 1; i++) {
+      const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
+      if (hit.dist > maxDist) continue;
+      // 端点略优先，便于首尾相接
+      const endBonus =
+        hit.t < 0.02 || hit.t > 0.98 ? -2 : hit.t > 0.08 && hit.t < 0.92 ? 0 : -0.5;
+      const score = hit.dist + endBonus;
+      if (!best || score < best.score) {
+        best = {
+          feature: f,
+          point: hit.point,
+          segIndex: i,
+          t: hit.t,
+          score,
+        };
+      }
+    }
+  }
+
+  if (!best) return null;
+  return {
+    feature: best.feature,
+    point: best.point,
+    segIndex: best.segIndex,
+    t: best.t,
+  };
+}
+
+function insertAttachmentOnPeer(
+  peer: MapFeature,
+  segIndex: number,
+  t: number,
+  point: Point,
+): MapFeature {
+  // 已在端点附近则不插点
+  if (t < 0.02 || t > 0.98) {
+    const tip = t < 0.5 ? peer.points[0] : peer.points[peer.points.length - 1];
+    return {
+      ...peer,
+      points: peer.points.map((p) =>
+        dist(p, tip) < ENDPOINT_MERGE_M ? { ...point } : p,
+      ),
+    };
+  }
+  return {
+    ...peer,
+    points: applyHitsToPolyline(peer.points, [{ segIndex, t, point }]),
+  };
+}
+
+/**
+ * 跨层匝道 / 异层挂接：把起终点吸到对应标高的路上，并在目标路上插入共享节点。
+ * 中段仍不与异层织交叉（立交下穿保持分离）。
+ */
+export function attachCrossGradeTips(
+  features: MapFeature[],
+  incoming: MapFeature,
+): MapFeature[] {
+  if (!isPathKind(incoming) || incoming.points.length < 2) {
+    return [...features, incoming];
+  }
+
+  const startG = featureGrade(incoming);
+  const endG = featureGradeEnd(incoming);
+  let points = [...incoming.points];
+  let nextFeatures = [...features];
+
+  const attachEnd = (
+    tipIndex: 0 | -1,
+    grade: FeatureGrade,
+  ) => {
+    const tip = tipIndex === 0 ? points[0] : points[points.length - 1];
+    const hit = findGradeAttachment(nextFeatures, tip, grade, RAMP_ATTACH_M, incoming.id);
+    if (!hit) return;
+
+    if (tipIndex === 0) {
+      points = [{ ...hit.point }, ...points.slice(1)];
+    } else {
+      points = [...points.slice(0, -1), { ...hit.point }];
+    }
+
+    nextFeatures = nextFeatures.map((f) =>
+      f.id === hit.feature.id
+        ? insertAttachmentOnPeer(f, hit.segIndex, hit.t, hit.point)
+        : f,
+    );
+  };
+
+  attachEnd(0, startG);
+  attachEnd(-1, endG);
+
+  const attached: MapFeature = { ...incoming, points };
+
+  // 同层路仍织交叉；匝道只挂端点
+  if (isRampFeature(attached) || startG !== endG) {
+    return [...nextFeatures, attached];
+  }
+
+  return weaveSameGradeCrossings(nextFeatures, attached);
+}
+
+/**
  * 同层道路/铁路交叉时，在双方折线上插入共享交点（形成路口节点）。
  * 不同层不处理（上跨/下穿）。跨层匝道整段跳过织网，避免在下层/上层误插路口。
  */
@@ -211,7 +389,7 @@ export function weaveSameGradeCrossings(
   }
 
   if (isRampFeature(incoming)) {
-    return [...features, incoming];
+    return attachCrossGradeTips(features, incoming);
   }
 
   const grade = featureGrade(incoming);
@@ -317,7 +495,7 @@ export function collectJunctionNodes(features: MapFeature[]): JunctionNode[] {
 }
 
 /**
- * 首尾相接或路口共享的端点：渲染时用 butt cap，避免圆帽鼓包。
+ * 首尾相接、路口共享、或端点落在他路顶点上：用 butt cap，避免圆帽鼓包。
  * key = `${featureId}|start` / `${featureId}|end`
  */
 export function collectJoinedCaps(features: MapFeature[]): Set<string> {
@@ -342,5 +520,21 @@ export function collectJoinedCaps(features: MapFeature[]): Set<string> {
       joined.add(`${tips[j].featureId}|${tips[j].end}`);
     }
   }
+
+  // 匝道挂接到他路中段：端点与他路任一顶点重合也算接合
+  for (const tip of tips) {
+    if (joined.has(`${tip.featureId}|${tip.end}`)) continue;
+    for (const f of features) {
+      if (!isPathKind(f) || f.id === tip.featureId) continue;
+      for (const p of f.points) {
+        if (dist(tip.point, p) <= ENDPOINT_MERGE_M) {
+          joined.add(`${tip.featureId}|${tip.end}`);
+          break;
+        }
+      }
+      if (joined.has(`${tip.featureId}|${tip.end}`)) break;
+    }
+  }
+
   return joined;
 }

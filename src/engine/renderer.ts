@@ -7,7 +7,7 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, featureGrade, featureGradeEnd, getLayers } from '../types';
+import { ROAD_STYLES, featureGrade, featureGradeEnd, getLayers, isRampFeature } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
   curveFromThreePoints,
@@ -414,6 +414,23 @@ function drawRoadFill(
   ctx.lineCap = strokeCap;
   ctx.stroke();
   drawFreeEndCaps(ctx, freeEnds, viewport, fillW, fillColor);
+
+  // 跨层匝道：在挂接端画略大的接合圆，视觉上接到目标层
+  if (isRampFeature(feature)) {
+    const tips = [feature.points[0], feature.points[feature.points.length - 1]];
+    for (const tip of tips) {
+      const s = toScreen(tip, viewport);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, fillW * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, fillW * 0.55 + 1.2 * viewport.zoom, 0, Math.PI * 2);
+      ctx.strokeStyle = roadStyle.casing;
+      ctx.lineWidth = Math.max(1, 1.2 * viewport.zoom);
+      ctx.stroke();
+    }
+  }
 }
 
 function drawJunctionNodes(
