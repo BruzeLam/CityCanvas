@@ -1,10 +1,10 @@
 import type { FeatureGrade, MapFeature, Point } from '../types';
-import { featureGrade } from '../types';
+import { featureGrade, featureGradeEnd, isRampFeature } from '../types';
 import { dist } from './geometry';
 
 const EPS = 1e-6;
 /** 交点距已有顶点过近则合并到该顶点 */
-const ENDPOINT_MERGE_M = 6;
+export const ENDPOINT_MERGE_M = 6;
 const JUNCTION_SNAP_M = 10;
 
 type SegHit = {
@@ -71,7 +71,6 @@ function insertSorted(points: Point[], segIndex: number, point: Point): Point[] 
   const merged = nearestExisting([a, b], point, ENDPOINT_MERGE_M);
   if (merged) return points;
 
-  // 若整条折线上已有极近点，也跳过（避免重复节点）
   if (nearestExisting(next, point, ENDPOINT_MERGE_M)) return points;
 
   next.splice(segIndex + 1, 0, { ...point });
@@ -125,9 +124,83 @@ function isPathKind(f: MapFeature): boolean {
   return f.kind === 'road' || f.kind === 'railway';
 }
 
+export type PathTipHit = {
+  feature: MapFeature;
+  end: 'start' | 'end';
+  point: Point;
+};
+
+/** 查找落在某条道路/铁路首尾端点上的命中 */
+export function findPathTipAt(
+  features: MapFeature[],
+  point: Point,
+  maxDist = ENDPOINT_MERGE_M,
+  filter?: (f: MapFeature) => boolean,
+): PathTipHit | null {
+  let best: PathTipHit | null = null;
+  let bestD = maxDist;
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2) continue;
+    if (filter && !filter(f)) continue;
+    const start = f.points[0];
+    const end = f.points[f.points.length - 1];
+    const ds = dist(point, start);
+    if (ds < bestD) {
+      bestD = ds;
+      best = { feature: f, end: 'start', point: start };
+    }
+    const de = dist(point, end);
+    if (de < bestD) {
+      bestD = de;
+      best = { feature: f, end: 'end', point: end };
+    }
+  }
+  return best;
+}
+
+/**
+ * 同层首尾相接：把 draft 并入已有路径（消除端点圆帽）。
+ * 仅同 kind / 同等级 / 同标高且非匝道时合并。
+ */
+export function tryMergeHeadToTail(
+  features: MapFeature[],
+  draft: MapFeature,
+): MapFeature[] | null {
+  if (!isPathKind(draft) || draft.points.length < 2) return null;
+  if (isRampFeature(draft)) return null;
+
+  const grade = featureGrade(draft);
+  const tip = findPathTipAt(features, draft.points[0], ENDPOINT_MERGE_M, (f) => {
+    if (f.kind !== draft.kind) return false;
+    if (isRampFeature(f)) return false;
+    if (featureGrade(f) !== grade) return false;
+    if (draft.kind === 'road' && (f.roadLevel ?? 'local') !== (draft.roadLevel ?? 'local')) {
+      return false;
+    }
+    return true;
+  });
+  if (!tip) return null;
+
+  const extension = draft.points.slice(1);
+  if (extension.length === 0) return null;
+
+  const mergedPoints =
+    tip.end === 'end'
+      ? [...tip.feature.points, ...extension]
+      : [...extension.reverse(), ...tip.feature.points];
+
+  const merged: MapFeature = {
+    ...tip.feature,
+    points: mergedPoints,
+  };
+
+  const without = features.filter((f) => f.id !== tip.feature.id);
+  return weaveSameGradeCrossings(without, merged);
+}
+
 /**
  * 同层道路/铁路交叉时，在双方折线上插入共享交点（形成路口节点）。
- * 不同层不处理（上跨/下穿）。
+ * 不同层不处理（上跨/下穿）。跨层匝道整段跳过织网，避免在下层/上层误插路口。
  */
 export function weaveSameGradeCrossings(
   features: MapFeature[],
@@ -137,14 +210,21 @@ export function weaveSameGradeCrossings(
     return [...features, incoming];
   }
 
+  if (isRampFeature(incoming)) {
+    return [...features, incoming];
+  }
+
   const grade = featureGrade(incoming);
   const peers = features.filter(
-    (f) => isPathKind(f) && featureGrade(f) === grade && f.points.length >= 2,
+    (f) =>
+      isPathKind(f) &&
+      !isRampFeature(f) &&
+      featureGrade(f) === grade &&
+      f.points.length >= 2,
   );
 
   const { draftHits, otherHits } = collectHitsAgainst(incoming.points, peers);
 
-  // 交点坐标统一：优先吸附到已有顶点，保证双方共享同一坐标
   const unify = (p: Point, bases: Point[]): Point => nearestExisting(bases, p, ENDPOINT_MERGE_M) ?? p;
 
   const peerPoints = peers.flatMap((f) => f.points);
@@ -187,7 +267,6 @@ export function reweaveAllCrossings(features: MapFeature[]): MapFeature[] {
   const paths = features.filter(isPathKind);
   let acc = [...base];
   for (const path of paths) {
-    // 用「尚未插入本条」的几何重织，避免带着旧交点顺序偏差
     acc = weaveSameGradeCrossings(acc, path);
   }
   return acc;
@@ -205,17 +284,26 @@ export function collectJunctionNodes(features: MapFeature[]): JunctionNode[] {
   type Bucket = { point: Point; grade: FeatureGrade; ids: Set<string> };
   const buckets = new Map<string, Bucket>();
 
+  const addTip = (f: MapFeature, p: Point, grade: FeatureGrade) => {
+    const key = `${grade}|${quantizeKey(p)}`;
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.ids.add(f.id);
+    } else {
+      buckets.set(key, { point: { ...p }, grade, ids: new Set([f.id]) });
+    }
+  };
+
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2) continue;
+    if (isRampFeature(f)) {
+      addTip(f, f.points[0], featureGrade(f));
+      addTip(f, f.points[f.points.length - 1], featureGradeEnd(f));
+      continue;
+    }
     const grade = featureGrade(f);
     for (const p of f.points) {
-      const key = `${grade}|${quantizeKey(p)}`;
-      const existing = buckets.get(key);
-      if (existing) {
-        existing.ids.add(f.id);
-      } else {
-        buckets.set(key, { point: { ...p }, grade, ids: new Set([f.id]) });
-      }
+      addTip(f, p, grade);
     }
   }
 
@@ -226,4 +314,33 @@ export function collectJunctionNodes(features: MapFeature[]): JunctionNode[] {
     }
   }
   return nodes;
+}
+
+/**
+ * 首尾相接或路口共享的端点：渲染时用 butt cap，避免圆帽鼓包。
+ * key = `${featureId}|start` / `${featureId}|end`
+ */
+export function collectJoinedCaps(features: MapFeature[]): Set<string> {
+  type Tip = { featureId: string; end: 'start' | 'end'; point: Point };
+  const tips: Tip[] = [];
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2) continue;
+    tips.push({ featureId: f.id, end: 'start', point: f.points[0] });
+    tips.push({
+      featureId: f.id,
+      end: 'end',
+      point: f.points[f.points.length - 1],
+    });
+  }
+
+  const joined = new Set<string>();
+  for (let i = 0; i < tips.length; i++) {
+    for (let j = i + 1; j < tips.length; j++) {
+      if (tips[i].featureId === tips[j].featureId) continue;
+      if (dist(tips[i].point, tips[j].point) > ENDPOINT_MERGE_M) continue;
+      joined.add(`${tips[i].featureId}|${tips[i].end}`);
+      joined.add(`${tips[j].featureId}|${tips[j].end}`);
+    }
+  }
+  return joined;
 }

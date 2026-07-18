@@ -119,13 +119,15 @@ export function curveFromTangent(
     while (sweep < -Math.PI * 2) sweep += Math.PI * 2;
   }
 
-  const maxSweep = (160 * Math.PI) / 180;
+  // 劣弧：圆心角不超过 180°；夹紧后仍强制落到用户终点
+  const maxSweep = Math.PI;
   if (Math.abs(sweep) > maxSweep) {
     sweep = Math.sign(sweep) * maxSweep;
   }
 
   const points = sampleArcAngles(center, radius, ang0, sweep, maxSegmentM);
   points[0] = { ...start };
+  points[points.length - 1] = { ...end };
   const endAng = ang0 + sweep;
   const endHeading = endAng + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
 
@@ -166,7 +168,8 @@ function almostCollinear(a: Point, b: Point, c: Point): boolean {
 }
 
 /**
- * 三点定半径圆弧：过 A、B、C 的外接圆，取从 A 经 B 到 C 的弧。
+ * 三点定半径劣弧：过 A、B、C 的外接圆，取 A→C 的劣弧（≤180°），
+ * 且鼓包朝向 B 所在侧（匝道常用，避免绕远的优弧/S 形）。
  */
 export function curveFromThreePoints(
   a: Point,
@@ -202,7 +205,6 @@ export function curveFromThreePoints(
   if (!Number.isFinite(radius) || radius < 8 || radius > 1e7) return null;
 
   const angA = Math.atan2(a.y - center.y, a.x - center.x);
-  const angB = Math.atan2(b.y - center.y, b.x - center.x);
   const angC = Math.atan2(c.y - center.y, c.x - center.x);
 
   const norm = (x: number) => {
@@ -212,30 +214,32 @@ export function curveFromThreePoints(
     return v;
   };
 
-  // 选经过 B 的那条从 A 到 C 的弧
   let sweepCCW = norm(angC - angA);
   if (sweepCCW < 0) sweepCCW += Math.PI * 2;
-  let sweepCW = sweepCCW - Math.PI * 2;
+  const sweepCW = sweepCCW - Math.PI * 2;
 
-  const onArc = (sweep: number) => {
-    const t = norm(angB - angA);
-    const ts = t < 0 && sweep > 0 ? t + Math.PI * 2 : t > 0 && sweep < 0 ? t - Math.PI * 2 : t;
-    if (sweep > 0) return ts >= -1e-3 && ts <= sweep + 1e-3;
-    return ts <= 1e-3 && ts >= sweep - 1e-3;
+  // 弦 AC 的哪一侧有鼓包：与 B 同侧
+  const sideOf = (sweep: number) => {
+    const midAng = angA + sweep / 2;
+    const mid = {
+      x: center.x + Math.cos(midAng) * radius,
+      y: center.y + Math.sin(midAng) * radius,
+    };
+    const cross =
+      (c.x - a.x) * (mid.y - a.y) - (c.y - a.y) * (mid.x - a.x);
+    const crossB =
+      (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+    return cross * crossB >= 0;
   };
 
-  let sweep = onArc(sweepCCW) ? sweepCCW : onArc(sweepCW) ? sweepCW : sweepCCW;
-  // 若两条都不干净包含 B，取使 B 角参数更接近的一侧
-  if (!onArc(sweepCCW) && !onArc(sweepCW)) {
-    const tB = norm(angB - angA);
-    const dCCW = Math.abs((tB < 0 ? tB + Math.PI * 2 : tB) - sweepCCW);
-    const dCW = Math.abs((tB > 0 ? tB - Math.PI * 2 : tB) - sweepCW);
-    sweep = dCCW < dCW ? sweepCCW : sweepCW;
-  }
+  const candidates = [sweepCCW, sweepCW].filter((s) => Math.abs(s) <= Math.PI + 1e-6);
+  let sweep =
+    candidates.find((s) => sideOf(s)) ??
+    (Math.abs(sweepCCW) <= Math.abs(sweepCW) ? sweepCCW : sweepCW);
 
-  const maxSweep = (200 * Math.PI) / 180;
-  if (Math.abs(sweep) > maxSweep) {
-    sweep = Math.sign(sweep) * maxSweep;
+  // 仍超过 180° 则夹到劣弧
+  if (Math.abs(sweep) > Math.PI) {
+    sweep = Math.sign(sweep) * Math.PI;
   }
 
   const points = sampleArcAngles(center, radius, angA, sweep, maxSegmentM);

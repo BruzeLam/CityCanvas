@@ -7,15 +7,14 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, featureGrade, getLayers } from '../types';
+import { ROAD_STYLES, featureGrade, featureGradeEnd, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
-  curveAdaptiveViaControl,
   curveFromThreePoints,
   curveFromTangent,
 } from './curveMath';
 import type { GuideSnap, Segment } from './geometry';
-import { collectJunctionNodes } from './junctions';
+import { collectJoinedCaps, collectJunctionNodes } from './junctions';
 import {
   ensureTerrain,
   TERRAIN_GREEN,
@@ -24,7 +23,12 @@ import {
 } from './terrain';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
-  return featureGrade(a) - featureGrade(b);
+  return renderGrade(a) - renderGrade(b);
+}
+
+/** 匝道按较高一层参与 z-order，避免被下层盖住 */
+function renderGrade(f: MapFeature): number {
+  return Math.max(featureGrade(f), featureGradeEnd(f));
 }
 
 /** 同层先画完所有路缘，再画路面，避免后画的路「盖住」路口 */
@@ -34,9 +38,10 @@ function drawRoadsMerged(
   viewport: Viewport,
   style: MapStyle,
 ) {
+  const joinedCaps = collectJoinedCaps(roads);
   const byGrade = new Map<number, MapFeature[]>();
   for (const road of roads) {
-    const g = featureGrade(road);
+    const g = renderGrade(road);
     const list = byGrade.get(g) ?? [];
     list.push(road);
     byGrade.set(g, list);
@@ -46,10 +51,10 @@ function drawRoadsMerged(
   for (const g of grades) {
     const group = byGrade.get(g)!;
     for (const feature of group) {
-      drawRoadCasing(ctx, feature, viewport, style);
+      drawRoadCasing(ctx, feature, viewport, style, joinedCaps);
     }
     for (const feature of group) {
-      drawRoadFill(ctx, feature, viewport, style);
+      drawRoadFill(ctx, feature, viewport, style, joinedCaps);
     }
   }
 }
@@ -323,11 +328,50 @@ function drawRiver(
   ctx.stroke();
 }
 
+/**
+ * 首尾 cap 可能不同：任一端已接合则整段 butt，再在自由端补圆盘。
+ */
+function strokeCapsForFeature(
+  feature: MapFeature,
+  joinedCaps: Set<string>,
+): { strokeCap: CanvasLineCap; freeEnds: Point[] } {
+  const startJoined = joinedCaps.has(`${feature.id}|start`);
+  const endJoined = joinedCaps.has(`${feature.id}|end`);
+  if (!startJoined && !endJoined) {
+    return { strokeCap: 'round', freeEnds: [] };
+  }
+  if (startJoined && endJoined) {
+    return { strokeCap: 'butt', freeEnds: [] };
+  }
+  const freeEnds: Point[] = [];
+  if (!startJoined) freeEnds.push(feature.points[0]);
+  if (!endJoined) freeEnds.push(feature.points[feature.points.length - 1]);
+  return { strokeCap: 'butt', freeEnds };
+}
+
+function drawFreeEndCaps(
+  ctx: CanvasRenderingContext2D,
+  freeEnds: Point[],
+  viewport: Viewport,
+  radius: number,
+  color: string,
+) {
+  if (freeEnds.length === 0) return;
+  ctx.fillStyle = color;
+  for (const p of freeEnds) {
+    const s = toScreen(p, viewport);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, radius / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function drawRoadCasing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
   viewport: Viewport,
   style: MapStyle,
+  joinedCaps: Set<string>,
 ) {
   if (style === 'sketch') return;
   const level = feature.roadLevel ?? 'local';
@@ -336,12 +380,15 @@ function drawRoadCasing(
   if (points.length < 2) return;
 
   const width = roadStyle.width * viewport.zoom;
+  const casingW = width + 2 * viewport.zoom;
+  const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   tracePath(ctx, points, false);
   ctx.strokeStyle = roadStyle.casing;
-  ctx.lineWidth = width + 2 * viewport.zoom;
+  ctx.lineWidth = casingW;
   ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
+  ctx.lineCap = strokeCap;
   ctx.stroke();
+  drawFreeEndCaps(ctx, freeEnds, viewport, casingW, roadStyle.casing);
 }
 
 function drawRoadFill(
@@ -349,6 +396,7 @@ function drawRoadFill(
   feature: MapFeature,
   viewport: Viewport,
   style: MapStyle,
+  joinedCaps: Set<string>,
 ) {
   const level = feature.roadLevel ?? 'local';
   const roadStyle = ROAD_STYLES[level];
@@ -356,12 +404,16 @@ function drawRoadFill(
   if (points.length < 2) return;
 
   const width = roadStyle.width * viewport.zoom;
+  const fillW = style === 'sketch' ? Math.max(1, width * 0.5) : width;
+  const fillColor = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
+  const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   tracePath(ctx, points, false);
-  ctx.strokeStyle = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
-  ctx.lineWidth = style === 'sketch' ? Math.max(1, width * 0.5) : width;
+  ctx.strokeStyle = fillColor;
+  ctx.lineWidth = fillW;
   ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
+  ctx.lineCap = strokeCap;
   ctx.stroke();
+  drawFreeEndCaps(ctx, freeEnds, viewport, fillW, fillColor);
 }
 
 function drawJunctionNodes(
@@ -681,8 +733,8 @@ function drawPreviewCurve(
   control: Point | null,
   cursor: Point | null,
   startHeading: number | null,
-  endHeading: number | null,
-  adaptivePreview: boolean,
+  _endHeading: number | null,
+  _adaptivePreview: boolean,
   guide: PreviewGuide | null | undefined,
   viewport: Viewport,
   palette: StylePalette,
@@ -758,9 +810,7 @@ function drawPreviewCurve(
   ctx.fillStyle = palette.preview;
   ctx.fill();
 
-  const curve = adaptivePreview
-    ? curveAdaptiveViaControl(a, b, c, startHeading, endHeading)
-    : curveFromThreePoints(a, b, c);
+  const curve = curveFromThreePoints(a, b, c);
 
   if (curve && curve.points.length >= 2) {
     const screen = curve.points.map((p) => toScreen(p, viewport));

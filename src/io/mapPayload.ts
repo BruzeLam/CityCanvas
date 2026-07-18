@@ -44,6 +44,8 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
         grade: needsGrade
           ? clampGrade(typeof f.grade === 'number' ? f.grade : DEFAULT_GRADE)
           : undefined,
+        gradeEnd:
+          needsGrade && typeof f.gradeEnd === 'number' ? clampGrade(f.gradeEnd) : undefined,
       };
     })
     .filter((f) => !isLegacyLandformPolygon(f.kind));

@@ -241,6 +241,32 @@ export function headingAtPoint(
   return bestDir;
 }
 
+/**
+ * 中心线开岔：取最近路段方向（a→b）作为切线锚点。
+ * 光标落在哪一侧决定劣弧鼓向。
+ */
+export function headingAlongSegment(
+  point: Point,
+  segments: Segment[],
+  zoom: number,
+): number | null {
+  const threshold = snapThreshold(zoom) * CENTERLINE_SNAP_FACTOR;
+  let best: Segment | null = null;
+  let bestDist = threshold;
+  for (const seg of segments) {
+    const hit = closestOnSegment(point, seg);
+    if (hit.dist < bestDist) {
+      bestDist = hit.dist;
+      best = seg;
+    }
+  }
+  if (!best) return null;
+  const dx = best.b.x - best.a.x;
+  const dy = best.b.y - best.a.y;
+  if (Math.hypot(dx, dy) < 1e-6) return null;
+  return Math.atan2(dy, dx);
+}
+
 export function screenToWorld(
   screen: Point,
   viewport: { x: number; y: number; zoom: number },

@@ -483,8 +483,16 @@ function App() {
           brushSizeM={brushSizeM}
           brushThickness={brushThickness}
           selectedFeatureId={selectedFeatureId}
+          canUndo={history.length > 0}
           onSelectFeature={setSelectedFeatureId}
           onDrawGradeChange={setDrawGrade}
+          onToolChange={(t) => {
+            setTool(t);
+            if (t !== 'select') setSelectedFeatureId(null);
+          }}
+          onRoadLevelChange={setRoadLevel}
+          onPathDrawModeChange={setPathDrawMode}
+          onUndo={handleUndo}
           onProjectChange={updateProject}
         />
         <SidePanel

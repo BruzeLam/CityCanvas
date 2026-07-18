@@ -33,8 +33,10 @@ export type MapFeature = {
   points: Point[];
   closed: boolean;
   roadLevel?: RoadLevel;
-  /** 路网标高（道路/铁路）；缺省视为 0 */
+  /** 路网标高（道路/铁路）；缺省视为 0。匝道时表示起点层 */
   grade?: FeatureGrade;
+  /** 匝道终点层；与 grade 不同时表示跨层坡道 */
+  gradeEnd?: FeatureGrade;
   /** 标注文字（kind === 'label'） */
   labelText?: string;
 };
@@ -44,6 +46,17 @@ export function featureGrade(f: Pick<MapFeature, 'grade'>): FeatureGrade {
   if (g < GRADE_MIN) return GRADE_MIN;
   if (g > GRADE_MAX) return GRADE_MAX;
   return g as FeatureGrade;
+}
+
+/** 终点标高：匝道取 gradeEnd，否则同起点 */
+export function featureGradeEnd(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): FeatureGrade {
+  if (f.gradeEnd == null) return featureGrade(f);
+  return clampGrade(f.gradeEnd);
+}
+
+/** 跨层匝道（起终点标高不同） */
+export function isRampFeature(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): boolean {
+  return f.gradeEnd != null && featureGradeEnd(f) !== featureGrade(f);
 }
 
 export function clampGrade(n: number): FeatureGrade {
@@ -173,7 +186,7 @@ export type PathDrawMode = 'straight' | 'curve';
 
 export const PATH_DRAW_MODES: { id: PathDrawMode; label: string; desc: string }[] = [
   { id: 'straight', label: '直线', desc: '默认水平/垂直 · Shift 自由角度' },
-  { id: 'curve', label: '弯道', desc: '端点锁切线 · 空白三点定半径' },
+  { id: 'curve', label: '弯道', desc: '锁切线定半径劣弧 · 空白三点选侧' },
 ];
 
 /** 支持直线/弯道模式的工具 */
