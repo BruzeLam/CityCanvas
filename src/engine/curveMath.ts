@@ -146,6 +146,164 @@ export function headingFromPolyline(points: Point[]): number | null {
   return bearingRad(a, b);
 }
 
+export type CurveResult = {
+  points: Point[];
+  radius: number;
+  radius2?: number;
+  sweepDeg: number;
+  endHeading: number;
+  adaptive: boolean;
+};
+
+function almostCollinear(a: Point, b: Point, c: Point): boolean {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const acx = c.x - a.x;
+  const acy = c.y - a.y;
+  const cross = abx * acy - aby * acx;
+  const scale = Math.hypot(abx, aby) * Math.hypot(acx, acy);
+  return scale < 1e-6 || Math.abs(cross) / scale < 0.02;
+}
+
+/**
+ * 三点定半径圆弧：过 A、B、C 的外接圆，取从 A 经 B 到 C 的弧。
+ */
+export function curveFromThreePoints(
+  a: Point,
+  b: Point,
+  c: Point,
+  maxSegmentM = 36,
+): CurveResult | null {
+  const chordAC = dist(a, c);
+  if (chordAC < 2 || dist(a, b) < 2 || dist(b, c) < 2) return null;
+
+  if (almostCollinear(a, b, c)) {
+    return {
+      points: [a, c],
+      radius: Infinity,
+      sweepDeg: 0,
+      endHeading: bearingRad(a, c),
+      adaptive: false,
+    };
+  }
+
+  const d =
+    2 *
+    (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  if (Math.abs(d) < 1e-6) return null;
+
+  const a2 = a.x * a.x + a.y * a.y;
+  const b2 = b.x * b.x + b.y * b.y;
+  const c2 = c.x * c.x + c.y * c.y;
+  const ux = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+  const uy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+  const center = { x: ux, y: uy };
+  const radius = dist(center, a);
+  if (!Number.isFinite(radius) || radius < 8 || radius > 1e7) return null;
+
+  const angA = Math.atan2(a.y - center.y, a.x - center.x);
+  const angB = Math.atan2(b.y - center.y, b.x - center.x);
+  const angC = Math.atan2(c.y - center.y, c.x - center.x);
+
+  const norm = (x: number) => {
+    let v = x;
+    while (v <= -Math.PI) v += Math.PI * 2;
+    while (v > Math.PI) v -= Math.PI * 2;
+    return v;
+  };
+
+  // 选经过 B 的那条从 A 到 C 的弧
+  let sweepCCW = norm(angC - angA);
+  if (sweepCCW < 0) sweepCCW += Math.PI * 2;
+  let sweepCW = sweepCCW - Math.PI * 2;
+
+  const onArc = (sweep: number) => {
+    const t = norm(angB - angA);
+    const ts = t < 0 && sweep > 0 ? t + Math.PI * 2 : t > 0 && sweep < 0 ? t - Math.PI * 2 : t;
+    if (sweep > 0) return ts >= -1e-3 && ts <= sweep + 1e-3;
+    return ts <= 1e-3 && ts >= sweep - 1e-3;
+  };
+
+  let sweep = onArc(sweepCCW) ? sweepCCW : onArc(sweepCW) ? sweepCW : sweepCCW;
+  // 若两条都不干净包含 B，取使 B 角参数更接近的一侧
+  if (!onArc(sweepCCW) && !onArc(sweepCW)) {
+    const tB = norm(angB - angA);
+    const dCCW = Math.abs((tB < 0 ? tB + Math.PI * 2 : tB) - sweepCCW);
+    const dCW = Math.abs((tB > 0 ? tB - Math.PI * 2 : tB) - sweepCW);
+    sweep = dCCW < dCW ? sweepCCW : sweepCW;
+  }
+
+  const maxSweep = (200 * Math.PI) / 180;
+  if (Math.abs(sweep) > maxSweep) {
+    sweep = Math.sign(sweep) * maxSweep;
+  }
+
+  const points = sampleArcAngles(center, radius, angA, sweep, maxSegmentM);
+  points[0] = { ...a };
+  points[points.length - 1] = { ...c };
+
+  const endAng = angA + sweep;
+  const endHeading = endAng + (sweep >= 0 ? Math.PI / 2 : -Math.PI / 2);
+
+  return {
+    points,
+    radius,
+    sweepDeg: (Math.abs(sweep) * 180) / Math.PI,
+    endHeading,
+    adaptive: false,
+  };
+}
+
+/**
+ * 自适应变半径：A→B、B→C 两段切线连续圆弧（接到已有节点时用）。
+ * startHeading / endHeading 可选，用于贴合前后道路切线。
+ */
+export function curveAdaptiveViaControl(
+  a: Point,
+  b: Point,
+  c: Point,
+  startHeading: number | null,
+  endHeading: number | null,
+  maxSegmentM = 36,
+): CurveResult | null {
+  const h0 = startHeading ?? bearingRad(a, b);
+  const arc1 = curveFromTangent(a, h0, b, maxSegmentM);
+  if (!arc1) return curveFromThreePoints(a, b, c, maxSegmentM);
+
+  let arc2: ReturnType<typeof curveFromTangent> = null;
+  if (endHeading != null) {
+    // 从 C 沿反向切线拉到 B，再反转，使终点切线贴近已有路
+    const rev = curveFromTangent(c, endHeading + Math.PI, b, maxSegmentM);
+    if (rev && rev.points.length >= 2) {
+      const forward = [...rev.points].reverse();
+      arc2 = {
+        points: forward,
+        radius: rev.radius,
+        sweepDeg: rev.sweepDeg,
+        endHeading,
+      };
+    }
+  }
+  if (!arc2) {
+    arc2 = curveFromTangent(b, arc1.endHeading, c, maxSegmentM);
+  }
+  if (!arc2) return curveFromThreePoints(a, b, c, maxSegmentM);
+
+  const points = [...arc1.points, ...arc2.points.slice(1)];
+  const r1 = arc1.radius;
+  const r2 = arc2.radius;
+  const sweepDeg = arc1.sweepDeg + arc2.sweepDeg;
+
+  return {
+    points,
+    radius: Number.isFinite(r1) ? r1 : r2,
+    radius2: Number.isFinite(r1) && Number.isFinite(r2) && Math.abs(r1 - r2) > 1 ? r2 : undefined,
+    sweepDeg,
+    endHeading: arc2.endHeading,
+    adaptive: true,
+  };
+}
+
 export type LineMetrics = {
   lengthM: number;
   angleDeg: number;

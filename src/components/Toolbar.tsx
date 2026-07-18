@@ -17,11 +17,13 @@ type Props = {
   drawGrade: FeatureGrade;
   landformDrawMode: LandformDrawMode;
   pathDrawMode: PathDrawMode;
+  showJunctions: boolean;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
   onLandformDrawModeChange: (mode: LandformDrawMode) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
+  onShowJunctionsChange: (show: boolean) => void;
 };
 
 const VIEW_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
@@ -69,11 +71,13 @@ export function Toolbar({
   drawGrade,
   landformDrawMode,
   pathDrawMode,
+  showJunctions,
   onToolChange,
   onRoadLevelChange,
   onDrawGradeChange,
   onLandformDrawModeChange,
   onPathDrawModeChange,
+  onShowJunctionsChange,
 }: Props) {
   const [open, setOpen] = useState<Record<SectionId, boolean>>({
     view: true,
@@ -314,6 +318,22 @@ export function Toolbar({
                     ))}
                   </div>
                   <p className="tool-note">同层成路口 · 异层上跨/下穿</p>
+                </div>
+                <div className="option-block">
+                  <p className="option-label">显示</p>
+                  <div className="chip-row">
+                    <button
+                      type="button"
+                      className={showJunctions ? 'chip active' : 'chip'}
+                      onClick={() => onShowJunctionsChange(!showJunctions)}
+                      title="路口节点圆点显隐"
+                    >
+                      <span className="btn-emoji" aria-hidden>
+                        ◎
+                      </span>
+                      路口
+                    </button>
+                  </div>
                 </div>
               </>
             )}

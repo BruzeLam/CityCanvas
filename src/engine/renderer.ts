@@ -9,7 +9,8 @@ import type {
 } from '../types';
 import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
-import { curveFromTangent } from './curveMath';
+import { curveAdaptiveViaControl, curveFromThreePoints } from './curveMath';
+import type { GuideSnap, Segment } from './geometry';
 import { collectJunctionNodes } from './junctions';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
@@ -494,16 +495,33 @@ function drawScaleBar(
   ctx.fillText(`${label} · 1:${scale.toLocaleString()}`, x, y - 8);
 }
 
+export type PreviewGuide = {
+  kind: GuideSnap['kind'];
+  from: Point;
+  to: Point;
+  ref?: Segment;
+};
+
 export type PreviewState =
   | { mode: 'none' }
   | { mode: 'rect'; from: Point; to: Point }
   | { mode: 'region'; points: Point[]; cursor: Point | null; closed: boolean }
-  | { mode: 'polyline'; points: Point[]; cursor: Point | null }
+  | {
+      mode: 'polyline';
+      points: Point[];
+      cursor: Point | null;
+      guide?: PreviewGuide | null;
+    }
   | {
       mode: 'curve';
       points: Point[];
-      heading: number | null;
+      /** 三点弯中间点 B；未定时为 null */
+      control: Point | null;
       cursor: Point | null;
+      startHeading: number | null;
+      endHeading: number | null;
+      adaptivePreview: boolean;
+      guide?: PreviewGuide | null;
     }
   | { mode: 'label'; point: Point; text: string };
 
@@ -552,14 +570,69 @@ function drawSelection(
   }
 }
 
+function drawGuideLines(
+  ctx: CanvasRenderingContext2D,
+  guide: PreviewGuide | null | undefined,
+  viewport: Viewport,
+) {
+  if (!guide || guide.kind === 'none' || guide.kind === 'endpoint') return;
+
+  const from = toScreen(guide.from, viewport);
+  const to = toScreen(guide.to, viewport);
+
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle =
+    guide.kind === 'parallel'
+      ? 'rgba(37, 99, 235, 0.45)'
+      : guide.kind === 'perpendicular'
+        ? 'rgba(15, 23, 42, 0.35)'
+        : 'rgba(14, 116, 144, 0.4)';
+  ctx.lineWidth = 1;
+
+  if (guide.kind === 'centerline' && guide.ref) {
+    const a = toScreen(guide.ref.a, viewport);
+    const b = toScreen(guide.ref.b, viewport);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  } else {
+    // 延伸参照虚线
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const extend = 80;
+    ctx.beginPath();
+    ctx.moveTo(from.x - ux * extend, from.y - uy * extend);
+    ctx.lineTo(to.x + ux * extend, to.y + uy * extend);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.arc(to.x, to.y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawPreviewCurve(
   ctx: CanvasRenderingContext2D,
   points: Point[],
-  heading: number | null,
+  control: Point | null,
   cursor: Point | null,
+  startHeading: number | null,
+  endHeading: number | null,
+  adaptivePreview: boolean,
+  guide: PreviewGuide | null | undefined,
   viewport: Viewport,
   palette: StylePalette,
 ) {
+  drawGuideLines(ctx, guide, viewport);
+
   if (points.length >= 2) {
     drawPreviewPolyline(ctx, points, viewport, palette);
   } else if (points.length === 1) {
@@ -572,14 +645,27 @@ function drawPreviewCurve(
 
   if (!cursor || points.length === 0) return;
 
-  const start = points[points.length - 1];
+  const a = points[points.length - 1];
 
-  if (points.length === 1 || heading === null) {
-    drawPreviewPolyline(ctx, [start, cursor], viewport, palette);
+  // 尚未点 B：A → 光标
+  if (!control) {
+    drawPreviewPolyline(ctx, [a, cursor], viewport, palette);
     return;
   }
 
-  const curve = curveFromTangent(start, heading, cursor);
+  // 已有 B：预览 A-B-C 弧
+  const b = control;
+  const c = cursor;
+  const bp = toScreen(b, viewport);
+  ctx.beginPath();
+  ctx.arc(bp.x, bp.y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = palette.preview;
+  ctx.fill();
+
+  const curve = adaptivePreview
+    ? curveAdaptiveViaControl(a, b, c, startHeading, endHeading)
+    : curveFromThreePoints(a, b, c);
+
   if (curve && curve.points.length >= 2) {
     const screen = curve.points.map((p) => toScreen(p, viewport));
     tracePath(ctx, screen, false);
@@ -589,7 +675,6 @@ function drawPreviewCurve(
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 切线指示
     const tip = toScreen(curve.points[curve.points.length - 1], viewport);
     const hx = Math.cos(curve.endHeading) * 18;
     const hy = Math.sin(curve.endHeading) * 18;
@@ -600,7 +685,7 @@ function drawPreviewCurve(
     ctx.lineWidth = 1.5;
     ctx.stroke();
   } else {
-    drawPreviewPolyline(ctx, [start, cursor], viewport, palette);
+    drawPreviewPolyline(ctx, [a, b, c], viewport, palette);
   }
 }
 
@@ -701,10 +786,22 @@ export function renderMap(
     const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
     drawPreviewRegion(ctx, pts, preview.closed, viewport, palette);
   } else if (preview.mode === 'polyline') {
+    drawGuideLines(ctx, preview.guide, viewport);
     const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
     drawPreviewPolyline(ctx, pts, viewport, palette);
   } else if (preview.mode === 'curve') {
-    drawPreviewCurve(ctx, preview.points, preview.heading, preview.cursor, viewport, palette);
+    drawPreviewCurve(
+      ctx,
+      preview.points,
+      preview.control,
+      preview.cursor,
+      preview.startHeading,
+      preview.endHeading,
+      preview.adaptivePreview,
+      preview.guide,
+      viewport,
+      palette,
+    );
   } else if (preview.mode === 'label') {
     drawPreviewLabel(ctx, preview.point, preview.text, viewport, palette);
   }

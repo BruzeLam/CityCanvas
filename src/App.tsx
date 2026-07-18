@@ -448,6 +448,7 @@ function App() {
           drawGrade={drawGrade}
           landformDrawMode={landformDrawMode}
           pathDrawMode={pathDrawMode}
+          showJunctions={getLayers(project).junctions !== false}
           onToolChange={(t) => {
             setTool(t);
             if (t !== 'select') setSelectedFeatureId(null);
@@ -456,6 +457,12 @@ function App() {
           onDrawGradeChange={setDrawGrade}
           onLandformDrawModeChange={setLandformDrawMode}
           onPathDrawModeChange={setPathDrawMode}
+          onShowJunctionsChange={(show) => {
+            updateProject({
+              ...project,
+              layers: { ...getLayers(project), junctions: show },
+            });
+          }}
         />
         <MapCanvas
           key={`${project.cloudId ?? 'local'}-${project.settings.widthM}-${project.settings.heightM}`}

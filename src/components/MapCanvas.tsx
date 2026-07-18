@@ -22,20 +22,26 @@ import {
   rectFromCorners,
 } from '../types';
 import {
-  bearingRad,
   formatAngle,
   formatLength,
   formatRadius,
   lineMetrics,
-  curveFromTangent,
+  curveFromThreePoints,
+  curveAdaptiveViaControl,
   headingFromPolyline,
   snapAnglePoint,
 } from '../engine/curveMath';
-import { findPerpendicularSnap, findSnapPoint, screenToWorld } from '../engine/geometry';
+import {
+  findPathGuideSnap,
+  headingAtPoint,
+  screenToWorld,
+  type GuideSnap,
+  type SnapKind,
+} from '../engine/geometry';
 import { weaveSameGradeCrossings, reweaveAllCrossings } from '../engine/junctions';
 import { dist, polygonArea, prepareFreehandPath } from '../engine/pathUtils';
 import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
-import { fitViewport, renderMap, type PreviewState } from '../engine/renderer';
+import { fitViewport, renderMap, type PreviewGuide, type PreviewState } from '../engine/renderer';
 
 type Props = {
   project: CityProject;
@@ -82,7 +88,10 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const [polyDraft, setPolyDraft] = useState<Point[]>([]);
   const [polyCursor, setPolyCursor] = useState<Point | null>(null);
-  const [curveHeading, setCurveHeading] = useState<number | null>(null);
+  /** 三点弯中间点 B */
+  const [curveControl, setCurveControl] = useState<Point | null>(null);
+  const [lastSnapKind, setLastSnapKind] = useState<SnapKind>('none');
+  const [activeGuide, setActiveGuide] = useState<PreviewGuide | null>(null);
   const [regionDraft, setRegionDraft] = useState<Point[]>([]);
   const [regionCursor, setRegionCursor] = useState<Point | null>(null);
   const [rectStart, setRectStart] = useState<Point | null>(null);
@@ -119,7 +128,9 @@ export function MapCanvas({
   useEffect(() => {
     setPolyDraft([]);
     setPolyCursor(null);
-    setCurveHeading(null);
+    setCurveControl(null);
+    setLastSnapKind('none');
+    setActiveGuide(null);
     setRegionDraft([]);
     setRegionCursor(null);
     setRectStart(null);
@@ -154,14 +165,28 @@ export function MapCanvas({
         };
       }
     }
-    if (isPathGuided && pathDrawMode === 'curve' && (polyDraft.length > 0 || polyCursor)) {
-      return { mode: 'curve', points: polyDraft, heading: curveHeading, cursor: polyCursor };
+    if (isPathGuided && pathDrawMode === 'curve' && (polyDraft.length > 0 || polyCursor || curveControl)) {
+      const startHeading = headingFromPolyline(polyDraft);
+      const endHeading =
+        polyCursor && lastSnapKind === 'endpoint'
+          ? headingAtPoint(polyCursor, pathSegments, project.viewport.zoom)
+          : null;
+      return {
+        mode: 'curve',
+        points: polyDraft,
+        control: curveControl,
+        cursor: polyCursor,
+        startHeading,
+        endHeading,
+        adaptivePreview: lastSnapKind === 'endpoint' && curveControl != null,
+        guide: activeGuide,
+      };
     }
     if (isPathGuided && pathDrawMode === 'straight' && (polyDraft.length > 0 || polyCursor)) {
-      return { mode: 'polyline', points: polyDraft, cursor: polyCursor };
+      return { mode: 'polyline', points: polyDraft, cursor: polyCursor, guide: activeGuide };
     }
     if (polyDraft.length > 0 || polyCursor) {
-      return { mode: 'polyline', points: polyDraft, cursor: polyCursor };
+      return { mode: 'polyline', points: polyDraft, cursor: polyCursor, guide: activeGuide };
     }
     return { mode: 'none' };
   })();
@@ -256,7 +281,9 @@ export function MapCanvas({
   const resetDrafts = useCallback(() => {
     setPolyDraft([]);
     setPolyCursor(null);
-    setCurveHeading(null);
+    setCurveControl(null);
+    setLastSnapKind('none');
+    setActiveGuide(null);
     setRegionDraft([]);
     setRegionCursor(null);
     setRectStart(null);
@@ -287,6 +314,7 @@ export function MapCanvas({
 
   const finishPolyline = useCallback(() => {
     const kind = toolKind(tool);
+    // 弯道未完成三点时不提交残缺控制点
     if (!kind || polyDraft.length < 2) {
       resetDrafts();
       return;
@@ -328,20 +356,43 @@ export function MapCanvas({
     [addFeature, tool],
   );
 
-  const snapPoint = useCallback(
-    (pt: Point, extraTargets: Point[] = [], from?: Point | null) => {
-      const targets = [...allEndpoints, ...extraTargets];
-      const endpoint = findSnapPoint(pt, targets, project.viewport.zoom);
-      if (endpoint) return endpoint;
-
-      // 道路/铁路：优先垂直交汇到已有路段
-      if (from && isPathGuided && pathSegments.length > 0) {
-        const perp = findPerpendicularSnap(from, pt, pathSegments, project.viewport.zoom);
-        if (perp) return perp;
+  const applyGuideSnap = useCallback(
+    (pt: Point, extraTargets: Point[] = [], from?: Point | null): GuideSnap => {
+      if (!isPathGuided) {
+        const targets = [...allEndpoints, ...extraTargets];
+        const hit = findPathGuideSnap(pt, targets, [], project.viewport.zoom, from);
+        return hit;
       }
-      return pt;
+      const targets = [...allEndpoints, ...extraTargets];
+      return findPathGuideSnap(pt, targets, pathSegments, project.viewport.zoom, from);
     },
     [allEndpoints, isPathGuided, pathSegments, project.viewport.zoom],
+  );
+
+  const snapPoint = useCallback(
+    (pt: Point, extraTargets: Point[] = [], from?: Point | null) => {
+      const hit = applyGuideSnap(pt, extraTargets, from);
+      setLastSnapKind(hit.kind);
+      if (hit.kind !== 'none' && hit.kind !== 'endpoint' && from) {
+        setActiveGuide({
+          kind: hit.kind,
+          from,
+          to: hit.point,
+          ref: hit.ref,
+        });
+      } else if (hit.kind === 'centerline' && hit.ref) {
+        setActiveGuide({
+          kind: 'centerline',
+          from: hit.point,
+          to: hit.point,
+          ref: hit.ref,
+        });
+      } else {
+        setActiveGuide(null);
+      }
+      return hit.point;
+    },
+    [applyGuideSnap],
   );
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -497,22 +548,61 @@ export function MapCanvas({
       }
 
       if (isPathGuided && pathDrawMode === 'curve') {
+        // 三点弯：A → B → C；完成后继续下一段从 C 再点 B
         if (polyDraft.length === 0) {
           setPolyDraft([pt]);
-          setCurveHeading(null);
-        } else if (polyDraft.length === 1 || curveHeading === null) {
-          const snapped = snapPoint(world, [], polyDraft[0]);
-          const next = shiftDown.current ? snapAnglePoint(polyDraft[0], snapped) : snapped;
-          setPolyDraft([polyDraft[0], next]);
-          setCurveHeading(bearingRad(polyDraft[0], next));
-        } else {
-          const start = polyDraft[polyDraft.length - 1];
-          const snapped = snapPoint(world, [], start);
-          const curve = curveFromTangent(start, curveHeading, snapped);
-          if (curve) {
-            setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
-            setCurveHeading(curve.endHeading);
+          setCurveControl(null);
+          return;
+        }
+
+        if (!curveControl) {
+          const a = polyDraft[polyDraft.length - 1];
+          const hit = applyGuideSnap(world, polyDraft, a);
+          setLastSnapKind(hit.kind);
+          const next = shiftDown.current ? snapAnglePoint(a, hit.point) : hit.point;
+          if (dist(a, next) < 4) return;
+          setCurveControl(next);
+          if (hit.kind === 'centerline' && hit.ref) {
+            setActiveGuide({
+              kind: 'centerline',
+              from: hit.point,
+              to: hit.point,
+              ref: hit.ref,
+            });
+          } else if (hit.kind === 'perpendicular' || hit.kind === 'parallel') {
+            setActiveGuide({
+              kind: hit.kind,
+              from: a,
+              to: hit.point,
+              ref: hit.ref,
+            });
+          } else {
+            setActiveGuide(null);
           }
+          return;
+        }
+
+        const a = polyDraft[polyDraft.length - 1];
+        const b = curveControl;
+        const hit = applyGuideSnap(world, polyDraft, a);
+        setLastSnapKind(hit.kind);
+        const c = hit.point;
+        if (dist(b, c) < 4) return;
+
+        const startHeading = headingFromPolyline(polyDraft);
+        const endHeading =
+          hit.kind === 'endpoint'
+            ? headingAtPoint(c, pathSegments, project.viewport.zoom)
+            : null;
+        const curve =
+          hit.kind === 'endpoint'
+            ? curveAdaptiveViaControl(a, b, c, startHeading, endHeading)
+            : curveFromThreePoints(a, b, c);
+
+        if (curve && curve.points.length >= 2) {
+          setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
+          setCurveControl(null);
+          setActiveGuide(null);
         }
         return;
       }
@@ -578,9 +668,15 @@ export function MapCanvas({
         setPolyCursor(shiftDown.current ? snapAnglePoint(last, base) : base);
         return;
       }
-      if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length > 0) {
+      if (isPathGuided && pathDrawMode === 'curve') {
+        if (polyDraft.length === 0) {
+          // 首点也可预览中心线吸附
+          setPolyCursor(snapPoint(world));
+          return;
+        }
         const last = polyDraft[polyDraft.length - 1];
-        setPolyCursor(snapPoint(world, polyDraft, last));
+        const base = snapPoint(world, polyDraft, last);
+        setPolyCursor(shiftDown.current && !curveControl ? snapAnglePoint(last, base) : base);
         return;
       }
       if (polyDraft.length > 0) {
@@ -680,10 +776,11 @@ export function MapCanvas({
         e.preventDefault();
         if (isLandform && landformDrawMode === 'polygon' && regionDraft.length > 0) {
           setRegionDraft((prev) => prev.slice(0, -1));
+        } else if (curveControl) {
+          setCurveControl(null);
         } else if (polyDraft.length > 0) {
-          const next = polyDraft.slice(0, -1);
-          setPolyDraft(next);
-          setCurveHeading(headingFromPolyline(next));
+          setPolyDraft((prev) => prev.slice(0, -1));
+          setCurveControl(null);
         }
       }
     };
@@ -725,9 +822,15 @@ export function MapCanvas({
     if (isPathGuided) {
       const gradeHint = `标高 ${formatGrade(drawGrade)} · -/= 换层`;
       if (pathDrawMode === 'straight') {
-        return `点击加点 · 靠近路段自动垂直吸附 · 双击完成 · Shift 角度 · ${gradeHint}`;
+        return `点击加点 · 中心线/垂直/平行吸附 · 双击完成 · Shift 角度 · ${gradeHint}`;
       }
-      return `点击延伸弯道 · 靠近路段垂直吸附 · 双击完成 · ${gradeHint}`;
+      if (!polyDraft.length) {
+        return `弯道：点起点 A（可吸中心线开岔）· ${gradeHint}`;
+      }
+      if (!curveControl) {
+        return `弯道：点中间点 B · Backspace 撤销 · ${gradeHint}`;
+      }
+      return `弯道：点终点 C（定半径；接已有节点则变半径）· ${gradeHint}`;
     }
     if (isLandform) {
       if (landformDrawMode === 'freehand') {
@@ -747,33 +850,71 @@ export function MapCanvas({
   const canvasCursor =
     tool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : tool === 'select' ? 'default' : tool === 'eraser' ? 'pointer' : 'crosshair';
 
+  const snapLabel = (kind: SnapKind) => {
+    if (kind === 'endpoint') return '端点';
+    if (kind === 'centerline') return '中心线';
+    if (kind === 'perpendicular') return '垂直';
+    if (kind === 'parallel') return '平行';
+    return null;
+  };
+
   const metrics = (() => {
+    const tag = snapLabel(lastSnapKind);
+    const tagText = tag ? ` · ${tag}` : '';
+    const shiftHint = shiftSnap ? ' · Shift' : '';
+
     if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {
       const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);
-      const shiftHint = shiftSnap ? ' · Shift 吸附' : '';
-      return `长度 ${formatLength(m.lengthM)} · 角度 ${formatAngle(m.angleDeg)}${shiftHint}`;
+      return {
+        lines: [
+          `长度 ${formatLength(m.lengthM)}`,
+          `方位 ${formatAngle(m.angleDeg)}${tagText}${shiftHint}`,
+        ],
+      };
     }
-    if (
-      isPathGuided &&
-      pathDrawMode === 'curve' &&
-      polyDraft.length > 0 &&
-      curveHeading !== null &&
-      polyCursor
-    ) {
-      const curve = curveFromTangent(polyDraft[polyDraft.length - 1], curveHeading, polyCursor);
+
+    if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length > 0 && polyCursor) {
+      const a = polyDraft[polyDraft.length - 1];
+      if (!curveControl) {
+        const m = lineMetrics(a, polyCursor);
+        return {
+          lines: [
+            `B 预览 ${formatLength(m.lengthM)}`,
+            `方位 ${formatAngle(m.angleDeg)}${tagText}${shiftHint}`,
+          ],
+        };
+      }
+      const startHeading = headingFromPolyline(polyDraft);
+      const endHeading =
+        lastSnapKind === 'endpoint'
+          ? headingAtPoint(polyCursor, pathSegments, project.viewport.zoom)
+          : null;
+      const curve =
+        lastSnapKind === 'endpoint'
+          ? curveAdaptiveViaControl(a, curveControl, polyCursor, startHeading, endHeading)
+          : curveFromThreePoints(a, curveControl, polyCursor);
       if (curve) {
         if (!Number.isFinite(curve.radius)) {
-          const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);
-          return `直线 · 长度 ${formatLength(m.lengthM)}`;
+          const m = lineMetrics(a, polyCursor);
+          return { lines: [`直线 ${formatLength(m.lengthM)}${tagText}`] };
         }
-        return `半径 ${formatRadius(curve.radius)} · 圆心角 ${formatAngle(curve.sweepDeg)}`;
+        const rText =
+          curve.radius2 != null
+            ? `${formatRadius(curve.radius)} / ${formatRadius(curve.radius2)}`
+            : formatRadius(curve.radius);
+        return {
+          lines: [
+            curve.adaptive ? `变半径 ${rText}` : rText,
+            `圆心角 ${formatAngle(curve.sweepDeg)}${tagText}`,
+          ],
+        };
       }
     }
-    if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length === 1 && polyCursor) {
-      const m = lineMetrics(polyDraft[0], polyCursor);
-      const shiftHint = shiftSnap ? ' · Shift 吸附' : '';
-      return `首段 ${formatLength(m.lengthM)} · 角度 ${formatAngle(m.angleDeg)}${shiftHint}`;
+
+    if (isPathGuided && pathDrawMode === 'curve' && polyDraft.length === 0 && polyCursor && tag) {
+      return { lines: [`吸附 ${tag}`] };
     }
+
     return null;
   })();
 
@@ -794,7 +935,13 @@ export function MapCanvas({
         }}
       />
       <div className="canvas-hint">{hint}</div>
-      {metrics && <div className="canvas-metrics">{metrics}</div>}
+      {metrics && (
+        <div className="canvas-metrics canvas-metrics-hud">
+          {metrics.lines.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
