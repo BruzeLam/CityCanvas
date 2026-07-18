@@ -2,6 +2,7 @@ import type { CityProject, MapFeature, Point } from '../types';
 import { ROAD_STYLES, featureGrade, getLayers } from '../types';
 import { detectBlocks } from './blockDetect';
 import { collectJunctionNodes } from './junctions';
+import { TERRAIN_GREEN, TERRAIN_WATER, ensureTerrain } from './terrain';
 
 function esc(s: string): string {
   return s
@@ -35,23 +36,24 @@ export function exportToSvg(project: CityProject): string {
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${widthM} ${heightM}" width="${widthM}" height="${heightM}">`,
   );
   parts.push(`<title>${esc(project.name)}</title>`);
-  parts.push(`<rect width="100%" height="100%" fill="#e8f0d8"/>`);
+  parts.push(`<rect width="100%" height="100%" fill="#f2efe9"/>`);
 
   if (layers.terrain) {
-    for (const f of features.filter((x) => x.kind === 'ocean')) {
-      parts.push(
-        `<path d="${pathD(f.points, true)}" fill="#8ec4e8" stroke="#5a9fc4" stroke-width="8" fill-rule="evenodd"/>`,
-      );
-    }
-    for (const f of features.filter((x) => x.kind === 'land')) {
-      parts.push(
-        `<path d="${pathD(f.points, true)}" fill="#e8f0d8" stroke="#888880" stroke-width="4"/>`,
-      );
-    }
-    for (const f of features.filter((x) => x.kind === 'mountain')) {
-      parts.push(
-        `<path d="${pathD(f.points, true)}" fill="#c5d9a8" stroke="#7aa862" stroke-width="6"/>`,
-      );
+    const terrain = ensureTerrain(project.settings, project.terrain);
+    const { cols, rows, cellSizeM, cells } = terrain;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const v = cells[row * cols + col];
+        if (v === TERRAIN_WATER) {
+          parts.push(
+            `<rect x="${(col * cellSizeM).toFixed(1)}" y="${(row * cellSizeM).toFixed(1)}" width="${cellSizeM}" height="${cellSizeM}" fill="#aad3df"/>`,
+          );
+        } else if (v === TERRAIN_GREEN) {
+          parts.push(
+            `<rect x="${(col * cellSizeM).toFixed(1)}" y="${(row * cellSizeM).toFixed(1)}" width="${cellSizeM}" height="${cellSizeM}" fill="#add19e"/>`,
+          );
+        }
+      }
     }
   }
 

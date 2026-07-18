@@ -1,0 +1,140 @@
+import type { MapSettings, Point } from '../types';
+
+/** 0 陆地 · 1 水域 · 2 绿地/山地（平面色块，非等高线） */
+export type TerrainCell = 0 | 1 | 2;
+
+export const TERRAIN_LAND: TerrainCell = 0;
+export const TERRAIN_WATER: TerrainCell = 1;
+export const TERRAIN_GREEN: TerrainCell = 2;
+
+export const DEFAULT_TERRAIN_CELL_M = 25;
+
+export type TerrainGrid = {
+  cellSizeM: number;
+  cols: number;
+  rows: number;
+  cells: Uint8Array;
+};
+
+/** 可 JSON 序列化的地形（cells 用 base64） */
+export type TerrainGridJSON = {
+  cellSizeM: number;
+  cols: number;
+  rows: number;
+  cellsB64: string;
+};
+
+export function createTerrain(
+  settings: Pick<MapSettings, 'widthM' | 'heightM'>,
+  cellSizeM = DEFAULT_TERRAIN_CELL_M,
+): TerrainGrid {
+  const cols = Math.max(8, Math.ceil(settings.widthM / cellSizeM));
+  const rows = Math.max(8, Math.ceil(settings.heightM / cellSizeM));
+  return {
+    cellSizeM,
+    cols,
+    rows,
+    cells: new Uint8Array(cols * rows), // 默认全陆地
+  };
+}
+
+export function cloneTerrain(grid: TerrainGrid): TerrainGrid {
+  return {
+    cellSizeM: grid.cellSizeM,
+    cols: grid.cols,
+    rows: grid.rows,
+    cells: new Uint8Array(grid.cells),
+  };
+}
+
+export function terrainToJSON(grid: TerrainGrid): TerrainGridJSON {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < grid.cells.length; i += chunk) {
+    binary += String.fromCharCode(...grid.cells.subarray(i, i + chunk));
+  }
+  return {
+    cellSizeM: grid.cellSizeM,
+    cols: grid.cols,
+    rows: grid.rows,
+    cellsB64: btoa(binary),
+  };
+}
+
+export function terrainFromJSON(data: TerrainGridJSON | null | undefined): TerrainGrid | null {
+  if (!data || !data.cols || !data.rows || !data.cellsB64) return null;
+  const binary = atob(data.cellsB64);
+  const cells = new Uint8Array(data.cols * data.rows);
+  const n = Math.min(cells.length, binary.length);
+  for (let i = 0; i < n; i++) cells[i] = binary.charCodeAt(i);
+  return {
+    cellSizeM: data.cellSizeM || DEFAULT_TERRAIN_CELL_M,
+    cols: data.cols,
+    rows: data.rows,
+    cells,
+  };
+}
+
+/** 保证工程有与地图尺寸匹配的地形；尺寸变了则重建（全陆地） */
+export function ensureTerrain(
+  settings: Pick<MapSettings, 'widthM' | 'heightM'>,
+  existing: TerrainGrid | null | undefined,
+): TerrainGrid {
+  const fresh = createTerrain(settings);
+  if (
+    existing &&
+    existing.cols === fresh.cols &&
+    existing.rows === fresh.rows &&
+    existing.cellSizeM === fresh.cellSizeM &&
+    existing.cells.length === fresh.cols * fresh.rows
+  ) {
+    return existing;
+  }
+  return fresh;
+}
+
+function hash2(ix: number, iy: number): number {
+  let n = ix * 374761393 + iy * 668265263;
+  n = (n ^ (n >> 13)) * 1274126177;
+  return ((n ^ (n >> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * 毛边刷 stamp：thickness 0–1 控制边缘噪声幅度（天际线式锯齿，非等高线）。
+ */
+export function stampBrush(
+  grid: TerrainGrid,
+  world: Point,
+  radiusM: number,
+  thickness: number,
+  value: TerrainCell,
+): void {
+  const r = Math.max(grid.cellSizeM * 0.6, radiusM);
+  const t = Math.max(0, Math.min(1, thickness));
+  const { cellSizeM: cs, cols, rows, cells } = grid;
+
+  const minC = Math.max(0, Math.floor((world.x - r * 1.35) / cs));
+  const maxC = Math.min(cols - 1, Math.ceil((world.x + r * 1.35) / cs));
+  const minR = Math.max(0, Math.floor((world.y - r * 1.35) / cs));
+  const maxR = Math.min(rows - 1, Math.ceil((world.y + r * 1.35) / cs));
+
+  for (let row = minR; row <= maxR; row++) {
+    for (let col = minC; col <= maxC; col++) {
+      const cx = (col + 0.5) * cs;
+      const cy = (row + 0.5) * cs;
+      const dx = cx - world.x;
+      const dy = cy - world.y;
+      const dist = Math.hypot(dx, dy);
+      const ang = Math.atan2(dy, dx);
+
+      const n1 = Math.sin(ang * 5.3 + hash2(col, row) * Math.PI * 2);
+      const n2 = Math.sin(ang * 11.1 + hash2(col + 17, row - 9) * Math.PI * 2);
+      const n3 = hash2(col * 3, row * 5) * 2 - 1;
+      const jagged = (n1 * 0.45 + n2 * 0.3 + n3 * 0.25) * t * r * 0.42;
+
+      if (dist <= r + jagged) {
+        cells[row * cols + col] = value;
+      }
+    }
+  }
+}

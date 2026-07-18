@@ -1,8 +1,14 @@
+import type { TerrainGrid } from './engine/terrain';
+import { createTerrain } from './engine/terrain';
+
 export type Point = { x: number; y: number };
 
 export type RoadLevel = 'expressway' | 'arterial' | 'collector' | 'local';
 
-/** 地貌与人工要素（手绘，非 3D 导出） */
+/**
+ * 要素 kind。ocean/land/mountain 旧矢量面已弃用（改由 terrain 栅格表示），
+ * 仍保留枚举以便加载旧档兼容；新绘制不再写入这三类面。
+ */
 export type FeatureKind =
   | 'ocean'
   | 'land'
@@ -126,6 +132,8 @@ export type CityProject = {
   name: string;
   settings: MapSettings;
   features: MapFeature[];
+  /** 刷子地貌栅格：默认全陆地；水域/绿地叠色，无等高线 */
+  terrain?: TerrainGrid;
   viewport: Viewport;
   mapStyle: MapStyle;
   layers?: LayerVisibility;
@@ -142,17 +150,20 @@ export const ROAD_STYLES: Record<
 };
 
 export const LAYER_LABELS: Record<FeatureKind, string> = {
-  ocean: '海洋',
+  ocean: '水域',
   land: '陆地',
-  mountain: '山地',
+  mountain: '绿地',
   river: '河流',
   road: '道路',
   railway: '铁路',
   label: '标注',
 };
 
-/** 地貌面状要素（海洋 / 陆地 / 山地） */
-export const LANDFORM_TOOLS: Tool[] = ['ocean', 'land', 'mountain'];
+/** 地貌刷子工具：陆地 / 水域 / 绿地（山地平面色，非等高线） */
+export const TERRAIN_BRUSH_TOOLS: Tool[] = ['land', 'ocean', 'mountain'];
+
+/** @deprecated 旧矢量面工具名，等同 TERRAIN_BRUSH_TOOLS */
+export const LANDFORM_TOOLS: Tool[] = TERRAIN_BRUSH_TOOLS;
 
 /** 折线点击绘制（河流 / 道路 / 铁路） */
 export const POLYLINE_TOOLS: Tool[] = ['river', 'road', 'railway'];
@@ -168,14 +179,8 @@ export const PATH_DRAW_MODES: { id: PathDrawMode; label: string; desc: string }[
 /** 支持直线/弯道模式的工具 */
 export const PATH_GUIDED_TOOLS: Tool[] = ['road', 'railway'];
 
-/** 地貌绘制方式 */
-export type LandformDrawMode = 'freehand' | 'polygon' | 'rectangle';
-
-export const LANDFORM_DRAW_MODES: { id: LandformDrawMode; label: string; desc: string }[] = [
-  { id: 'freehand', label: '自由手绘', desc: '按住拖拽，适合海岸线' },
-  { id: 'polygon', label: '多边形', desc: '逐点点击，Enter 完成' },
-  { id: 'rectangle', label: '矩形', desc: '拖拽框选，快速占位' },
-];
+export const DEFAULT_BRUSH_SIZE_M = 120;
+export const DEFAULT_BRUSH_THICKNESS = 0.45;
 
 export function createId(): string {
   return crypto.randomUUID();
@@ -190,6 +195,7 @@ export function createProject(
     name,
     settings,
     features: [],
+    terrain: createTerrain(settings),
     viewport: { x: 0, y: 0, zoom: 1 },
     mapStyle,
     layers: { ...DEFAULT_LAYERS },
@@ -216,6 +222,11 @@ export function normalizeFeatureKind(kind: string): FeatureKind {
     return kind;
   }
   return 'land';
+}
+
+/** 旧矢量地貌面：加载后不再参与绘制（已迁到 terrain） */
+export function isLegacyLandformPolygon(kind: FeatureKind): boolean {
+  return kind === 'ocean' || kind === 'land' || kind === 'mountain';
 }
 
 export function clampToMap(p: Point, settings: MapSettings): Point {

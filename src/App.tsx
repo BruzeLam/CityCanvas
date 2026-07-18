@@ -18,14 +18,18 @@ import { downloadSvg } from './engine/svgExport';
 import type {
   CityProject,
   FeatureGrade,
-  LandformDrawMode,
   LayerKey,
   MapStyle,
   PathDrawMode,
   RoadLevel,
   Tool,
 } from './types';
-import { DEFAULT_GRADE, getLayers } from './types';
+import {
+  DEFAULT_BRUSH_SIZE_M,
+  DEFAULT_BRUSH_THICKNESS,
+  DEFAULT_GRADE,
+  getLayers,
+} from './types';
 import './App.css';
 
 type BootPhase = 'booting' | 'auth' | 'ready';
@@ -36,8 +40,9 @@ function App() {
   const [project, setProject] = useState<CityProject | null>(null);
   const [tool, setTool] = useState<Tool>('pan');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
-  const [landformDrawMode, setLandformDrawMode] = useState<LandformDrawMode>('freehand');
   const [pathDrawMode, setPathDrawMode] = useState<PathDrawMode>('straight');
+  const [brushSizeM, setBrushSizeM] = useState(DEFAULT_BRUSH_SIZE_M);
+  const [brushThickness, setBrushThickness] = useState(DEFAULT_BRUSH_THICKNESS);
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
   const [drawGrade, setDrawGrade] = useState<FeatureGrade>(DEFAULT_GRADE);
   const [, setHistory] = useState<CityProject[]>([]);
@@ -446,8 +451,9 @@ function App() {
           tool={tool}
           roadLevel={roadLevel}
           drawGrade={drawGrade}
-          landformDrawMode={landformDrawMode}
           pathDrawMode={pathDrawMode}
+          brushSizeM={brushSizeM}
+          brushThickness={brushThickness}
           showJunctions={getLayers(project).junctions !== false}
           onToolChange={(t) => {
             setTool(t);
@@ -455,8 +461,9 @@ function App() {
           }}
           onRoadLevelChange={setRoadLevel}
           onDrawGradeChange={setDrawGrade}
-          onLandformDrawModeChange={setLandformDrawMode}
           onPathDrawModeChange={setPathDrawMode}
+          onBrushSizeChange={setBrushSizeM}
+          onBrushThicknessChange={setBrushThickness}
           onShowJunctionsChange={(show) => {
             updateProject({
               ...project,
@@ -470,8 +477,9 @@ function App() {
           tool={tool}
           roadLevel={roadLevel}
           drawGrade={drawGrade}
-          landformDrawMode={landformDrawMode}
           pathDrawMode={pathDrawMode}
+          brushSizeM={brushSizeM}
+          brushThickness={brushThickness}
           selectedFeatureId={selectedFeatureId}
           onSelectFeature={setSelectedFeatureId}
           onDrawGradeChange={setDrawGrade}

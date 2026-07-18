@@ -16,6 +16,12 @@ import {
 } from './curveMath';
 import type { GuideSnap, Segment } from './geometry';
 import { collectJunctionNodes } from './junctions';
+import {
+  ensureTerrain,
+  TERRAIN_GREEN,
+  TERRAIN_WATER,
+  type TerrainGrid,
+} from './terrain';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
   return featureGrade(a) - featureGrade(b);
@@ -71,19 +77,19 @@ type StylePalette = {
 const PALETTES: Record<MapStyle, StylePalette> = {
   navigation: {
     outside: '#e7e5e4',
-    land: '#f4f1ea',
-    water: '#8ec4e8',
-    waterStroke: '#5a9fc4',
-    mountain: '#c5d9a8',
-    mountainStroke: '#7aa862',
+    land: '#f2efe9',
+    water: '#aad3df',
+    waterStroke: '#7eb8c9',
+    mountain: '#add19e',
+    mountainStroke: '#8fbc7a',
     border: '#888880',
     grid: 'rgba(0,0,0,0.05)',
     preview: 'rgba(60,100,200,0.8)',
     previewFill: 'rgba(60,100,200,0.15)',
     scaleBar: '#333',
     scaleText: '#555',
-    blockFill: 'rgba(236, 236, 232, 0.92)',
-    blockStroke: 'rgba(180, 180, 170, 0.5)',
+    blockFill: 'rgba(236, 236, 232, 0.55)',
+    blockStroke: 'rgba(180, 180, 170, 0.45)',
     railway: '#2a2a2a',
     label: '#1f2937',
     labelHalo: 'rgba(255,255,255,0.85)',
@@ -110,9 +116,9 @@ const PALETTES: Record<MapStyle, StylePalette> = {
   sketch: {
     outside: '#eee',
     land: '#fffef9',
-    water: 'rgba(100,160,220,0.2)',
+    water: 'rgba(170, 211, 223, 0.55)',
     waterStroke: '#4a90c4',
-    mountain: 'rgba(120,180,100,0.15)',
+    mountain: 'rgba(173, 209, 158, 0.55)',
     mountainStroke: '#6a9e5a',
     border: '#999',
     grid: 'rgba(0,0,0,0.04)',
@@ -143,6 +149,77 @@ function tracePath(ctx: CanvasRenderingContext2D, points: Point[], closed: boole
   if (closed) ctx.closePath();
 }
 
+function parseCssColor(css: string): [number, number, number, number] {
+  if (css.startsWith('#') && (css.length === 7 || css.length === 4)) {
+    const hex =
+      css.length === 4
+        ? `#${css[1]}${css[1]}${css[2]}${css[2]}${css[3]}${css[3]}`
+        : css;
+    return [
+      parseInt(hex.slice(1, 3), 16),
+      parseInt(hex.slice(3, 5), 16),
+      parseInt(hex.slice(5, 7), 16),
+      255,
+    ];
+  }
+  const m = css.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/);
+  if (m) {
+    return [
+      Number(m[1]),
+      Number(m[2]),
+      Number(m[3]),
+      m[4] != null ? Math.round(Number(m[4]) * 255) : 255,
+    ];
+  }
+  return [242, 239, 233, 255];
+}
+
+function drawTerrainGrid(
+  ctx: CanvasRenderingContext2D,
+  grid: TerrainGrid,
+  _project: CityProject,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  const { cols, rows, cellSizeM, cells } = grid;
+  const canvas = document.createElement('canvas');
+  canvas.width = cols;
+  canvas.height = rows;
+  const gctx = canvas.getContext('2d')!;
+  const img = gctx.createImageData(cols, rows);
+  const data = img.data;
+  const water = parseCssColor(palette.water);
+  const green = parseCssColor(palette.mountain);
+
+  for (let i = 0; i < cells.length; i++) {
+    const v = cells[i];
+    const o = i * 4;
+    if (v === TERRAIN_WATER) {
+      data[o] = water[0];
+      data[o + 1] = water[1];
+      data[o + 2] = water[2];
+      data[o + 3] = water[3];
+    } else if (v === TERRAIN_GREEN) {
+      data[o] = green[0];
+      data[o + 1] = green[1];
+      data[o + 2] = green[2];
+      data[o + 3] = green[3];
+    } else {
+      data[o + 3] = 0; // 陆地透出底图米白
+    }
+  }
+  gctx.putImageData(img, 0, 0);
+
+  const tl = toScreen({ x: 0, y: 0 }, viewport);
+  const br = toScreen(
+    { x: cols * cellSizeM, y: rows * cellSizeM },
+    viewport,
+  );
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(canvas, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  ctx.imageSmoothingEnabled = true;
+}
+
 function drawMapBase(
   ctx: CanvasRenderingContext2D,
   project: CityProject,
@@ -158,8 +235,14 @@ function drawMapBase(
   ctx.fillStyle = palette.outside;
   ctx.fillRect(tl.x, tl.y, w, h);
 
+  // 默认全陆地（米白）
   ctx.fillStyle = palette.land;
   ctx.fillRect(tl.x, tl.y, w, h);
+
+  if (getLayers(project).terrain !== false) {
+    const terrain = ensureTerrain(project.settings, project.terrain);
+    drawTerrainGrid(ctx, terrain, project, viewport, palette);
+  }
 
   ctx.strokeStyle = palette.border;
   ctx.lineWidth = 2;
@@ -203,38 +286,6 @@ function drawGrid(
     ctx.stroke();
   }
   ctx.restore();
-}
-
-function drawRegion(
-  ctx: CanvasRenderingContext2D,
-  feature: MapFeature,
-  viewport: Viewport,
-  palette: StylePalette,
-) {
-  const points = feature.points.map((p) => toScreen(p, viewport));
-  if (points.length < 3) return;
-
-  tracePath(ctx, points, true);
-
-  if (feature.kind === 'ocean') {
-    ctx.fillStyle = palette.water;
-    ctx.fill();
-    ctx.strokeStyle = palette.waterStroke;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  } else if (feature.kind === 'land') {
-    ctx.fillStyle = palette.land;
-    ctx.fill();
-    ctx.strokeStyle = palette.border;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  } else if (feature.kind === 'mountain') {
-    ctx.fillStyle = palette.mountain;
-    ctx.fill();
-    ctx.strokeStyle = palette.mountainStroke;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  }
 }
 
 function drawBlocks(
@@ -527,6 +578,7 @@ export type PreviewState =
       adaptivePreview: boolean;
       guide?: PreviewGuide | null;
     }
+  | { mode: 'brush'; center: Point; radiusM: number; thickness: number; kind: 'land' | 'water' | 'green' }
   | { mode: 'label'; point: Point; text: string };
 
 export type SelectionState = {
@@ -733,6 +785,45 @@ function drawPreviewCurve(
   }
 }
 
+function drawPreviewBrush(
+  ctx: CanvasRenderingContext2D,
+  center: Point,
+  radiusM: number,
+  thickness: number,
+  kind: 'land' | 'water' | 'green',
+  viewport: Viewport,
+) {
+  const c = toScreen(center, viewport);
+  const r = radiusM * viewport.zoom;
+  const jag = 1 + thickness * 0.18;
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i <= 48; i++) {
+    const a = (i / 48) * Math.PI * 2;
+    const n = Math.sin(a * 5.3) * 0.35 + Math.sin(a * 11) * 0.2;
+    const rr = r * (1 + n * thickness * 0.35) * jag;
+    const x = c.x + Math.cos(a) * rr;
+    const y = c.y + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle =
+    kind === 'water'
+      ? 'rgba(170, 211, 223, 0.35)'
+      : kind === 'green'
+        ? 'rgba(173, 209, 158, 0.35)'
+        : 'rgba(242, 239, 233, 0.45)';
+  ctx.fill();
+  ctx.strokeStyle =
+    kind === 'water' ? '#7eb8c9' : kind === 'green' ? '#8fbc7a' : '#a8a29e';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 function drawPreviewLabel(
   ctx: CanvasRenderingContext2D,
   point: Point,
@@ -773,13 +864,7 @@ export function renderMap(
   ctx.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
   ctx.clip();
 
-  if (layers.terrain) {
-    for (const kind of ['ocean', 'land', 'mountain'] as const) {
-      for (const feature of features) {
-        if (feature.kind === kind) drawRegion(ctx, feature, viewport, palette);
-      }
-    }
-  }
+  // 地貌由 drawMapBase 中的 terrain 栅格绘制（无等高线）
 
   if (layers.blocks) {
     const blocks = detectBlocks(
@@ -845,6 +930,15 @@ export function renderMap(
       preview.guide,
       viewport,
       palette,
+    );
+  } else if (preview.mode === 'brush') {
+    drawPreviewBrush(
+      ctx,
+      preview.center,
+      preview.radiusM,
+      preview.thickness,
+      preview.kind,
+      viewport,
     );
   } else if (preview.mode === 'label') {
     drawPreviewLabel(ctx, preview.point, preview.text, viewport, palette);

@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { FeatureGrade, LandformDrawMode, PathDrawMode, RoadLevel, Tool } from '../types';
+import type { FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
 import {
   FEATURE_GRADES,
-  LANDFORM_DRAW_MODES,
-  LANDFORM_TOOLS,
   PATH_DRAW_MODES,
   PATH_GUIDED_TOOLS,
   ROAD_STYLES,
+  TERRAIN_BRUSH_TOOLS,
   clampGrade,
   formatGrade,
 } from '../types';
@@ -15,14 +14,16 @@ type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
   drawGrade: FeatureGrade;
-  landformDrawMode: LandformDrawMode;
   pathDrawMode: PathDrawMode;
+  brushSizeM: number;
+  brushThickness: number;
   showJunctions: boolean;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
-  onLandformDrawModeChange: (mode: LandformDrawMode) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
+  onBrushSizeChange: (m: number) => void;
+  onBrushThicknessChange: (t: number) => void;
   onShowJunctionsChange: (show: boolean) => void;
 };
 
@@ -30,18 +31,12 @@ const VIEW_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
   { id: 'eraser', label: '橡皮', icon: '🧹', hint: '点击删除要素' },
 ];
 
-const TERRAIN_TOOLS: { id: Tool; label: string; icon: string }[] = [
-  { id: 'land', label: '陆地', icon: '🏝️' },
-  { id: 'ocean', label: '海洋', icon: '🌊' },
-  { id: 'mountain', label: '山地', icon: '⛰️' },
-  { id: 'river', label: '河流', icon: '💧' },
+const TERRAIN_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
+  { id: 'land', label: '陆地', icon: '🏝️', hint: '陆地刷 · 擦回米白底图' },
+  { id: 'ocean', label: '水域', icon: '🌊', hint: '水域刷 · 浅蓝色毛边' },
+  { id: 'mountain', label: '绿地', icon: '🌲', hint: '绿地/山地刷 · 平面绿色，无等高线' },
+  { id: 'river', label: '河流', icon: '💧', hint: '窄河道折线（面状水域请用水域刷）' },
 ];
-
-const LANDFORM_MODE_ICONS: Record<LandformDrawMode, string> = {
-  freehand: '✍️',
-  polygon: '⬡',
-  rectangle: '▭',
-};
 
 const PATH_MODE_ICONS: Record<PathDrawMode, string> = {
   straight: '／',
@@ -60,7 +55,7 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   (typeof ROAD_STYLES)[RoadLevel],
 ][];
 
-const isLandformTool = (t: Tool) => LANDFORM_TOOLS.includes(t);
+const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t);
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
 
 type SectionId = 'view' | 'terrain' | 'network' | 'label';
@@ -69,14 +64,16 @@ export function Toolbar({
   tool,
   roadLevel,
   drawGrade,
-  landformDrawMode,
   pathDrawMode,
+  brushSizeM,
+  brushThickness,
   showJunctions,
   onToolChange,
   onRoadLevelChange,
   onDrawGradeChange,
-  onLandformDrawModeChange,
   onPathDrawModeChange,
+  onBrushSizeChange,
+  onBrushThicknessChange,
   onShowJunctionsChange,
 }: Props) {
   const [open, setOpen] = useState<Record<SectionId, boolean>>({
@@ -87,7 +84,7 @@ export function Toolbar({
   });
 
   useEffect(() => {
-    if (isLandformTool(tool) || tool === 'river') {
+    if (isTerrainBrush(tool) || tool === 'river') {
       setOpen((o) => ({ ...o, terrain: true }));
     }
     if (isPathGuided(tool)) {
@@ -174,6 +171,7 @@ export function Toolbar({
                   type="button"
                   className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
                   onClick={() => onToolChange(t.id)}
+                  title={t.hint}
                 >
                   <span className="btn-emoji" aria-hidden>
                     {t.icon}
@@ -182,25 +180,32 @@ export function Toolbar({
                 </button>
               ))}
             </div>
-            {isLandformTool(tool) && (
+            {isTerrainBrush(tool) && (
               <div className="option-block">
-                <p className="option-label">画法</p>
-                <div className="chip-row">
-                  {LANDFORM_DRAW_MODES.map((mode) => (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      className={landformDrawMode === mode.id ? 'chip active' : 'chip'}
-                      onClick={() => onLandformDrawModeChange(mode.id)}
-                      title={mode.desc}
-                    >
-                      <span className="btn-emoji" aria-hidden>
-                        {LANDFORM_MODE_ICONS[mode.id]}
-                      </span>
-                      {mode.label}
-                    </button>
-                  ))}
-                </div>
+                <p className="option-label">毛边刷</p>
+                <label className="brush-slider">
+                  <span>大小 {Math.round(brushSizeM)} m</span>
+                  <input
+                    type="range"
+                    min={40}
+                    max={400}
+                    step={10}
+                    value={brushSizeM}
+                    onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+                  />
+                </label>
+                <label className="brush-slider">
+                  <span>厚度 {brushThickness.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={brushThickness}
+                    onChange={(e) => onBrushThicknessChange(Number(e.target.value))}
+                  />
+                </label>
+                <p className="tool-note">底图默认全陆地 · 绿地为平面色块，无等高线</p>
               </div>
             )}
           </>
@@ -241,15 +246,15 @@ export function Toolbar({
               <div className="option-block">
                 <p className="option-label">等级</p>
                 <div className="chip-row">
-                  {ROAD_LEVELS.map(([level, style]) => (
+                  {ROAD_LEVELS.map(([id, style]) => (
                     <button
-                      key={level}
+                      key={id}
                       type="button"
-                      className={roadLevel === level ? 'chip active' : 'chip'}
-                      onClick={() => onRoadLevelChange(level)}
+                      className={roadLevel === id ? 'chip active' : 'chip'}
+                      onClick={() => onRoadLevelChange(id)}
                     >
                       <span className="btn-emoji" aria-hidden>
-                        {ROAD_LEVEL_ICONS[level]}
+                        {ROAD_LEVEL_ICONS[id]}
                       </span>
                       <span
                         className="road-swatch"
@@ -347,21 +352,18 @@ export function Toolbar({
           <span className="section-chevron">{open.label ? '−' : '+'}</span>
         </button>
         {open.label && (
-          <>
-            <div className="tool-grid">
-              <button
-                type="button"
-                className={tool === 'label' ? 'tool-cell active' : 'tool-cell'}
-                onClick={() => onToolChange('label')}
-              >
-                <span className="btn-emoji" aria-hidden>
-                  🏷️
-                </span>
-                文字
-              </button>
-            </div>
-            <p className="tool-note">街区由同层道路围合自动识别</p>
-          </>
+          <div className="tool-grid">
+            <button
+              type="button"
+              className={tool === 'label' ? 'tool-cell active' : 'tool-cell'}
+              onClick={() => onToolChange('label')}
+            >
+              <span className="btn-emoji" aria-hidden>
+                🏷️
+              </span>
+              标注
+            </button>
+          </div>
         )}
       </section>
     </aside>

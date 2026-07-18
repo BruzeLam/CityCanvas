@@ -201,6 +201,19 @@ input {
   text-align: center;
 }
 
+.brush-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.brush-slider input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent-line);
+}
+
 .tool-section {
   margin-bottom: 6px;
   border-bottom: 1px solid var(--line);
