@@ -401,23 +401,38 @@ export function MapCanvas({
     [applyGuideSnap],
   );
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const factor = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.min(8, Math.max(0.05, project.viewport.zoom * factor));
+  const handleWheel = useCallback(
+    (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const canvas = canvasRef.current;
+      const current = projectRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      const newZoom = Math.min(8, Math.max(0.05, current.viewport.zoom * factor));
 
-    onProjectChange({
-      ...project,
-      viewport: {
-        zoom: newZoom,
-        x: mouseX - (mouseX - project.viewport.x) * (newZoom / project.viewport.zoom),
-        y: mouseY - (mouseY - project.viewport.y) * (newZoom / project.viewport.zoom),
-      },
-    });
-  };
+      onProjectChange({
+        ...current,
+        viewport: {
+          zoom: newZoom,
+          x: mouseX - (mouseX - current.viewport.x) * (newZoom / current.viewport.zoom),
+          y: mouseY - (mouseY - current.viewport.y) * (newZoom / current.viewport.zoom),
+        },
+      });
+    },
+    [onProjectChange],
+  );
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    // 必须非 passive，否则 preventDefault 无效，滚轮会带动左右栏滚动
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
 
   const nudgeGrade = useCallback(
     (delta: number) => {
@@ -1006,7 +1021,6 @@ export function MapCanvas({
         className="map-canvas"
         tabIndex={0}
         style={{ cursor: canvasCursor }}
-        onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
