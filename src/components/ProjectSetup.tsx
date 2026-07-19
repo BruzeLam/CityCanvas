@@ -529,7 +529,7 @@ export function ProjectSetup({
                   </button>
                 </div>
                 <p className="tool-note">
-                  海/湖/河分控、同色水域。河流会入海/入湖或贯穿到地图边缘。创建后锁定，可用刷子微调。
+                  海/湖/河分控、同色水域。河网先主干入海，再支流汇入；汇合与河口更粗。创建后可用刷子微调。
                 </p>
               </div>
             </div>

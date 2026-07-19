@@ -146,8 +146,8 @@ export function generateLandscape(
 
   if (params.riverEnabled) {
     const density = clampRiverDensity(params.riverDensity);
-    const cellPaths = generateRiverCellPaths(cells, field, cols, rows, seed, density);
-    carveWaterChannels(cells, cols, rows, cellPaths);
+    const rivers = generateRiverNetwork(cells, cols, rows, seed, density);
+    carveRiverNetwork(cells, cols, rows, rivers);
   }
 
   let waterPct = 0;
@@ -304,33 +304,220 @@ function smoothWaterLand(
   }
 }
 
-function generateRiverCellPaths(
+type RiverSegment = {
+  cells: number[];
+  /** 2 主干 · 1 较大支流 · 0 小溪 */
+  order: number;
+};
+
+/**
+ * 树状河网：先少而粗的主干入海，再让支流汇入主干（分支/汇合更清晰）。
+ * 密度主要增加支流，而不是再铺一堆互不相关的平行河。
+ */
+function generateRiverNetwork(
   cells: Uint8Array,
-  _field: Float32Array,
   cols: number,
   rows: number,
   seed: number,
   density: number,
-): number[][] {
-  const count = Math.max(1, Math.round(1 + density * 5));
-  const paths: number[][] = [];
-  const used = new Uint8Array(cols * rows);
-  const minLen = Math.max(20, Math.floor(Math.max(cols, rows) * 0.2));
-  const outletDist = buildOutletDistance(cells, cols, rows);
+): RiverSegment[] {
+  const n = cols * rows;
+  const seaDist = buildOutletDistance(cells, cols, rows);
+  const riverMask = new Uint8Array(n);
+  const sourceUsed = new Uint8Array(n);
+  const rivers: RiverSegment[] = [];
 
-  for (let i = 0; i < count * 6 && paths.length < count; i++) {
-    const source = pickSourceCell(cells, cols, rows, seed + i * 97, used, outletDist);
+  const trunkCount = Math.max(1, Math.min(2, Math.round(0.55 + density * 1.2)));
+  const tribCount = Math.max(0, Math.round(density * 3.2));
+  const trunkMin = Math.max(28, Math.floor(Math.max(cols, rows) * 0.3));
+  const tribMin = Math.max(14, Math.floor(Math.max(cols, rows) * 0.14));
+
+  for (let i = 0; i < trunkCount * 6 && rivers.filter((r) => r.order === 2).length < trunkCount; i++) {
+    const source = pickSourceCell(cells, cols, rows, seed + i * 97, sourceUsed, seaDist);
     if (source == null) break;
-    const cellPath = meanderToOutlet(cells, outletDist, cols, rows, source, seed + i * 131);
-    if (!isValidRiverPath(cellPath, cells, cols, rows, minLen)) continue;
-
-    for (const idx of cellPath) {
-      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 6);
+    const path = meanderToOutlet(cells, seaDist, cols, rows, source, seed + i * 131);
+    if (!isValidRiverPath(path, cells, cols, rows, trunkMin)) continue;
+    stampRiverMask(riverMask, path);
+    markCorridor(sourceUsed, cols, rows, source % cols, (source / cols) | 0, 12);
+    // 主干走廊加宽，减少平行「杂河」
+    for (const cell of path) {
+      markCorridor(sourceUsed, cols, rows, cell % cols, (cell / cols) | 0, 4);
     }
-    paths.push(cellPath);
+    rivers.push({ cells: path, order: 2 });
   }
 
-  return paths;
+  if (rivers.length === 0) return rivers;
+
+  const joinDist = buildJoinDistance(cells, riverMask, cols, rows);
+
+  for (let i = 0; i < tribCount * 6 && rivers.filter((r) => r.order < 2).length < tribCount; i++) {
+    const source = pickSourceCell(
+      cells,
+      cols,
+      rows,
+      seed + 900 + i * 67,
+      sourceUsed,
+      joinDist,
+    );
+    if (source == null) break;
+    const path = meanderToOutlet(cells, joinDist, cols, rows, source, seed + 400 + i * 151);
+    if (!joinsNetwork(path, riverMask, cells, cols, rows, tribMin)) continue;
+    const clipped = clipPathAtJoin(path, riverMask, cells, cols, rows);
+    if (clipped.length < tribMin) continue;
+    // 支流太短或几乎贴着主干平行 → 跳过
+    if (avgDistToMask(clipped, riverMask, cols, rows) < 2.2) continue;
+    const order = clipped.length >= trunkMin * 0.5 ? 1 : 0;
+    stampRiverMask(riverMask, clipped);
+    markCorridor(sourceUsed, cols, rows, source % cols, (source / cols) | 0, 7);
+    for (const cell of clipped) {
+      markCorridor(sourceUsed, cols, rows, cell % cols, (cell / cols) | 0, 3);
+    }
+    rivers.push({ cells: clipped, order });
+  }
+
+  return rivers;
+}
+
+function stampRiverMask(mask: Uint8Array, path: number[]): void {
+  for (const i of path) mask[i] = 1;
+}
+
+/** 路径中段相对已有河道的平均距离；过小说明平行贴着走而非汇入 */
+function avgDistToMask(
+  path: number[],
+  riverMask: Uint8Array,
+  cols: number,
+  rows: number,
+): number {
+  if (path.length < 4) return 0;
+  const midStart = Math.floor(path.length * 0.2);
+  const midEnd = Math.floor(path.length * 0.7);
+  let sum = 0;
+  let count = 0;
+  for (let k = midStart; k < midEnd; k++) {
+    const i = path[k]!;
+    const x = i % cols;
+    const y = (i / cols) | 0;
+    let best = 99;
+    for (let r = 1; r <= 8 && best === 99; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+          if (riverMask[ny * cols + nx]) best = r;
+        }
+      }
+    }
+    sum += best === 99 ? 8 : best;
+    count++;
+  }
+  return count ? sum / count : 0;
+}
+
+/** 出水口 = 海/湖 ∪ 已有河道（支流汇入主干） */
+function buildJoinDistance(
+  cells: Uint8Array,
+  riverMask: Uint8Array,
+  cols: number,
+  rows: number,
+): Float32Array {
+  const n = cols * rows;
+  const dist = new Float32Array(n);
+  dist.fill(1e9);
+  const queue: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (cells[i] === TERRAIN_WATER || riverMask[i]) {
+      dist[i] = 0;
+      queue.push(i);
+    }
+  }
+  let qh = 0;
+  while (qh < queue.length) {
+    const cur = queue[qh++]!;
+    const x = cur % cols;
+    const y = (cur / cols) | 0;
+    const nd = dist[cur] + 1;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const j = ny * cols + nx;
+      if (nd < dist[j]) {
+        dist[j] = nd;
+        queue.push(j);
+      }
+    }
+  }
+  return dist;
+}
+
+function joinsNetwork(
+  path: number[],
+  riverMask: Uint8Array,
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  minLen: number,
+): boolean {
+  if (path.length < minLen) return false;
+  for (let k = Math.max(0, path.length - 8); k < path.length; k++) {
+    const i = path[k]!;
+    if (riverMask[i] || cells[i] === TERRAIN_WATER) return true;
+    const x = i % cols;
+    const y = (i / cols) | 0;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const j = ny * cols + nx;
+      if (riverMask[j] || cells[j] === TERRAIN_WATER) return true;
+    }
+  }
+  return false;
+}
+
+function clipPathAtJoin(
+  path: number[],
+  riverMask: Uint8Array,
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+): number[] {
+  for (let k = 0; k < path.length; k++) {
+    const i = path[k]!;
+    if (riverMask[i] || cells[i] === TERRAIN_WATER) {
+      return path.slice(0, k + 1);
+    }
+    const x = i % cols;
+    const y = (i / cols) | 0;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const j = ny * cols + nx;
+      if (riverMask[j] || cells[j] === TERRAIN_WATER) {
+        return path.slice(0, k + 1);
+      }
+    }
+  }
+  return path;
 }
 
 /** 到出水口的距离：优先已有水域，否则地图边界（便于无海时贯穿） */
@@ -406,7 +593,6 @@ function isValidRiverPath(
   const x = end % cols;
   const y = (end / cols) | 0;
   if (cells[end] === TERRAIN_WATER) return true;
-  // 邻接水域也算入海/入湖
   for (const [dx, dy] of [
     [1, 0],
     [-1, 0],
@@ -418,28 +604,40 @@ function isValidRiverPath(
     if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
     if (cells[ny * cols + nx] === TERRAIN_WATER) return true;
   }
-  // 无大水体时：贯穿到地图边缘
   return x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
 }
 
-function carveWaterChannels(
+/** 按层级刻河：主干粗、支流细、汇合/河口加宽 */
+function carveRiverNetwork(
   cells: Uint8Array,
   cols: number,
   rows: number,
-  paths: number[][],
+  rivers: RiverSegment[],
 ): void {
-  for (const path of paths) {
+  const sorted = [...rivers].sort((a, b) => b.order - a.order);
+  for (const river of sorted) {
+    const path = river.cells;
     if (path.length < 2) continue;
     const n = path.length;
     for (let i = 0; i < n; i++) {
       const idx = path[i]!;
       const x = idx % cols;
       const y = (idx / cols) | 0;
-      // 全程至少 1 格宽，下游/河口加宽，避免「线断」
       const t = i / (n - 1);
-      const radius = t > 0.78 ? 2 : 1;
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
+      // order 2 主干 · 1 次干 · 0 细支
+      let radius = river.order >= 2 ? 2.4 : river.order >= 1 ? 1.35 : 0.85;
+      if (t > 0.45) radius += river.order >= 2 ? 0.6 : 0.35;
+      if (t > 0.72) radius += river.order >= 2 ? 0.8 : 0.45;
+      if (t > 0.88) radius += river.order >= 2 ? 0.7 : 0.55;
+      // 支流末端汇合口明显加粗，形成「Y」形汇点
+      if (river.order < 2 && t > 0.78) radius = Math.max(radius, 2.1);
+      if (river.order < 2 && t > 0.9) radius = Math.max(radius, 2.5);
+      const rMax = river.order >= 2 ? 3.6 : river.order >= 1 ? 2.6 : 2.4;
+      radius = Math.min(radius, rMax);
+      const rCeil = Math.ceil(radius);
+
+      for (let dy = -rCeil; dy <= rCeil; dy++) {
+        for (let dx = -rCeil; dx <= rCeil; dx++) {
           if (dx * dx + dy * dy > radius * radius + 0.35) continue;
           const nx = x + dx;
           const ny = y + dy;
