@@ -42,7 +42,7 @@ export type TerrainGridJSON = {
 
 export function createTerrain(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
-  cellSizeM = DEFAULT_TERRAIN_CELL_M,
+  cellSizeM = preferredTerrainCellSizeM(settings),
 ): TerrainGrid {
   const cols = Math.max(8, Math.ceil(settings.widthM / cellSizeM));
   const rows = Math.max(8, Math.ceil(settings.heightM / cellSizeM));
@@ -91,22 +91,32 @@ export function terrainFromJSON(data: TerrainGridJSON | null | undefined): Terra
   };
 }
 
-/** 保证工程有与地图尺寸匹配的地形；尺寸变了则重建（全陆地） */
+/** 栅格是否覆盖当前地图范围（允许与 preferred 粒度不同，避免把已生成地形抹成全陆地） */
+function terrainCoversMap(
+  settings: Pick<MapSettings, 'widthM' | 'heightM'>,
+  grid: TerrainGrid,
+): boolean {
+  if (grid.cols < 8 || grid.rows < 8 || grid.cellSizeM <= 0) return false;
+  if (grid.cells.length !== grid.cols * grid.rows) return false;
+  const coverW = grid.cols * grid.cellSizeM;
+  const coverH = grid.rows * grid.cellSizeM;
+  return (
+    coverW >= settings.widthM * 0.98 &&
+    coverH >= settings.heightM * 0.98 &&
+    coverW <= settings.widthM * 1.2 &&
+    coverH <= settings.heightM * 1.2
+  );
+}
+
+/** 保证工程有与地图尺寸匹配的地形；范围对不上才重建（全陆地） */
 export function ensureTerrain(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
   existing: TerrainGrid | null | undefined,
 ): TerrainGrid {
-  const fresh = createTerrain(settings);
-  if (
-    existing &&
-    existing.cols === fresh.cols &&
-    existing.rows === fresh.rows &&
-    existing.cellSizeM === fresh.cellSizeM &&
-    existing.cells.length === fresh.cols * fresh.rows
-  ) {
+  if (existing && terrainCoversMap(settings, existing)) {
     return existing;
   }
-  return fresh;
+  return createTerrain(settings, preferredTerrainCellSizeM(settings));
 }
 
 function hash2(ix: number, iy: number): number {
