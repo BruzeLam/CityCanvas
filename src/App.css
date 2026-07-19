@@ -46,6 +46,7 @@ input {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -717,17 +718,28 @@ input {
 .setup-overlay {
   position: fixed;
   inset: 0;
+  z-index: 40;
   display: flex;
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   background:
     radial-gradient(ellipse at 50% 0%, #fff 0%, transparent 45%),
     linear-gradient(160deg, #ebe8e4, #d6d3d1);
-  padding: 24px;
+  padding: 16px;
+  box-sizing: border-box;
 }
 
 .setup-card {
   width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 2px;
@@ -735,28 +747,35 @@ input {
 }
 
 .setup-header {
-  padding: 28px 28px 0;
+  flex-shrink: 0;
+  padding: 20px 24px 0;
 }
 
 .setup-header h1 {
   margin: 0;
   font-family: 'Fraunces', serif;
-  font-size: 26px;
+  font-size: 24px;
   color: var(--ink);
   letter-spacing: -0.02em;
 }
 
 .setup-header p {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
   font-size: 13px;
 }
 
 .setup-body {
-  padding: 22px 28px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 24px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 
 .setup-field {
@@ -873,11 +892,14 @@ input {
 
 .terrain-preview-canvas {
   width: 100%;
-  max-width: 320px;
+  max-width: 220px;
+  max-height: 140px;
+  height: auto;
   border: 1px solid var(--line);
   border-radius: 2px;
   background: #f2efe9;
   image-rendering: pixelated;
+  object-fit: contain;
 }
 
 .terrain-preview-legend {
@@ -919,7 +941,7 @@ input {
 .terrain-seed-controls {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .terrain-seed-check {
@@ -983,11 +1005,77 @@ input {
   }
 }
 
+@media (max-height: 820px) {
+  .setup-overlay {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .setup-card {
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .setup-header {
+    padding: 14px 20px 0;
+  }
+
+  .setup-header h1 {
+    font-size: 20px;
+  }
+
+  .setup-body {
+    padding: 12px 20px;
+    gap: 10px;
+  }
+
+  .preset-grid button {
+    padding: 7px 4px;
+    font-size: 11px;
+  }
+
+  .terrain-preview-canvas {
+    max-width: 160px;
+    max-height: 100px;
+  }
+
+  .cloud-map-list {
+    max-height: 110px;
+  }
+
+  .setup-preview {
+    padding: 8px 10px;
+  }
+
+  .setup-footer {
+    padding: 10px 20px 14px;
+  }
+}
+
+@media (max-height: 640px) {
+  .setup-preview .muted {
+    display: none;
+  }
+
+  .terrain-seed-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .terrain-preview-canvas {
+    max-width: 140px;
+    max-height: 80px;
+  }
+}
+
 .setup-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 0 28px 28px;
+  padding: 12px 24px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
 }
 
 .setup-footer button {
@@ -1114,6 +1202,7 @@ input {
 }
 
 .auth-tabs {
+  flex-shrink: 0;
   display: flex;
   gap: 6px;
   padding: 0 28px;

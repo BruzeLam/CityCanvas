@@ -144,23 +144,31 @@ export function ProjectSetup({
   useEffect(() => {
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
-    const aspect = preview.widthM / preview.heightM;
-    const maxW = 320;
-    const maxH = 200;
-    let w = maxW;
-    let h = Math.round(maxW / aspect);
-    if (h > maxH) {
-      h = maxH;
-      w = Math.round(maxH * aspect);
-    }
-    canvas.width = w;
-    canvas.height = h;
-    paintTerrainPreview(
-      canvas,
-      landscapePreview.terrain,
-      landscapePreview.rivers.map((f) => f.points),
-      preview,
-    );
+
+    const paint = () => {
+      const aspect = preview.widthM / preview.heightM;
+      const short = window.innerHeight < 820;
+      const maxW = short ? 160 : 220;
+      const maxH = short ? 100 : 140;
+      let w = maxW;
+      let h = Math.round(maxW / aspect);
+      if (h > maxH) {
+        h = maxH;
+        w = Math.round(maxH * aspect);
+      }
+      canvas.width = w;
+      canvas.height = h;
+      paintTerrainPreview(
+        canvas,
+        landscapePreview.terrain,
+        landscapePreview.rivers.map((f) => f.points),
+        preview,
+      );
+    };
+
+    paint();
+    window.addEventListener('resize', paint);
+    return () => window.removeEventListener('resize', paint);
   }, [landscapePreview, preview.widthM, preview.heightM]);
 
   const handleCreate = () => {
