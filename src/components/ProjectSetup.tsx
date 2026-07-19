@@ -30,6 +30,7 @@ import {
   type TerrainGenParams,
 } from '../engine/terrainGen';
 import { preferredTerrainCellSizeM } from '../engine/terrain';
+import { randomCityName } from '../constants/cityNames';
 import { api, type CloudMapSummary } from '../io/api';
 import type { MapSettings } from '../types';
 import { createProject } from '../types';
@@ -300,11 +301,22 @@ export function ProjectSetup({
 
           <label className="setup-field">
             <span>城市名称</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：湾城岛"
-            />
+            <div className="city-title-wrap setup-name-wrap">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：湾城岛"
+              />
+              <button
+                type="button"
+                className="city-title-dice"
+                title="随机架空城市名"
+                aria-label="随机生成城市名"
+                onClick={() => setName(randomCityName(name))}
+              >
+                🎲
+              </button>
+            </div>
           </label>
 
           <fieldset className="setup-field">

@@ -15,6 +15,7 @@ import { downloadMapMd, loadMapFromFile } from './io/mapFile';
 import { payloadToProject, projectToPayload } from './io/mapPayload';
 import { exportToPng } from './engine/renderer';
 import { downloadSvg } from './engine/svgExport';
+import { randomCityName } from './constants/cityNames';
 import {
   DEFAULT_PARALLEL_SPACING_M,
   type ParallelSide,
@@ -366,44 +367,65 @@ function App() {
       <header className="app-header">
         <div className="brand">
           <span className="logo">CityCanvas</span>
-          <input
-            className="city-title-input"
-            type="text"
-            value={project.name}
-            maxLength={48}
-            aria-label="城市名称"
-            title="点击修改城市名称"
-            placeholder="未命名城市"
-            onChange={(e) => {
-              const name = e.target.value;
-              setDirty(true);
-              setSaveState('idle');
-              setProject((p) => {
-                if (!p) return p;
-                const next = { ...p, name };
-                persistLocal(next);
-                return next;
-              });
-            }}
-            onBlur={(e) => {
-              const trimmed = e.target.value.trim() || '未命名城市';
-              if (trimmed === project.name) return;
-              setDirty(true);
-              setSaveState('idle');
-              setProject((p) => {
-                if (!p) return p;
-                const next = { ...p, name: trimmed };
-                persistLocal(next);
-                return next;
-              });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === 'Escape') {
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-          />
-          {dirty && <span className="dirty-dot" title="有未保存更改" />}
+          <div className="city-title-wrap">
+            <input
+              className="city-title-input"
+              type="text"
+              value={project.name}
+              maxLength={48}
+              aria-label="城市名称"
+              title="点击修改城市名称"
+              placeholder="未命名城市"
+              onChange={(e) => {
+                const name = e.target.value;
+                setDirty(true);
+                setSaveState('idle');
+                setProject((p) => {
+                  if (!p) return p;
+                  const next = { ...p, name };
+                  persistLocal(next);
+                  return next;
+                });
+              }}
+              onBlur={(e) => {
+                const trimmed = e.target.value.trim() || '未命名城市';
+                if (trimmed === project.name) return;
+                setDirty(true);
+                setSaveState('idle');
+                setProject((p) => {
+                  if (!p) return p;
+                  const next = { ...p, name: trimmed };
+                  persistLocal(next);
+                  return next;
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === 'Escape') {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="city-title-dice"
+              title="随机架空城市名"
+              aria-label="随机生成城市名"
+              onClick={() => {
+                const name = randomCityName(project.name);
+                setDirty(true);
+                setSaveState('idle');
+                setProject((p) => {
+                  if (!p) return p;
+                  const next = { ...p, name };
+                  persistLocal(next);
+                  return next;
+                });
+              }}
+            >
+              🎲
+            </button>
+            {dirty && <span className="dirty-dot" title="有未保存更改" />}
+          </div>
         </div>
         <div className="header-actions">
           <span className="header-user">

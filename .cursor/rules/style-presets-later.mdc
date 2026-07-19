@@ -1,0 +1,13 @@
+---
+description: CityCanvas 地貌风格预设与肌理参考（待做，勿提前实现）
+alwaysApply: true
+---
+
+# CityCanvas 风格预设（暂缓）
+
+地貌风格预设（江南水乡 / 大湾区等）**暂缓实现**，已约定方案：
+
+1. 风格用结构化 `StylePreset`（`id` + 参数配方），不要靠自然语言猜。例：`jiangnan` vs `bay_area`，字段含 ocean/lake/river/green 的 enabled 与 ratio/density 区间，以及可选 `coastBias`（`inland_water` / `open_sea` / `estuary`）、`channelStyle`（`dense_narrow` / `wide_sparse`）。
+2. 用户选预设 → 套配方再掷 `terrainSeed`；存档应同时记 `stylePresetId` + `terrainSeed` + 落地后的各项参数。
+3. 若纯参数拟合差，可再引入苏州/广州等真实城市肌理参考图做参考/约束（后做）。
+4. LLM 若接入，只做 preset 选择或滑条微调，最终仍落到 `TerrainGenParams`。

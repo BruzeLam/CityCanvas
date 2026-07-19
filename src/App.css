@@ -62,8 +62,8 @@ input {
 
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: 14px;
+  align-items: center;
+  gap: 10px;
 }
 
 .logo {
@@ -72,6 +72,48 @@ input {
   font-weight: 600;
   letter-spacing: -0.03em;
   color: var(--ink);
+}
+
+.city-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.city-title-dice {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 1px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.city-title-dice:hover {
+  border-color: var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.setup-name-wrap {
+  width: 100%;
+}
+
+.setup-name-wrap .city-title-input,
+.setup-name-wrap input {
+  flex: 1;
+  min-width: 0;
+}
+
+.setup-name-wrap .city-title-dice {
+  border-color: var(--line);
+  background: var(--paper);
 }
 
 .tagline {
