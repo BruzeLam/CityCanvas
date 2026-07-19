@@ -9,13 +9,23 @@ import {
   clampGrade,
   formatGrade,
 } from '../types';
-import { PARALLEL_CLEAR_M } from '../engine/geometry';
+import {
+  DEFAULT_PARALLEL_SPACING_M,
+  PARALLEL_SIDES,
+  PARALLEL_SPACING_MAX_M,
+  PARALLEL_SPACING_MIN_M,
+  clampParallelSpacing,
+  type ParallelSide,
+} from '../engine/parallelOffset';
 
 type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
   drawGrade: FeatureGrade;
   pathDrawMode: PathDrawMode;
+  parallelEnabled: boolean;
+  parallelSpacingM: number;
+  parallelSide: ParallelSide;
   brushSizeM: number;
   brushThickness: number;
   showJunctions: boolean;
@@ -24,6 +34,9 @@ type Props = {
   onRoadLevelChange: (level: RoadLevel) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
+  onParallelEnabledChange: (on: boolean) => void;
+  onParallelSpacingChange: (m: number) => void;
+  onParallelSideChange: (side: ParallelSide) => void;
   onBrushSizeChange: (m: number) => void;
   onBrushThicknessChange: (t: number) => void;
   onShowJunctionsChange: (show: boolean) => void;
@@ -68,6 +81,9 @@ export function Toolbar({
   roadLevel,
   drawGrade,
   pathDrawMode,
+  parallelEnabled,
+  parallelSpacingM,
+  parallelSide,
   brushSizeM,
   brushThickness,
   showJunctions,
@@ -76,6 +92,9 @@ export function Toolbar({
   onRoadLevelChange,
   onDrawGradeChange,
   onPathDrawModeChange,
+  onParallelEnabledChange,
+  onParallelSpacingChange,
+  onParallelSideChange,
   onBrushSizeChange,
   onBrushThicknessChange,
   onShowJunctionsChange,
@@ -317,6 +336,67 @@ export function Toolbar({
                   </div>
                 </div>
                 <div className="option-block">
+                  <p className="option-label">平行 · 独立开关</p>
+                  <div className="chip-row">
+                    <button
+                      type="button"
+                      className={parallelEnabled ? 'chip active' : 'chip'}
+                      onClick={() => onParallelEnabledChange(!parallelEnabled)}
+                      title="开启后，完成绘制时同时生成平行路（直线/弯道均可用）"
+                    >
+                      {parallelEnabled ? '平行 · 开' : '平行 · 关'}
+                    </button>
+                  </div>
+                  {parallelEnabled && (
+                    <>
+                      <div className="chip-row" style={{ marginTop: 6 }}>
+                        {PARALLEL_SIDES.map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            className={parallelSide === s.id ? 'chip active' : 'chip'}
+                            onClick={() => onParallelSideChange(s.id)}
+                            title={s.desc}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="parallel-spacing-row">
+                        <label className="parallel-spacing-label">
+                          间距
+                          <input
+                            type="number"
+                            min={PARALLEL_SPACING_MIN_M}
+                            max={PARALLEL_SPACING_MAX_M}
+                            step={2}
+                            value={parallelSpacingM}
+                            onChange={(e) =>
+                              onParallelSpacingChange(
+                                clampParallelSpacing(Number(e.target.value)),
+                              )
+                            }
+                          />
+                          <span>m</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="chip"
+                          onClick={() =>
+                            onParallelSpacingChange(DEFAULT_PARALLEL_SPACING_M)
+                          }
+                          title="恢复默认间距"
+                        >
+                          默认 {DEFAULT_PARALLEL_SPACING_M}
+                        </button>
+                      </div>
+                      <p className="tool-note">
+                        双侧：轨迹为中线，左右各偏半间距。单侧：保留轨迹并再画一条。
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div className="option-block">
                   <p className="option-label">标高 · -/=</p>
                   <div className="grade-row">
                     <button
@@ -436,8 +516,8 @@ export function Toolbar({
                 <kbd>Alt</kbd>
               </li>
               <li>
-                <span>平行净距</span>
-                <span className="shortcut-note">≥{PARALLEL_CLEAR_M} m 建议</span>
+                <span>平行间距</span>
+                <span className="shortcut-note">默认 {DEFAULT_PARALLEL_SPACING_M} m</span>
               </li>
               <li>
                 <span>完成折线</span>

@@ -57,6 +57,11 @@ import {
   stampBrush,
   type TerrainCell,
 } from '../engine/terrain';
+import {
+  buildParallelPaths,
+  guideFromDraft,
+  type ParallelSide,
+} from '../engine/parallelOffset';
 import { FloatingDock } from './FloatingDock';
 
 type Props = {
@@ -67,6 +72,9 @@ type Props = {
   brushSizeM: number;
   brushThickness: number;
   pathDrawMode: PathDrawMode;
+  parallelEnabled: boolean;
+  parallelSpacingM: number;
+  parallelSide: ParallelSide;
   selectedFeatureId: string | null;
   canUndo: boolean;
   onSelectFeature: (id: string | null) => void;
@@ -74,6 +82,9 @@ type Props = {
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
+  onParallelEnabledChange: (on: boolean) => void;
+  onParallelSpacingChange: (m: number) => void;
+  onParallelSideChange: (side: ParallelSide) => void;
   onUndo: () => void;
   onProjectChange: (project: CityProject, options?: { undoSnapshot?: CityProject }) => void;
 };
@@ -112,6 +123,9 @@ export function MapCanvas({
   brushSizeM,
   brushThickness,
   pathDrawMode,
+  parallelEnabled,
+  parallelSpacingM,
+  parallelSide,
   selectedFeatureId,
   canUndo,
   onSelectFeature,
@@ -119,6 +133,9 @@ export function MapCanvas({
   onToolChange,
   onRoadLevelChange,
   onPathDrawModeChange,
+  onParallelEnabledChange,
+  onParallelSpacingChange,
+  onParallelSideChange,
   onUndo,
   onProjectChange,
 }: Props) {
@@ -194,6 +211,11 @@ export function MapCanvas({
     [project.viewport, project.settings],
   );
 
+  const parallelPreviewPaths = (guide: Point[]): Point[][] | undefined => {
+    if (!parallelEnabled || !isPathGuided || guide.length < 2) return undefined;
+    return buildParallelPaths(guide, parallelSpacingM, parallelSide);
+  };
+
   const preview: PreviewState = (() => {
     if (isTerrainBrush && brushCursor) {
       const kind = brushPreviewKind(tool);
@@ -210,6 +232,21 @@ export function MapCanvas({
     if (isPathGuided && pathDrawMode === 'curve' && (polyDraft.length > 0 || polyCursor || curveControl)) {
       const startHeading =
         curveAnchorHeading ?? headingFromPolyline(polyDraft);
+      let parallelGuide: Point[] = polyDraft;
+      if (polyDraft.length > 0 && polyCursor) {
+        const a = polyDraft[polyDraft.length - 1];
+        if (!curveControl && startHeading != null) {
+          const curve = curveFromTangent(a, startHeading, polyCursor);
+          if (curve) parallelGuide = [...polyDraft, ...curve.points.slice(1)];
+          else parallelGuide = guideFromDraft(polyDraft, polyCursor);
+        } else if (curveControl) {
+          const curve = curveFromThreePoints(a, curveControl, polyCursor);
+          if (curve) parallelGuide = [...polyDraft, ...curve.points.slice(1)];
+          else parallelGuide = guideFromDraft(polyDraft, polyCursor);
+        } else {
+          parallelGuide = guideFromDraft(polyDraft, polyCursor);
+        }
+      }
       return {
         mode: 'curve',
         points: polyDraft,
@@ -219,10 +256,18 @@ export function MapCanvas({
         endHeading: null,
         adaptivePreview: false,
         guide: activeGuide,
+        parallelPaths: parallelPreviewPaths(parallelGuide),
       };
     }
     if (isPathGuided && pathDrawMode === 'straight' && (polyDraft.length > 0 || polyCursor)) {
-      return { mode: 'polyline', points: polyDraft, cursor: polyCursor, guide: activeGuide };
+      const guide = guideFromDraft(polyDraft, polyCursor);
+      return {
+        mode: 'polyline',
+        points: polyDraft,
+        cursor: polyCursor,
+        guide: activeGuide,
+        parallelPaths: parallelPreviewPaths(guide),
+      };
     }
     if (polyDraft.length > 0 || polyCursor) {
       return { mode: 'polyline', points: polyDraft, cursor: polyCursor, guide: activeGuide };
@@ -303,26 +348,32 @@ export function MapCanvas({
     [onProjectChange],
   );
 
-  const addFeature = useCallback(
-    (feature: MapFeature) => {
-      if (feature.kind === 'road' || feature.kind === 'railway') {
-        const merged = tryMergeHeadToTail(project.features, feature);
-        if (merged) {
-          onProjectChange({ ...project, features: merged });
-          return;
+  const commitPathFeatures = useCallback(
+    (incoming: MapFeature[]) => {
+      if (incoming.length === 0) return;
+      let feats = project.features;
+      for (const feature of incoming) {
+        if (feature.kind === 'road' || feature.kind === 'railway') {
+          const merged = tryMergeHeadToTail(feats, feature);
+          if (merged) {
+            feats = merged;
+            continue;
+          }
+          feats = attachCrossGradeTips(feats, feature);
+        } else {
+          feats = [...feats, feature];
         }
-        onProjectChange({
-          ...project,
-          features: attachCrossGradeTips(project.features, feature),
-        });
-        return;
       }
-      onProjectChange({
-        ...project,
-        features: [...project.features, feature],
-      });
+      onProjectChange({ ...project, features: feats });
     },
     [onProjectChange, project],
+  );
+
+  const addFeature = useCallback(
+    (feature: MapFeature) => {
+      commitPathFeatures([feature]);
+    },
+    [commitPathFeatures],
   );
 
   const resetDrafts = useCallback(() => {
@@ -423,17 +474,34 @@ export function MapCanvas({
         ? resolvePathGrades(polyDraft)
         : {};
 
-    addFeature({
-      id: createId(),
-      kind,
-      points: polyDraft,
-      closed: false,
-      roadLevel: kind === 'road' ? roadLevel : undefined,
-      grade: grades.grade,
-      gradeEnd: grades.gradeEnd,
-    });
+    const pathList =
+      parallelEnabled && (kind === 'road' || kind === 'railway')
+        ? buildParallelPaths(polyDraft, parallelSpacingM, parallelSide)
+        : [polyDraft];
+
+    commitPathFeatures(
+      pathList.map((points) => ({
+        id: createId(),
+        kind,
+        points,
+        closed: false,
+        roadLevel: kind === 'road' ? roadLevel : undefined,
+        grade: grades.grade,
+        gradeEnd: grades.gradeEnd,
+      })),
+    );
     resetDrafts();
-  }, [addFeature, polyDraft, resetDrafts, resolvePathGrades, roadLevel, tool]);
+  }, [
+    commitPathFeatures,
+    parallelEnabled,
+    parallelSide,
+    parallelSpacingM,
+    polyDraft,
+    resetDrafts,
+    resolvePathGrades,
+    roadLevel,
+    tool,
+  ]);
 
   const applyGuideSnap = useCallback(
     (pt: Point, extraTargets: Point[] = [], from?: Point | null): GuideSnap => {
@@ -1026,19 +1094,22 @@ export function MapCanvas({
         draftStartGrade != null && draftStartGrade !== drawGrade
           ? `匝道 ${startLabel} → ${endLabel} · -/= 换终点层`
           : `标高 ${endLabel} · -/= 换层`;
+      const parallelHint = parallelEnabled
+        ? ` · 平行 ${parallelSpacingM} m（${parallelSide === 'both' ? '双侧' : parallelSide === 'left' ? '左' : '右'}）`
+        : '';
       if (pathDrawMode === 'straight') {
-        return `直线默认水平/垂直 · Shift 自由角度 · Alt 关软吸附（近距平行）· 双击完成 · ${gradeHint}`;
+        return `直线默认水平/垂直 · Shift 自由角度 · Alt 关软吸附 · 双击完成${parallelHint} · ${gradeHint}`;
       }
       if (!polyDraft.length) {
-        return `弯道：点起点（端点/中心线锁切线）· ${gradeHint}`;
+        return `弯道：点起点（端点/中心线锁切线）${parallelHint} · ${gradeHint}`;
       }
       if (curveAnchorHeading != null || headingFromPolyline(polyDraft) != null) {
-        return `弯道：切线已锁 · 点终点定半径劣弧 · 双击完成 · ${gradeHint}`;
+        return `弯道：切线已锁 · 点终点定半径劣弧 · 双击完成${parallelHint} · ${gradeHint}`;
       }
       if (!curveControl) {
-        return `弯道：自由三点 · 点 B 选鼓包侧 · ${gradeHint}`;
+        return `弯道：自由三点 · 点 B 选鼓包侧${parallelHint} · ${gradeHint}`;
       }
-      return `弯道：点终点 C（劣弧）· ${gradeHint}`;
+      return `弯道：点终点 C（劣弧）· 双击完成${parallelHint} · ${gradeHint}`;
     }
     if (POLYLINE_TOOLS.includes(tool)) {
       return '点击加点 · 双击完成 · 右键打断 · 空格拖图';
@@ -1184,11 +1255,17 @@ export function MapCanvas({
         roadLevel={roadLevel}
         drawGrade={drawGrade}
         pathDrawMode={pathDrawMode}
+        parallelEnabled={parallelEnabled}
+        parallelSpacingM={parallelSpacingM}
+        parallelSide={parallelSide}
         canUndo={canUndo}
         onToolChange={onToolChange}
         onRoadLevelChange={onRoadLevelChange}
         onDrawGradeChange={onDrawGradeChange}
         onPathDrawModeChange={onPathDrawModeChange}
+        onParallelEnabledChange={onParallelEnabledChange}
+        onParallelSpacingChange={onParallelSpacingChange}
+        onParallelSideChange={onParallelSideChange}
         onUndo={onUndo}
       />
     </div>

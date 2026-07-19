@@ -15,6 +15,10 @@ import { downloadMapMd, loadMapFromFile } from './io/mapFile';
 import { payloadToProject, projectToPayload } from './io/mapPayload';
 import { exportToPng } from './engine/renderer';
 import { downloadSvg } from './engine/svgExport';
+import {
+  DEFAULT_PARALLEL_SPACING_M,
+  type ParallelSide,
+} from './engine/parallelOffset';
 import type {
   CityProject,
   FeatureGrade,
@@ -41,6 +45,9 @@ function App() {
   const [tool, setTool] = useState<Tool>('pan');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [pathDrawMode, setPathDrawMode] = useState<PathDrawMode>('straight');
+  const [parallelEnabled, setParallelEnabled] = useState(false);
+  const [parallelSpacingM, setParallelSpacingM] = useState(DEFAULT_PARALLEL_SPACING_M);
+  const [parallelSide, setParallelSide] = useState<ParallelSide>('both');
   const [brushSizeM, setBrushSizeM] = useState(DEFAULT_BRUSH_SIZE_M);
   const [brushThickness, setBrushThickness] = useState(DEFAULT_BRUSH_THICKNESS);
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
@@ -452,6 +459,9 @@ function App() {
           roadLevel={roadLevel}
           drawGrade={drawGrade}
           pathDrawMode={pathDrawMode}
+          parallelEnabled={parallelEnabled}
+          parallelSpacingM={parallelSpacingM}
+          parallelSide={parallelSide}
           brushSizeM={brushSizeM}
           brushThickness={brushThickness}
           showJunctions={getLayers(project).junctions !== false}
@@ -463,6 +473,9 @@ function App() {
           onRoadLevelChange={setRoadLevel}
           onDrawGradeChange={setDrawGrade}
           onPathDrawModeChange={setPathDrawMode}
+          onParallelEnabledChange={setParallelEnabled}
+          onParallelSpacingChange={setParallelSpacingM}
+          onParallelSideChange={setParallelSide}
           onBrushSizeChange={setBrushSizeM}
           onBrushThicknessChange={setBrushThickness}
           onShowJunctionsChange={(show) => {
@@ -480,6 +493,9 @@ function App() {
           roadLevel={roadLevel}
           drawGrade={drawGrade}
           pathDrawMode={pathDrawMode}
+          parallelEnabled={parallelEnabled}
+          parallelSpacingM={parallelSpacingM}
+          parallelSide={parallelSide}
           brushSizeM={brushSizeM}
           brushThickness={brushThickness}
           selectedFeatureId={selectedFeatureId}
@@ -492,6 +508,9 @@ function App() {
           }}
           onRoadLevelChange={setRoadLevel}
           onPathDrawModeChange={setPathDrawMode}
+          onParallelEnabledChange={setParallelEnabled}
+          onParallelSpacingChange={setParallelSpacingM}
+          onParallelSideChange={setParallelSide}
           onUndo={handleUndo}
           onProjectChange={updateProject}
         />

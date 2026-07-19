@@ -1264,3 +1264,48 @@ input {
   padding: 0 4px;
   font-variant-numeric: tabular-nums;
 }
+
+.dock-spacing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: rgba(248, 250, 252, 0.8);
+  font-size: 11px;
+}
+
+.dock-spacing input {
+  width: 52px;
+  padding: 3px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.parallel-spacing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.parallel-spacing-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.parallel-spacing-label input {
+  width: 56px;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 1px;
+  background: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

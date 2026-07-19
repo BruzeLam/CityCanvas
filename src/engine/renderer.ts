@@ -569,21 +569,37 @@ function drawPreviewPolyline(
   points: Point[],
   viewport: Viewport,
   palette: StylePalette,
+  style: 'solid' | 'parallel' = 'solid',
 ) {
   if (points.length === 0) return;
   const screen = points.map((p) => toScreen(p, viewport));
 
-  ctx.strokeStyle = palette.preview;
-  ctx.fillStyle = palette.preview;
+  ctx.strokeStyle = style === 'parallel' ? 'rgba(60,100,200,0.55)' : palette.preview;
+  ctx.fillStyle = style === 'parallel' ? 'rgba(60,100,200,0.55)' : palette.preview;
   if (screen.length >= 2) {
     tracePath(ctx, screen, false);
-    ctx.lineWidth = 2;
+    ctx.lineWidth = style === 'parallel' ? 2.5 : 2;
+    if (style === 'parallel') ctx.setLineDash([5, 4]);
     ctx.stroke();
+    ctx.setLineDash([]);
   }
   for (const p of screen) {
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, style === 'parallel' ? 3 : 4, 0, Math.PI * 2);
     ctx.fill();
+  }
+}
+
+function drawParallelPreviews(
+  ctx: CanvasRenderingContext2D,
+  paths: Point[][] | undefined,
+  viewport: Viewport,
+  palette: StylePalette,
+) {
+  if (!paths || paths.length === 0) return;
+  for (const path of paths) {
+    if (path.length < 2) continue;
+    drawPreviewPolyline(ctx, path, viewport, palette, 'parallel');
   }
 }
 
@@ -635,6 +651,8 @@ export type PreviewState =
       points: Point[];
       cursor: Point | null;
       guide?: PreviewGuide | null;
+      /** 平行模式预览路径（不含引导中线） */
+      parallelPaths?: Point[][];
     }
   | {
       mode: 'curve';
@@ -646,6 +664,7 @@ export type PreviewState =
       endHeading: number | null;
       adaptivePreview: boolean;
       guide?: PreviewGuide | null;
+      parallelPaths?: Point[][];
     }
   | { mode: 'brush'; center: Point; radiusM: number; thickness: number; kind: 'land' | 'water' | 'green' }
   | { mode: 'label'; point: Point; text: string };
@@ -984,7 +1003,14 @@ export function renderMap(
   } else if (preview.mode === 'polyline') {
     drawGuideLines(ctx, preview.guide, viewport);
     const pts = preview.cursor ? [...preview.points, preview.cursor] : preview.points;
-    drawPreviewPolyline(ctx, pts, viewport, palette);
+    // 双侧平行时引导中线淡化，突出两条实路预览
+    if (preview.parallelPaths && preview.parallelPaths.length >= 2) {
+      drawPreviewPolyline(ctx, pts, viewport, palette, 'parallel');
+      drawParallelPreviews(ctx, preview.parallelPaths, viewport, palette);
+    } else {
+      drawPreviewPolyline(ctx, pts, viewport, palette);
+      drawParallelPreviews(ctx, preview.parallelPaths, viewport, palette);
+    }
   } else if (preview.mode === 'curve') {
     drawPreviewCurve(
       ctx,
@@ -998,6 +1024,7 @@ export function renderMap(
       viewport,
       palette,
     );
+    drawParallelPreviews(ctx, preview.parallelPaths, viewport, palette);
   } else if (preview.mode === 'brush') {
     drawPreviewBrush(
       ctx,
