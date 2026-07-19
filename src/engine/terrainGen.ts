@@ -41,7 +41,7 @@ export type TerrainGenParams = {
   /** 湖：内陆封闭水域 */
   lakeEnabled: boolean;
   lakeDensity: number;
-  /** 河：顺坡窄水道，刻进同一水色 */
+  /** 河：蜿蜒通往海/湖或地图边缘的窄水道（同水色，无关等高线） */
   riverEnabled: boolean;
   riverDensity: number;
   greenEnabled: boolean;
@@ -306,7 +306,7 @@ function smoothWaterLand(
 
 function generateRiverCellPaths(
   cells: Uint8Array,
-  field: Float32Array,
+  _field: Float32Array,
   cols: number,
   rows: number,
   seed: number,
@@ -319,9 +319,9 @@ function generateRiverCellPaths(
   const outletDist = buildOutletDistance(cells, cols, rows);
 
   for (let i = 0; i < count * 6 && paths.length < count; i++) {
-    const source = pickSourceCell(cells, field, cols, rows, seed + i * 97, used, outletDist);
+    const source = pickSourceCell(cells, cols, rows, seed + i * 97, used, outletDist);
     if (source == null) break;
-    const cellPath = flowToOutlet(cells, field, outletDist, cols, rows, source);
+    const cellPath = meanderToOutlet(cells, outletDist, cols, rows, source, seed + i * 131);
     if (!isValidRiverPath(cellPath, cells, cols, rows, minLen)) continue;
 
     for (const idx of cellPath) {
@@ -453,7 +453,6 @@ function carveWaterChannels(
 
 function pickSourceCell(
   cells: Uint8Array,
-  field: Float32Array,
   cols: number,
   rows: number,
   seed: number,
@@ -471,11 +470,8 @@ function pickSourceCell(
     if (cells[i] !== TERRAIN_LAND || used[i]) continue;
     if (outletDist[i] < minOutlet) continue;
     const edge = Math.min(x, y, cols - 1 - x, rows - 1 - y) / Math.max(cols, rows);
-    const score =
-      field[i] * 1.6 +
-      outletDist[i] * 0.012 +
-      edge * 0.5 +
-      hashUnit(seed + a) * 0.1;
+    // 偏内陆、离出水口稍远，不看「海拔」
+    const score = outletDist[i] * 0.02 + edge * 0.9 + hashUnit(seed + a) * 0.15;
     if (score > bestScore) {
       bestScore = score;
       best = i;
@@ -485,16 +481,16 @@ function pickSourceCell(
 }
 
 /**
- * 顺坡 + 出水口吸引：保证入海/入湖，或无大水体时流到地图边缘（可贯穿）。
- * 局部洼地不会半路断流。
+ * 平面蜿蜒水道：朝海/湖（或地图边缘）前进，用噪声左右摆动。
+ * 不依赖等高线/高程——本产品无等高线。
  */
-function flowToOutlet(
+function meanderToOutlet(
   cells: Uint8Array,
-  field: Float32Array,
   outletDist: Float32Array,
   cols: number,
   rows: number,
   start: number,
+  seed: number,
 ): number[] {
   const path: number[] = [start];
   const visited = new Set<number>([start]);
@@ -516,7 +512,6 @@ function flowToOutlet(
     const x = cur % cols;
     const y = (cur / cols) | 0;
 
-    // 已贴水域或贴边 → 完成
     let done = false;
     for (const [dx, dy] of neighbors) {
       if (Math.abs(dx) + Math.abs(dy) !== 1) continue;
@@ -547,8 +542,11 @@ function flowToOutlet(
         bestCost = -Infinity;
         break;
       }
-      // 高度 + 到出水口距离（更重），逼着河往海/边流
-      const cost = field[j] * 0.55 + outletDist[j] * 0.028;
+      // 主目标：靠近出水口；噪声制造蜿蜒，不是顺坡
+      const wander =
+        (valueNoise2d(nx * 0.11, ny * 0.11, seed) - 0.5) * 2.4 +
+        (valueNoise2d(nx * 0.04 + step * 0.02, ny * 0.04, seed + 17) - 0.5) * 1.2;
+      const cost = outletDist[j] + wander;
       if (cost < bestCost) {
         bestCost = cost;
         best = j;
@@ -556,7 +554,6 @@ function flowToOutlet(
     }
 
     if (best < 0) {
-      // 死胡同：强制朝出水口更近的格子走一步（可轻微上坡）
       let escape = -1;
       let escapeD = outletDist[cur];
       for (const [dx, dy] of neighbors) {
