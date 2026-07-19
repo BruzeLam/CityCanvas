@@ -115,8 +115,6 @@ export function generateLandscape(
   const field = buildHeightField(cols, rows, seed);
   cells.fill(TERRAIN_LAND);
 
-  const anyWater = params.oceanEnabled || params.lakeEnabled || params.riverEnabled;
-
   if (params.oceanEnabled) {
     const oceanRatio = clampOceanRatio(params.oceanRatio);
     const threshold = percentileThreshold(field, oceanRatio);
@@ -140,16 +138,16 @@ export function generateLandscape(
     );
   }
 
+  // 大水体先清理；河道稍后刻，避免多数票把窄河抹掉
+  if (params.oceanEnabled || params.lakeEnabled) {
+    cleanupIslands(cells, cols, rows);
+    despeckle(cells, cols, rows);
+  }
+
   if (params.riverEnabled) {
     const density = clampRiverDensity(params.riverDensity);
     const cellPaths = generateRiverCellPaths(cells, field, cols, rows, seed, density);
     carveWaterChannels(cells, cols, rows, cellPaths);
-  }
-
-  if (anyWater) {
-    smoothWaterLand(cells, cols, rows, 1);
-    cleanupIslands(cells, cols, rows);
-    despeckle(cells, cols, rows);
   }
 
   let waterPct = 0;
@@ -317,21 +315,111 @@ function generateRiverCellPaths(
   const count = Math.max(1, Math.round(1 + density * 5));
   const paths: number[][] = [];
   const used = new Uint8Array(cols * rows);
-  const minLen = Math.max(12, Math.floor(Math.max(cols, rows) * 0.08));
+  const minLen = Math.max(16, Math.floor(Math.max(cols, rows) * 0.18));
+  const outletDist = buildOutletDistance(cells, cols, rows);
 
-  for (let i = 0; i < count * 4 && paths.length < count; i++) {
-    const source = pickSourceCell(cells, field, cols, rows, seed + i * 97, used);
+  for (let i = 0; i < count * 6 && paths.length < count; i++) {
+    const source = pickSourceCell(cells, field, cols, rows, seed + i * 97, used, outletDist);
     if (source == null) break;
-    const cellPath = flowDownhill(cells, field, cols, rows, source);
-    if (cellPath.length < minLen) continue;
+    const cellPath = flowToOutlet(cells, field, outletDist, cols, rows, source);
+    if (!isValidRiverPath(cellPath, cells, cols, rows, minLen)) continue;
 
     for (const idx of cellPath) {
-      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 4);
+      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 5);
     }
     paths.push(cellPath);
   }
 
   return paths;
+}
+
+/** 到出水口的距离：优先已有水域，否则地图边界（便于无海时贯穿） */
+function buildOutletDistance(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+): Float32Array {
+  const n = cols * rows;
+  const dist = new Float32Array(n);
+  dist.fill(1e9);
+  const queue: number[] = [];
+
+  let hasWater = false;
+  for (let i = 0; i < n; i++) {
+    if (cells[i] === TERRAIN_WATER) {
+      dist[i] = 0;
+      queue.push(i);
+      hasWater = true;
+    }
+  }
+  if (!hasWater) {
+    for (let x = 0; x < cols; x++) {
+      const top = x;
+      const bot = (rows - 1) * cols + x;
+      dist[top] = 0;
+      dist[bot] = 0;
+      queue.push(top, bot);
+    }
+    for (let y = 1; y < rows - 1; y++) {
+      const left = y * cols;
+      const right = y * cols + (cols - 1);
+      dist[left] = 0;
+      dist[right] = 0;
+      queue.push(left, right);
+    }
+  }
+
+  let qh = 0;
+  while (qh < queue.length) {
+    const cur = queue[qh++]!;
+    const x = cur % cols;
+    const y = (cur / cols) | 0;
+    const nd = dist[cur] + 1;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const j = ny * cols + nx;
+      if (nd < dist[j]) {
+        dist[j] = nd;
+        queue.push(j);
+      }
+    }
+  }
+  return dist;
+}
+
+function isValidRiverPath(
+  path: number[],
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  minLen: number,
+): boolean {
+  if (path.length < minLen) return false;
+  const end = path[path.length - 1]!;
+  const x = end % cols;
+  const y = (end / cols) | 0;
+  if (cells[end] === TERRAIN_WATER) return true;
+  // 邻接水域也算入海/入湖
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ] as const) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+    if (cells[ny * cols + nx] === TERRAIN_WATER) return true;
+  }
+  // 无大水体时：贯穿到地图边缘
+  return x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
 }
 
 function carveWaterChannels(
@@ -344,20 +432,19 @@ function carveWaterChannels(
     if (path.length < 2) continue;
     const n = path.length;
     for (let i = 0; i < n; i++) {
-      const idx = path[i];
+      const idx = path[i]!;
       const x = idx % cols;
       const y = (idx / cols) | 0;
-      // 上游窄、下游（近水体）略宽
+      // 全程至少 1 格宽，下游/河口加宽，避免「线断」
       const t = i / (n - 1);
-      const radius = t > 0.72 ? 2 : t > 0.4 ? 1 : 0;
+      const radius = t > 0.78 ? 2 : 1;
       for (let dy = -radius; dy <= radius; dy++) {
         for (let dx = -radius; dx <= radius; dx++) {
-          if (dx * dx + dy * dy > radius * radius + 0.2) continue;
+          if (dx * dx + dy * dy > radius * radius + 0.35) continue;
           const nx = x + dx;
           const ny = y + dy;
           if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-          const j = ny * cols + nx;
-          if (cells[j] !== TERRAIN_WATER) cells[j] = TERRAIN_WATER;
+          cells[ny * cols + nx] = TERRAIN_WATER;
         }
       }
     }
@@ -371,27 +458,24 @@ function pickSourceCell(
   rows: number,
   seed: number,
   used: Uint8Array,
+  outletDist: Float32Array,
 ): number | null {
   let best = -1;
   let bestScore = -Infinity;
-  const attempts = 100;
+  const attempts = 120;
+  const minOutlet = Math.max(cols, rows) * 0.22;
   for (let a = 0; a < attempts; a++) {
     const x = Math.floor(hashUnit(seed + a * 3) * cols);
     const y = Math.floor(hashUnit(seed + a * 5 + 1) * rows);
     const i = y * cols + x;
     if (cells[i] !== TERRAIN_LAND || used[i]) continue;
+    if (outletDist[i] < minOutlet) continue;
     const edge = Math.min(x, y, cols - 1 - x, rows - 1 - y) / Math.max(cols, rows);
-    let nearWater = false;
-    for (let dy = -5; dy <= 5 && !nearWater; dy++) {
-      for (let dx = -5; dx <= 5; dx++) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-        if (cells[ny * cols + nx] === TERRAIN_WATER) nearWater = true;
-      }
-    }
-    if (nearWater) continue;
-    const score = field[i] * 2 + edge * 0.85 + hashUnit(seed + a) * 0.12;
+    const score =
+      field[i] * 1.6 +
+      outletDist[i] * 0.012 +
+      edge * 0.5 +
+      hashUnit(seed + a) * 0.1;
     if (score > bestScore) {
       bestScore = score;
       best = i;
@@ -400,9 +484,14 @@ function pickSourceCell(
   return best >= 0 ? best : null;
 }
 
-function flowDownhill(
+/**
+ * 顺坡 + 出水口吸引：保证入海/入湖，或无大水体时流到地图边缘（可贯穿）。
+ * 局部洼地不会半路断流。
+ */
+function flowToOutlet(
   cells: Uint8Array,
   field: Float32Array,
+  outletDist: Float32Array,
   cols: number,
   rows: number,
   start: number,
@@ -410,66 +499,89 @@ function flowDownhill(
   const path: number[] = [start];
   const visited = new Set<number>([start]);
   let cur = start;
-  const maxSteps = Math.floor(Math.max(cols, rows) * 2);
+  const maxSteps = Math.floor(Math.max(cols, rows) * 3);
+
+  const neighbors = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+  ] as const;
 
   for (let step = 0; step < maxSteps; step++) {
     const x = cur % cols;
     const y = (cur / cols) | 0;
 
-    let hitWater = false;
-    for (const [dx, dy] of [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-    ] as const) {
+    // 已贴水域或贴边 → 完成
+    let done = false;
+    for (const [dx, dy] of neighbors) {
+      if (Math.abs(dx) + Math.abs(dy) !== 1) continue;
       const nx = x + dx;
       const ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) {
+        done = true;
+        break;
+      }
       if (cells[ny * cols + nx] === TERRAIN_WATER) {
-        hitWater = true;
+        done = true;
         break;
       }
     }
-    if (hitWater) break;
+    if (done) break;
     if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) break;
 
-    let next = -1;
-    let nextH = field[cur];
-    for (const [dx, dy] of [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-      [1, 1],
-      [1, -1],
-      [-1, 1],
-      [-1, -1],
-    ] as const) {
+    let best = -1;
+    let bestCost = Infinity;
+    for (const [dx, dy] of neighbors) {
       const nx = x + dx;
       const ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
       const j = ny * cols + nx;
       if (visited.has(j)) continue;
       if (cells[j] === TERRAIN_WATER) {
-        next = j;
-        nextH = -Infinity;
+        best = j;
+        bestCost = -Infinity;
         break;
       }
-      if (field[j] < nextH - 1e-6) {
-        nextH = field[j];
-        next = j;
+      // 高度 + 到出水口距离（更重），逼着河往海/边流
+      const cost = field[j] * 0.55 + outletDist[j] * 0.028;
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = j;
       }
     }
 
-    if (next < 0) break;
-    if (cells[next] === TERRAIN_WATER) {
-      path.push(next);
+    if (best < 0) {
+      // 死胡同：强制朝出水口更近的格子走一步（可轻微上坡）
+      let escape = -1;
+      let escapeD = outletDist[cur];
+      for (const [dx, dy] of neighbors) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+        const j = ny * cols + nx;
+        if (visited.has(j)) continue;
+        if (outletDist[j] < escapeD - 1e-6) {
+          escapeD = outletDist[j];
+          escape = j;
+        }
+      }
+      if (escape < 0) break;
+      best = escape;
+    }
+
+    if (cells[best] === TERRAIN_WATER) {
+      path.push(best);
       break;
     }
-    visited.add(next);
-    path.push(next);
-    cur = next;
+    visited.add(best);
+    path.push(best);
+    cur = best;
+    if (outletDist[cur] <= 0) break;
   }
 
   return path;

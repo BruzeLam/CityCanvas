@@ -147,9 +147,8 @@ export function ProjectSetup({
   ]);
 
   const landscapePreview = useMemo(() => {
-    const full = preferredTerrainCellSizeM(preview);
-    const previewCell = Math.max(full, Math.round(full * 1.6));
-    return generateLandscape(preview, genParams, previewCell);
+    // 预览与成图同粒度，便于看清河网分布
+    return generateLandscape(preview, genParams, preferredTerrainCellSizeM(preview));
   }, [preview.widthM, preview.heightM, genParams]);
 
   useEffect(() => {
@@ -159,8 +158,8 @@ export function ProjectSetup({
     const paint = () => {
       const aspect = preview.widthM / preview.heightM;
       const short = window.innerHeight < 820;
-      const maxW = short ? 160 : 220;
-      const maxH = short ? 100 : 140;
+      const maxW = short ? 260 : 360;
+      const maxH = short ? 220 : 320;
       let w = maxW;
       let h = Math.round(maxW / aspect);
       if (h > maxH) {
@@ -530,7 +529,7 @@ export function ProjectSetup({
                   </button>
                 </div>
                 <p className="tool-note">
-                  海/湖/河分控生成，底图同色「水域」，形状自辨。创建后锁定，可用刷子微调。
+                  海/湖/河分控、同色水域。河流会入海/入湖或贯穿到地图边缘。创建后锁定，可用刷子微调。
                 </p>
               </div>
             </div>
