@@ -1,5 +1,5 @@
 import type { MapSettings } from '../types';
-import { warpedFbm } from './noise';
+import { fbm2d, valueNoise2d } from './noise';
 import {
   DEFAULT_TERRAIN_CELL_M,
   TERRAIN_LAND,
@@ -28,9 +28,12 @@ export function randomTerrainSeed(): number {
 }
 
 /**
- * 架空海陆 MVP：
- * - 扭曲噪声场 + 轻度「外海偏一侧」偏置
- * - 按分位数切出 oceanRatio 的水域，其余陆地
+ * 架空海陆（自然尺度）：
+ * 1. 在归一化 UV 上采低频大陆噪声（整图仅 1～3 个大块）
+ * 2. 轻度域扭曲做出海湾/半岛，不加高频碎斑
+ * 3. 外海偏一侧（大湾感）
+ * 4. 分位数切海洋比例
+ * 5. 清掉碎岛/碎湖，保留贴边的主水体
  */
 export function generateTerrain(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
@@ -44,31 +47,46 @@ export function generateTerrain(
   const n = cols * rows;
   if (n === 0) return grid;
 
-  // 噪声采样尺度：大地图用更低频率，保持海湾/半岛尺度
-  const scale = Math.max(cols, rows) / 48;
   const field = new Float32Array(n);
 
-  // 外海偏置方向由种子决定（架空，非真实方位）
-  const biasAngle = (hashAngle(seed) * Math.PI) / 180;
+  // 外海方向由种子决定
+  const biasAngle = (hashUnit(seed) * Math.PI * 2);
   const biasX = Math.cos(biasAngle);
   const biasY = Math.sin(biasAngle);
+
+  // 大陆特征尺度：整图大约 1.4～2.2 个「大陆波」——越大越碎，越小越整块
+  const continentFreq = 1.55 + hashUnit(seed + 7) * 0.55;
+  // 扭曲强度（只扭低频，不引入盐胡椒）
+  const warpAmt = 0.12 + hashUnit(seed + 13) * 0.1;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const u = (c + 0.5) / cols;
       const v = (r + 0.5) / rows;
-      const nx = (c / scale) * 0.85;
-      const ny = (r / scale) * 0.85;
-      let h = warpedFbm(nx, ny, seed, 0.45);
 
-      // 向某一侧拉低 → 大片开敞水域感（大湾偏向，仍随种子变向）
-      const cx = u - 0.5;
-      const cy = v - 0.5;
-      const side = cx * biasX + cy * biasY; // -0.7..0.7
-      h -= Math.max(0, side) * 0.22;
-      // 边缘略压低，减少「地图切边全是陆地」
-      const edge = Math.min(u, v, 1 - u, 1 - v);
-      if (edge < 0.08) h -= (0.08 - edge) * 1.2;
+      // 低频扭曲 UV（扭曲场本身也是低频）
+      const wu =
+        (valueNoise2d(u * 1.1, v * 1.1, seed + 101) * 2 - 1) * warpAmt;
+      const wv =
+        (valueNoise2d(u * 1.1, v * 1.1, seed + 191) * 2 - 1) * warpAmt;
+      const uu = u + wu;
+      const vv = v + wv;
+
+      // 主大陆场：少八度、高增益衰减 → 大块平滑
+      let h = fbm2d(uu * continentFreq, vv * continentFreq, seed, 3, 2.0, 0.42);
+
+      // 第二层极低频：拉开「主陆 vs 外海」对比，避免花斑阈值
+      const macro = fbm2d(uu * 0.7, vv * 0.7, seed + 33, 2, 2.0, 0.5);
+      h = h * 0.62 + macro * 0.38;
+
+      // 外海偏置：一侧明显更低 → 连贯海湾/外洋
+      const side = (u - 0.5) * biasX + (v - 0.5) * biasY;
+      h -= Math.max(0, side) * 0.38;
+      h += Math.max(0, -side) * 0.06; // 对侧略抬，形成「陆地在一侧、海在一侧」
+
+      // 极弱岸线褶皱（只在最终高度上加一点，幅度很小）
+      const ripples = valueNoise2d(u * 6.5, v * 6.5, seed + 77);
+      h += (ripples - 0.5) * 0.04;
 
       field[r * cols + c] = h;
     }
@@ -79,21 +97,149 @@ export function generateTerrain(
     cells[i] = field[i] <= threshold ? TERRAIN_WATER : TERRAIN_LAND;
   }
 
+  // 后处理：去碎斑，保主海连通
+  cleanupTerrain(cells, cols, rows);
+
   return grid;
 }
 
-function hashAngle(seed: number): number {
+/**
+ * - 去掉不贴边的小水域（碎湖 → 陆地），保留贴地图边的主海
+ * - 去掉海里的碎岛（小陆斑 → 水）
+ */
+function cleanupTerrain(cells: Uint8Array, cols: number, rows: number): void {
+  const n = cols * rows;
+  const minOceanKeep = Math.max(40, Math.floor(n * 0.012));
+  const minIslandKeep = Math.max(24, Math.floor(n * 0.006));
+
+  // 1) 水域连通域：贴边的留下；不贴边且偏小的填成陆
+  const waterLabels = labelComponents(cells, cols, rows, TERRAIN_WATER);
+  for (const comp of waterLabels.components) {
+    const touchesBorder = comp.cells.some((i) => {
+      const x = i % cols;
+      const y = (i / cols) | 0;
+      return x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
+    });
+    if (!touchesBorder && comp.cells.length < minOceanKeep * 3) {
+      for (const i of comp.cells) cells[i] = TERRAIN_LAND;
+    } else if (touchesBorder && comp.cells.length < minOceanKeep) {
+      // 贴边但极小的水斑也清掉
+      for (const i of comp.cells) cells[i] = TERRAIN_LAND;
+    }
+  }
+
+  // 2) 陆地连通域：被水包围的碎岛填成水（大岛保留）
+  const landLabels = labelComponents(cells, cols, rows, TERRAIN_LAND);
+  // 找最大陆块，其余小的若全被水围可填
+  let largestLand = 0;
+  for (const comp of landLabels.components) {
+    largestLand = Math.max(largestLand, comp.cells.length);
+  }
+  for (const comp of landLabels.components) {
+    if (comp.cells.length >= minIslandKeep) continue;
+    if (comp.cells.length >= largestLand * 0.35) continue; // 第二大陆也留着
+    const touchesBorder = comp.cells.some((i) => {
+      const x = i % cols;
+      const y = (i / cols) | 0;
+      return x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
+    });
+    // 贴边的小陆岬保留；海里孤岛去掉
+    if (!touchesBorder) {
+      for (const i of comp.cells) cells[i] = TERRAIN_WATER;
+    }
+  }
+
+  // 3) 一次轻量平滑：去掉 1 格毛刺（多数邻居不同则翻转）
+  despeckle(cells, cols, rows);
+}
+
+type Component = { cells: number[] };
+
+function labelComponents(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  target: number,
+): { components: Component[] } {
+  const n = cols * rows;
+  const seen = new Uint8Array(n);
+  const components: Component[] = [];
+  const stack: number[] = [];
+
+  for (let i = 0; i < n; i++) {
+    if (cells[i] !== target || seen[i]) continue;
+    const comp: number[] = [];
+    stack.length = 0;
+    stack.push(i);
+    seen[i] = 1;
+    while (stack.length) {
+      const cur = stack.pop()!;
+      comp.push(cur);
+      const x = cur % cols;
+      const y = (cur / cols) | 0;
+      const tryPush = (nx: number, ny: number) => {
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) return;
+        const j = ny * cols + nx;
+        if (seen[j] || cells[j] !== target) return;
+        seen[j] = 1;
+        stack.push(j);
+      };
+      tryPush(x - 1, y);
+      tryPush(x + 1, y);
+      tryPush(x, y - 1);
+      tryPush(x, y + 1);
+    }
+    components.push({ cells: comp });
+  }
+  return { components };
+}
+
+function despeckle(cells: Uint8Array, cols: number, rows: number): void {
+  const n = cols * rows;
+  const next = new Uint8Array(cells);
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      const i = y * cols + x;
+      const me = cells[i];
+      let same = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (cells[(y + dy) * cols + (x + dx)] === me) same++;
+        }
+      }
+      // 8 邻域里少于 2 个同类 → 孤立毛刺，取多数
+      if (same <= 1) {
+        let water = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            if (cells[(y + dy) * cols + (x + dx)] === TERRAIN_WATER) water++;
+          }
+        }
+        next[i] = water >= 4 ? TERRAIN_WATER : TERRAIN_LAND;
+      }
+    }
+  }
+  cells.set(next);
+}
+
+function hashUnit(seed: number): number {
   let x = seed | 0;
   x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
   x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
-  return ((x >>> 0) % 3600) / 10;
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
 }
 
 /** 使约 ratio 比例的样本 ≤ 阈值 */
 function percentileThreshold(field: Float32Array, ratio: number): number {
-  const sample = field.length > 12000 ? downsample(field, 12000) : Float32Array.from(field);
+  const sample =
+    field.length > 16000 ? downsample(field, 16000) : Float32Array.from(field);
   sample.sort();
-  const idx = Math.max(0, Math.min(sample.length - 1, Math.floor(sample.length * ratio)));
+  const idx = Math.max(
+    0,
+    Math.min(sample.length - 1, Math.floor(sample.length * ratio)),
+  );
   return sample[idx];
 }
 

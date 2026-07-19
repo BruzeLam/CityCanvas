@@ -101,9 +101,9 @@ export function ProjectSetup({
   const preview = buildSettings();
 
   const generatedTerrain = useMemo(() => {
-    // 预览用稍粗格子加速；创建时再用标准 25m
+    // 预览与成图用同一套 UV 低频规则；格子略粗只为加速，形态一致
     const previewCell =
-      Math.max(preview.widthM, preview.heightM) > 12000 ? 50 : 35;
+      Math.max(preview.widthM, preview.heightM) > 15000 ? 40 : 28;
     return generateTerrain(
       preview,
       { seed: terrainSeed, oceanRatio: clampOceanRatio(oceanRatio) },
