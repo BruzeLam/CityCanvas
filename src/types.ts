@@ -139,6 +139,11 @@ export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
   grid: '网格',
 };
 
+export type TerrainSeedMeta = {
+  seed: number;
+  oceanRatio: number;
+};
+
 export type CityProject = {
   /** 云端存档 ID（登录后自动关联） */
   cloudId?: string;
@@ -147,6 +152,11 @@ export type CityProject = {
   features: MapFeature[];
   /** 刷子地貌栅格：默认全陆地；水域/绿地叠色，无等高线 */
   terrain?: TerrainGrid;
+  /**
+   * 开局生成元数据（仅记录；编辑页不可整图重生）。
+   * 刷子微调后地形会偏离种子，属预期。
+   */
+  terrainSeed?: TerrainSeedMeta;
   viewport: Viewport;
   mapStyle: MapStyle;
   layers?: LayerVisibility;
@@ -203,12 +213,17 @@ export function createProject(
   name: string,
   settings: MapSettings,
   mapStyle: MapStyle = 'navigation',
+  options?: {
+    terrain?: TerrainGrid;
+    terrainSeed?: CityProject['terrainSeed'];
+  },
 ): CityProject {
   return {
     name,
     settings,
     features: [],
-    terrain: createTerrain(settings),
+    terrain: options?.terrain ?? createTerrain(settings),
+    terrainSeed: options?.terrainSeed,
     viewport: { x: 0, y: 0, zoom: 1 },
     mapStyle,
     layers: { ...DEFAULT_LAYERS },

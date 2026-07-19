@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   MAP_SIZE_PRESETS,
   SCALE_PRESETS,
@@ -7,6 +7,15 @@ import {
   formatDistance,
 } from '../constants/mapPresets';
 import { useAuth } from '../context/AuthContext';
+import {
+  DEFAULT_OCEAN_RATIO,
+  OCEAN_RATIO_MAX,
+  OCEAN_RATIO_MIN,
+  clampOceanRatio,
+  generateTerrain,
+  paintTerrainPreview,
+  randomTerrainSeed,
+} from '../engine/terrainGen';
 import { api, type CloudMapSummary } from '../io/api';
 import type { MapSettings } from '../types';
 import { createProject } from '../types';
@@ -38,6 +47,10 @@ export function ProjectSetup({
   const [scaleValue, setScaleValue] = useState(10000);
   const [cloudMaps, setCloudMaps] = useState<CloudMapSummary[]>([]);
   const [loadingMaps, setLoadingMaps] = useState(false);
+
+  const [terrainSeed, setTerrainSeed] = useState(() => randomTerrainSeed());
+  const [oceanRatio, setOceanRatio] = useState(DEFAULT_OCEAN_RATIO);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     if (!onBack) return;
@@ -87,8 +100,47 @@ export function ProjectSetup({
 
   const preview = buildSettings();
 
+  const generatedTerrain = useMemo(() => {
+    // 预览用稍粗格子加速；创建时再用标准 25m
+    const previewCell =
+      Math.max(preview.widthM, preview.heightM) > 12000 ? 50 : 35;
+    return generateTerrain(
+      preview,
+      { seed: terrainSeed, oceanRatio: clampOceanRatio(oceanRatio) },
+      previewCell,
+    );
+  }, [preview.widthM, preview.heightM, terrainSeed, oceanRatio]);
+
+  useEffect(() => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+    const aspect = preview.widthM / preview.heightM;
+    const maxW = 320;
+    const maxH = 200;
+    let w = maxW;
+    let h = Math.round(maxW / aspect);
+    if (h > maxH) {
+      h = maxH;
+      w = Math.round(maxH * aspect);
+    }
+    canvas.width = w;
+    canvas.height = h;
+    paintTerrainPreview(canvas, generatedTerrain);
+  }, [generatedTerrain, preview.widthM, preview.heightM]);
+
   const handleCreate = () => {
-    onCreate(createProject(name.trim() || '未命名城市', preview));
+    const settings = buildSettings();
+    const ratio = clampOceanRatio(oceanRatio);
+    const terrain = generateTerrain(settings, {
+      seed: terrainSeed,
+      oceanRatio: ratio,
+    });
+    onCreate(
+      createProject(name.trim() || '未命名城市', settings, 'navigation', {
+        terrain,
+        terrainSeed: { seed: terrainSeed, oceanRatio: ratio },
+      }),
+    );
   };
 
   const handleDeleteCloud = async (id: string, mapName: string) => {
@@ -99,13 +151,16 @@ export function ProjectSetup({
 
   if (!user && !localOnly) return null;
 
+  const oceanPct = Math.round(clampOceanRatio(oceanRatio) * 100);
+  const landPct = 100 - oceanPct;
+
   return (
     <div className="setup-overlay">
       <div className="setup-card setup-card-wide">
         <header className="setup-header setup-header-row">
           <div>
             <h1>CityCanvas</h1>
-            <p>开始绘制前，先设定地图范围与比例尺</p>
+            <p>设定范围、比例尺，并生成架空海陆底图</p>
           </div>
           <div className="setup-user">
             {onBack && (
@@ -266,6 +321,47 @@ export function ProjectSetup({
                 />
               </label>
             )}
+          </fieldset>
+
+          <fieldset className="setup-field terrain-seed-field">
+            <span>地貌种子 · 架空海陆</span>
+            <div className="terrain-seed-layout">
+              <div className="terrain-seed-preview">
+                <canvas ref={previewCanvasRef} className="terrain-preview-canvas" />
+                <p className="terrain-preview-legend">
+                  <span className="swatch land" /> 陆地 {landPct}%
+                  <span className="swatch water" /> 海洋 {oceanPct}%
+                </p>
+              </div>
+              <div className="terrain-seed-controls">
+                <label className="terrain-seed-row">
+                  <span>海洋比例</span>
+                  <input
+                    type="range"
+                    min={OCEAN_RATIO_MIN}
+                    max={OCEAN_RATIO_MAX}
+                    step={0.01}
+                    value={oceanRatio}
+                    onChange={(e) => setOceanRatio(Number(e.target.value))}
+                  />
+                  <em>{oceanPct}%</em>
+                </label>
+                <div className="terrain-seed-row">
+                  <span>种子</span>
+                  <code className="terrain-seed-code">{terrainSeed.toString(16)}</code>
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => setTerrainSeed(randomTerrainSeed())}
+                  >
+                    刷新
+                  </button>
+                </div>
+                <p className="tool-note">
+                  创建后锁定底图，编辑页不可整图重生；可用刷子微调海陆。
+                </p>
+              </div>
+            </div>
           </fieldset>
 
           <div className="setup-preview">

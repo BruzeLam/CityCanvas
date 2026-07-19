@@ -18,6 +18,7 @@ export type MapPayload = {
   features: MapFeature[];
   layers?: CityProject['layers'];
   terrain?: TerrainGridJSON;
+  terrainSeed?: CityProject['terrainSeed'];
 };
 
 export function projectToPayload(project: CityProject): MapPayload {
@@ -30,6 +31,7 @@ export function projectToPayload(project: CityProject): MapPayload {
     features: project.features.filter((f) => !isLegacyLandformPolygon(f.kind)),
     layers: project.layers,
     terrain: terrainToJSON(terrain),
+    terrainSeed: project.terrainSeed,
   };
 }
 
@@ -53,6 +55,16 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
   const terrain =
     terrainFromJSON(payload.terrain) ?? ensureTerrain(payload.settings, null);
 
+  const terrainSeed =
+    payload.terrainSeed &&
+    typeof payload.terrainSeed.seed === 'number' &&
+    typeof payload.terrainSeed.oceanRatio === 'number'
+      ? {
+          seed: payload.terrainSeed.seed >>> 0,
+          oceanRatio: payload.terrainSeed.oceanRatio,
+        }
+      : undefined;
+
   return {
     cloudId,
     name: payload.name || '未命名城市',
@@ -60,6 +72,7 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
     mapStyle: payload.mapStyle ?? 'navigation',
     features: reweaveAllCrossings(features),
     terrain: ensureTerrain(payload.settings, terrain),
+    terrainSeed,
     viewport: { x: 0, y: 0, zoom: 1 },
     layers: payload.layers,
   };
