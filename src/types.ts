@@ -141,7 +141,17 @@ export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
 
 export type TerrainSeedMeta = {
   seed: number;
+  /** 是否生成海洋；缺省视为 true（兼容旧存档） */
+  oceanEnabled?: boolean;
   oceanRatio: number;
+  /** 是否生成河流；缺省视为 false（旧存档无河） */
+  riverEnabled?: boolean;
+  /** 河网密度 0..1 */
+  riverDensity?: number;
+  /** 是否生成绿地；缺省视为 false（旧存档无绿地种子） */
+  greenEnabled?: boolean;
+  /** 绿地占陆地比例 0..1 */
+  greenDensity?: number;
 };
 
 export type CityProject = {
@@ -185,6 +195,9 @@ export const LAYER_LABELS: Record<FeatureKind, string> = {
 /** 地貌刷子工具：陆地 / 水域 / 绿地（山地平面色，非等高线） */
 export const TERRAIN_BRUSH_TOOLS: Tool[] = ['land', 'ocean', 'mountain'];
 
+/** 含橡皮：与地貌刷同样按住拖拽（橡皮额外擦除刷区内要素） */
+export const BRUSH_TOOLS: Tool[] = [...TERRAIN_BRUSH_TOOLS, 'eraser'];
+
 /** @deprecated 旧矢量面工具名，等同 TERRAIN_BRUSH_TOOLS */
 export const LANDFORM_TOOLS: Tool[] = TERRAIN_BRUSH_TOOLS;
 
@@ -216,12 +229,13 @@ export function createProject(
   options?: {
     terrain?: TerrainGrid;
     terrainSeed?: CityProject['terrainSeed'];
+    features?: MapFeature[];
   },
 ): CityProject {
   return {
     name,
     settings,
-    features: [],
+    features: options?.features ?? [],
     terrain: options?.terrain ?? createTerrain(settings),
     terrainSeed: options?.terrainSeed,
     viewport: { x: 0, y: 0, zoom: 1 },

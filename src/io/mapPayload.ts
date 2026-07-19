@@ -61,7 +61,18 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
     typeof payload.terrainSeed.oceanRatio === 'number'
       ? {
           seed: payload.terrainSeed.seed >>> 0,
+          oceanEnabled: payload.terrainSeed.oceanEnabled !== false,
           oceanRatio: payload.terrainSeed.oceanRatio,
+          riverEnabled: payload.terrainSeed.riverEnabled === true,
+          riverDensity:
+            typeof payload.terrainSeed.riverDensity === 'number'
+              ? payload.terrainSeed.riverDensity
+              : undefined,
+          greenEnabled: payload.terrainSeed.greenEnabled === true,
+          greenDensity:
+            typeof payload.terrainSeed.greenDensity === 'number'
+              ? payload.terrainSeed.greenDensity
+              : undefined,
         }
       : undefined;
 

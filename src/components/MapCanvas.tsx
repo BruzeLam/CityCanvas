@@ -12,7 +12,7 @@ import type {
 import {
   PATH_GUIDED_TOOLS,
   POLYLINE_TOOLS,
-  TERRAIN_BRUSH_TOOLS,
+  BRUSH_TOOLS,
   clampGrade,
   clampToMap,
   createId,
@@ -46,7 +46,7 @@ import {
   RAMP_ATTACH_M,
 } from '../engine/junctions';
 import { dist } from '../engine/pathUtils';
-import { findFeatureAt, findVertexIndex } from '../engine/hitTest';
+import { findFeatureAt, findFeaturesInRadius, findVertexIndex } from '../engine/hitTest';
 import { fitViewport, renderMap, type PreviewGuide, type PreviewState } from '../engine/renderer';
 import {
   TERRAIN_GREEN,
@@ -98,14 +98,14 @@ function toolKind(tool: Tool): FeatureKind | null {
 }
 
 function brushCellForTool(tool: Tool): TerrainCell | null {
-  if (tool === 'land') return TERRAIN_LAND;
+  if (tool === 'land' || tool === 'eraser') return TERRAIN_LAND;
   if (tool === 'ocean') return TERRAIN_WATER;
   if (tool === 'mountain') return TERRAIN_GREEN;
   return null;
 }
 
 function brushPreviewKind(tool: Tool): 'land' | 'water' | 'green' | null {
-  if (tool === 'land') return 'land';
+  if (tool === 'land' || tool === 'eraser') return 'land';
   if (tool === 'ocean') return 'water';
   if (tool === 'mountain') return 'green';
   return null;
@@ -177,7 +177,7 @@ export function MapCanvas({
       }
       return segs;
     });
-  const isTerrainBrush = TERRAIN_BRUSH_TOOLS.includes(tool);
+  const isBrushTool = BRUSH_TOOLS.includes(tool);
   const isPathGuided = PATH_GUIDED_TOOLS.includes(tool);
 
   useEffect(() => {
@@ -217,7 +217,7 @@ export function MapCanvas({
   };
 
   const preview: PreviewState = (() => {
-    if (isTerrainBrush && brushCursor) {
+    if (isBrushTool && brushCursor) {
       const kind = brushPreviewKind(tool);
       if (kind) {
         return {
@@ -400,14 +400,26 @@ export function MapCanvas({
   }, []);
 
   const stampBrushPoints = useCallback(
-    (points: Point[], cell: TerrainCell) => {
+    (points: Point[], cell: TerrainCell, eraseFeatures = false) => {
       if (points.length === 0) return;
       const current = projectRef.current;
       const terrain = ensureTerrain(current.settings, current.terrain);
       for (const p of points) {
         stampBrush(terrain, p, brushSizeM, brushThickness, cell);
       }
-      const next = { ...current, terrain };
+      let features = current.features;
+      if (eraseFeatures) {
+        const removeIds = new Set<string>();
+        for (const p of points) {
+          for (const f of findFeaturesInRadius(features, p, brushSizeM)) {
+            removeIds.add(f.id);
+          }
+        }
+        if (removeIds.size > 0) {
+          features = features.filter((f) => !removeIds.has(f.id));
+        }
+      }
+      const next = { ...current, terrain, features };
       projectRef.current = next;
       onProjectChange(next);
     },
@@ -415,11 +427,11 @@ export function MapCanvas({
   );
 
   const stampBrushStroke = useCallback(
-    (from: Point, to: Point, cell: TerrainCell) => {
+    (from: Point, to: Point, cell: TerrainCell, eraseFeatures = false) => {
       const spacing = Math.max(1, brushSizeM * 0.35);
       const d = dist(from, to);
       if (d < spacing) {
-        stampBrushPoints([to], cell);
+        stampBrushPoints([to], cell, eraseFeatures);
         return;
       }
       const steps = Math.ceil(d / spacing);
@@ -427,7 +439,7 @@ export function MapCanvas({
       for (let i = 1; i <= steps; i++) {
         points.push(lerpPoint(from, to, i / steps));
       }
-      stampBrushPoints(points, cell);
+      stampBrushPoints(points, cell, eraseFeatures);
     },
     [brushSizeM, stampBrushPoints],
   );
@@ -644,12 +656,6 @@ export function MapCanvas({
 
     const world = getWorldPoint(e.clientX, e.clientY);
 
-    if (activeTool === 'eraser') {
-      const hit = findFeatureAt(projectRef.current.features, world, projectRef.current.viewport.zoom);
-      if (hit) removeFeature(hit.id);
-      return;
-    }
-
     if (activeTool === 'select') {
       const selected = selectedFeatureId
         ? projectRef.current.features.find((f) => f.id === selectedFeatureId)
@@ -691,9 +697,19 @@ export function MapCanvas({
       undoSnapshot.current = {
         ...current,
         terrain: cloneTerrain(terrain),
+        features: current.features.slice(),
       };
+      const eraseFeatures = activeTool === 'eraser';
       stampBrush(terrain, world, brushSizeM, brushThickness, brushCell);
-      const next = { ...current, terrain };
+      let features = current.features;
+      if (eraseFeatures) {
+        const hit = findFeaturesInRadius(features, world, brushSizeM);
+        if (hit.length > 0) {
+          const ids = new Set(hit.map((f) => f.id));
+          features = features.filter((f) => !ids.has(f.id));
+        }
+      }
+      const next = { ...current, terrain, features };
       projectRef.current = next;
       onProjectChange(next);
       brushPainting.current = true;
@@ -895,9 +911,10 @@ export function MapCanvas({
       if (cell != null) {
         const last = lastBrushPoint.current;
         const spacing = Math.max(1, brushSizeM * 0.35);
+        const eraseFeatures = tool === 'eraser';
         if (!last || dist(last, world) >= spacing) {
-          if (last) stampBrushStroke(last, world, cell);
-          else stampBrushPoints([world], cell);
+          if (last) stampBrushStroke(last, world, cell, eraseFeatures);
+          else stampBrushPoints([world], cell, eraseFeatures);
           lastBrushPoint.current = world;
         }
         setBrushCursor(world);
@@ -905,7 +922,7 @@ export function MapCanvas({
       return;
     }
 
-    if (isTerrainBrush) {
+    if (isBrushTool) {
       setBrushCursor(world);
       return;
     }
@@ -1092,9 +1109,11 @@ export function MapCanvas({
     if (tool === 'select') {
       return '编辑模式 · 点击选中 · 拖顶点 · -/= 换标高 · Delete 删除 · 右键取消';
     }
-    if (tool === 'eraser') return '点击要素即可删除 · 空格临时拖图';
+    if (tool === 'eraser') {
+      return '橡皮刷：擦回陆地并删除刷区内道路/河流等 · 调大小/厚度 · 右键撤销本笔';
+    }
     if (tool === 'label') return '点击地图放置标注 · 空格临时拖图';
-    if (isTerrainBrush) {
+    if (isBrushTool) {
       return '按住拖拽绘制地貌 · 调节大小/厚度 · 右键撤销本笔 · 空格拖图';
     }
     if (isPathGuided) {
@@ -1129,7 +1148,7 @@ export function MapCanvas({
   })();
 
   const canvasCursor =
-    tool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : tool === 'select' ? 'default' : tool === 'eraser' ? 'pointer' : 'crosshair';
+    tool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : tool === 'select' ? 'default' : 'crosshair';
 
   const snapLabel = (kind: SnapKind) => {
     if (kind === 'endpoint') return '端点';

@@ -68,6 +68,44 @@ export function findFeatureAt(
   return null;
 }
 
+/** 刷区内命中的要素（橡皮刷用；整条删除） */
+export function findFeaturesInRadius(
+  features: MapFeature[],
+  center: Point,
+  radiusM: number,
+): MapFeature[] {
+  const r = Math.max(1, radiusM);
+  const hit: MapFeature[] = [];
+  for (const f of features) {
+    if (featureNearPoint(f, center, r)) hit.push(f);
+  }
+  return hit;
+}
+
+function featureNearPoint(feature: MapFeature, p: Point, radiusM: number): boolean {
+  if (feature.kind === 'label' && feature.points[0]) {
+    return dist(p, feature.points[0]) <= radiusM;
+  }
+  if (feature.closed && feature.points.length >= 3) {
+    if (pointInPolygon(p, feature.points)) return true;
+    for (let i = 0; i < feature.points.length; i++) {
+      const a = feature.points[i];
+      const b = feature.points[(i + 1) % feature.points.length];
+      if (pointToSegmentDist(p, a, b) <= radiusM) return true;
+    }
+    return false;
+  }
+  if (feature.points.length === 1) {
+    return dist(p, feature.points[0]) <= radiusM;
+  }
+  for (let i = 0; i < feature.points.length - 1; i++) {
+    if (pointToSegmentDist(p, feature.points[i], feature.points[i + 1]) <= radiusM) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function findVertexIndex(
   feature: MapFeature,
   p: Point,

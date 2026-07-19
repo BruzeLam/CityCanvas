@@ -8,13 +8,22 @@ import {
 } from '../constants/mapPresets';
 import { useAuth } from '../context/AuthContext';
 import {
+  DEFAULT_GREEN_DENSITY,
   DEFAULT_OCEAN_RATIO,
+  DEFAULT_RIVER_DENSITY,
+  GREEN_DENSITY_MAX,
+  GREEN_DENSITY_MIN,
   OCEAN_RATIO_MAX,
   OCEAN_RATIO_MIN,
+  RIVER_DENSITY_MAX,
+  RIVER_DENSITY_MIN,
+  clampGreenDensity,
   clampOceanRatio,
-  generateTerrain,
+  clampRiverDensity,
+  generateLandscape,
   paintTerrainPreview,
   randomTerrainSeed,
+  type TerrainGenParams,
 } from '../engine/terrainGen';
 import { api, type CloudMapSummary } from '../io/api';
 import type { MapSettings } from '../types';
@@ -49,7 +58,12 @@ export function ProjectSetup({
   const [loadingMaps, setLoadingMaps] = useState(false);
 
   const [terrainSeed, setTerrainSeed] = useState(() => randomTerrainSeed());
+  const [oceanEnabled, setOceanEnabled] = useState(true);
   const [oceanRatio, setOceanRatio] = useState(DEFAULT_OCEAN_RATIO);
+  const [riverEnabled, setRiverEnabled] = useState(true);
+  const [riverDensity, setRiverDensity] = useState(DEFAULT_RIVER_DENSITY);
+  const [greenEnabled, setGreenEnabled] = useState(true);
+  const [greenDensity, setGreenDensity] = useState(DEFAULT_GREEN_DENSITY);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -100,16 +114,32 @@ export function ProjectSetup({
 
   const preview = buildSettings();
 
-  const generatedTerrain = useMemo(() => {
-    // 预览与成图用同一套 UV 低频规则；格子略粗只为加速，形态一致
+  const genParams = useMemo((): TerrainGenParams => {
+    return {
+      seed: terrainSeed,
+      oceanEnabled,
+      oceanRatio: clampOceanRatio(oceanRatio),
+      riverEnabled,
+      riverDensity: clampRiverDensity(riverDensity),
+      greenEnabled,
+      greenDensity: clampGreenDensity(greenDensity),
+    };
+  }, [
+    terrainSeed,
+    oceanEnabled,
+    oceanRatio,
+    riverEnabled,
+    riverDensity,
+    greenEnabled,
+    greenDensity,
+  ]);
+
+  const landscapePreview = useMemo(() => {
+    // 预览与成图用同一套规则；格子略粗只为加速，形态一致
     const previewCell =
       Math.max(preview.widthM, preview.heightM) > 15000 ? 40 : 28;
-    return generateTerrain(
-      preview,
-      { seed: terrainSeed, oceanRatio: clampOceanRatio(oceanRatio) },
-      previewCell,
-    );
-  }, [preview.widthM, preview.heightM, terrainSeed, oceanRatio]);
+    return generateLandscape(preview, genParams, previewCell);
+  }, [preview.widthM, preview.heightM, genParams]);
 
   useEffect(() => {
     const canvas = previewCanvasRef.current;
@@ -125,20 +155,39 @@ export function ProjectSetup({
     }
     canvas.width = w;
     canvas.height = h;
-    paintTerrainPreview(canvas, generatedTerrain);
-  }, [generatedTerrain, preview.widthM, preview.heightM]);
+    paintTerrainPreview(
+      canvas,
+      landscapePreview.terrain,
+      landscapePreview.rivers.map((f) => f.points),
+      preview,
+    );
+  }, [landscapePreview, preview.widthM, preview.heightM]);
 
   const handleCreate = () => {
     const settings = buildSettings();
-    const ratio = clampOceanRatio(oceanRatio);
-    const terrain = generateTerrain(settings, {
+    const params: TerrainGenParams = {
       seed: terrainSeed,
-      oceanRatio: ratio,
-    });
+      oceanEnabled,
+      oceanRatio: clampOceanRatio(oceanRatio),
+      riverEnabled,
+      riverDensity: clampRiverDensity(riverDensity),
+      greenEnabled,
+      greenDensity: clampGreenDensity(greenDensity),
+    };
+    const { terrain, rivers } = generateLandscape(settings, params);
     onCreate(
       createProject(name.trim() || '未命名城市', settings, 'navigation', {
         terrain,
-        terrainSeed: { seed: terrainSeed, oceanRatio: ratio },
+        features: rivers,
+        terrainSeed: {
+          seed: params.seed,
+          oceanEnabled: params.oceanEnabled,
+          oceanRatio: params.oceanRatio,
+          riverEnabled: params.riverEnabled,
+          riverDensity: params.riverDensity,
+          greenEnabled: params.greenEnabled,
+          greenDensity: params.greenDensity,
+        },
       }),
     );
   };
@@ -151,8 +200,15 @@ export function ProjectSetup({
 
   if (!user && !localOnly) return null;
 
-  const oceanPct = Math.round(clampOceanRatio(oceanRatio) * 100);
-  const landPct = 100 - oceanPct;
+  const oceanPct = oceanEnabled
+    ? Math.round((landscapePreview.oceanPct || clampOceanRatio(oceanRatio)) * 100)
+    : 0;
+  const greenPct = greenEnabled
+    ? Math.round((landscapePreview.greenPct || 0) * 100)
+    : 0;
+  const landPct = Math.max(0, 100 - oceanPct - greenPct);
+  const riverPct = Math.round(clampRiverDensity(riverDensity) * 100);
+  const greenSliderPct = Math.round(clampGreenDensity(greenDensity) * 100);
 
   return (
     <div className="setup-overlay">
@@ -324,28 +380,96 @@ export function ProjectSetup({
           </fieldset>
 
           <fieldset className="setup-field terrain-seed-field">
-            <span>地貌种子 · 架空海陆</span>
+            <span>地貌种子 · 架空海陆河</span>
             <div className="terrain-seed-layout">
               <div className="terrain-seed-preview">
                 <canvas ref={previewCanvasRef} className="terrain-preview-canvas" />
                 <p className="terrain-preview-legend">
                   <span className="swatch land" /> 陆地 {landPct}%
-                  <span className="swatch water" /> 海洋 {oceanPct}%
+                  {oceanEnabled && (
+                    <>
+                      <span className="swatch water" /> 海洋 {oceanPct}%
+                    </>
+                  )}
+                  {greenEnabled && (
+                    <>
+                      <span className="swatch green" /> 绿地 {greenPct}%
+                    </>
+                  )}
+                  {riverEnabled && (
+                    <>
+                      <span className="swatch river" /> 河流
+                    </>
+                  )}
                 </p>
               </div>
               <div className="terrain-seed-controls">
-                <label className="terrain-seed-row">
-                  <span>海洋比例</span>
+                <label className="terrain-seed-check">
                   <input
-                    type="range"
-                    min={OCEAN_RATIO_MIN}
-                    max={OCEAN_RATIO_MAX}
-                    step={0.01}
-                    value={oceanRatio}
-                    onChange={(e) => setOceanRatio(Number(e.target.value))}
+                    type="checkbox"
+                    checked={oceanEnabled}
+                    onChange={(e) => setOceanEnabled(e.target.checked)}
                   />
-                  <em>{oceanPct}%</em>
+                  <span>有海洋</span>
                 </label>
+                {oceanEnabled && (
+                  <label className="terrain-seed-row">
+                    <span>海洋比例</span>
+                    <input
+                      type="range"
+                      min={OCEAN_RATIO_MIN}
+                      max={OCEAN_RATIO_MAX}
+                      step={0.01}
+                      value={oceanRatio}
+                      onChange={(e) => setOceanRatio(Number(e.target.value))}
+                    />
+                    <em>{Math.round(clampOceanRatio(oceanRatio) * 100)}%</em>
+                  </label>
+                )}
+                <label className="terrain-seed-check">
+                  <input
+                    type="checkbox"
+                    checked={riverEnabled}
+                    onChange={(e) => setRiverEnabled(e.target.checked)}
+                  />
+                  <span>有河流</span>
+                </label>
+                {riverEnabled && (
+                  <label className="terrain-seed-row">
+                    <span>河网密度</span>
+                    <input
+                      type="range"
+                      min={RIVER_DENSITY_MIN}
+                      max={RIVER_DENSITY_MAX}
+                      step={0.01}
+                      value={riverDensity}
+                      onChange={(e) => setRiverDensity(Number(e.target.value))}
+                    />
+                    <em>{riverPct}%</em>
+                  </label>
+                )}
+                <label className="terrain-seed-check">
+                  <input
+                    type="checkbox"
+                    checked={greenEnabled}
+                    onChange={(e) => setGreenEnabled(e.target.checked)}
+                  />
+                  <span>有绿地</span>
+                </label>
+                {greenEnabled && (
+                  <label className="terrain-seed-row">
+                    <span>绿地密度</span>
+                    <input
+                      type="range"
+                      min={GREEN_DENSITY_MIN}
+                      max={GREEN_DENSITY_MAX}
+                      step={0.01}
+                      value={greenDensity}
+                      onChange={(e) => setGreenDensity(Number(e.target.value))}
+                    />
+                    <em>{greenSliderPct}%</em>
+                  </label>
+                )}
                 <div className="terrain-seed-row">
                   <span>种子</span>
                   <code className="terrain-seed-code">{terrainSeed.toString(16)}</code>
@@ -358,7 +482,7 @@ export function ProjectSetup({
                   </button>
                 </div>
                 <p className="tool-note">
-                  创建后锁定底图，编辑页不可整图重生；可用刷子微调海陆。
+                  创建后锁定底图，编辑页不可整图重生；可用刷子微调海陆绿地，河流可继续改。
                 </p>
               </div>
             </div>

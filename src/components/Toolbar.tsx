@@ -43,14 +43,11 @@ type Props = {
   onUndo: () => void;
 };
 
-const VIEW_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
-  { id: 'eraser', label: '橡皮', icon: '🧹', hint: '点击删除要素' },
-];
-
 const TERRAIN_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
   { id: 'land', label: '陆地', icon: '🏝️', hint: '陆地刷 · 擦回米白底图' },
   { id: 'ocean', label: '水域', icon: '🌊', hint: '水域刷 · 浅蓝色毛边' },
   { id: 'mountain', label: '绿地', icon: '🌲', hint: '绿地/山地刷 · 平面绿色，无等高线' },
+  { id: 'eraser', label: '橡皮', icon: '🧹', hint: '橡皮刷 · 擦回陆地并删除刷区内要素' },
   { id: 'river', label: '河流', icon: '💧', hint: '窄河道折线（面状水域请用水域刷）' },
 ];
 
@@ -71,7 +68,7 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   (typeof ROAD_STYLES)[RoadLevel],
 ][];
 
-const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t);
+const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t) || t === 'eraser';
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
 
 type SectionId = 'view' | 'terrain' | 'network' | 'label' | 'keys';
@@ -162,20 +159,6 @@ export function Toolbar({
         </button>
         {open.view && (
           <div className="tool-grid">
-            {VIEW_TOOLS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
-                onClick={() => onToolChange(t.id)}
-                title={t.hint}
-              >
-                <span className="btn-emoji" aria-hidden>
-                  {t.icon}
-                </span>
-                {t.label}
-              </button>
-            ))}
             <button
               type="button"
               className="tool-cell"
@@ -252,7 +235,11 @@ export function Toolbar({
                     onChange={(e) => onBrushThicknessChange(Number(e.target.value))}
                   />
                 </label>
-                <p className="tool-note">底图默认全陆地 · 绿地为平面色块，无等高线</p>
+                <p className="tool-note">
+                  {tool === 'eraser'
+                    ? '橡皮刷擦回陆地，并删除刷过的道路/河流/标注'
+                    : '底图默认全陆地 · 绿地为平面色块，无等高线'}
+                </p>
               </div>
             )}
           </>
