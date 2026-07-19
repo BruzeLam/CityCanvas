@@ -59,19 +59,25 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
     payload.terrainSeed && typeof payload.terrainSeed.seed === 'number'
       ? (() => {
           const raw = payload.terrainSeed;
-          const waterRatio =
-            typeof raw.waterRatio === 'number'
-              ? raw.waterRatio
-              : typeof raw.oceanRatio === 'number'
-                ? raw.oceanRatio
+          const oceanRatio =
+            typeof raw.oceanRatio === 'number'
+              ? raw.oceanRatio
+              : typeof raw.waterRatio === 'number'
+                ? raw.waterRatio
                 : undefined;
-          if (waterRatio == null) return undefined;
+          if (oceanRatio == null) return undefined;
+          const oceanEnabled =
+            raw.oceanEnabled ?? raw.waterEnabled !== false;
           return {
             seed: raw.seed >>> 0,
-            waterEnabled: raw.waterEnabled ?? raw.oceanEnabled !== false,
-            waterRatio,
-            oceanEnabled: raw.waterEnabled ?? raw.oceanEnabled !== false,
-            oceanRatio: waterRatio,
+            oceanEnabled,
+            oceanRatio,
+            lakeEnabled: raw.lakeEnabled === true,
+            lakeDensity:
+              typeof raw.lakeDensity === 'number' ? raw.lakeDensity : undefined,
+            riverEnabled: raw.riverEnabled === true,
+            riverDensity:
+              typeof raw.riverDensity === 'number' ? raw.riverDensity : undefined,
             greenEnabled: raw.greenEnabled === true,
             greenDensity:
               typeof raw.greenDensity === 'number' ? raw.greenDensity : undefined,

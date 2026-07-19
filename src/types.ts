@@ -141,17 +141,15 @@ export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
 
 export type TerrainSeedMeta = {
   seed: number;
-  /** 是否生成水域；缺省视为 true */
-  waterEnabled?: boolean;
-  /** 水域占比；优先于 oceanRatio */
-  waterRatio?: number;
-  /** @deprecated 同 waterEnabled */
   oceanEnabled?: boolean;
-  /** @deprecated 同 waterRatio；旧存档字段 */
   oceanRatio: number;
-  /** @deprecated 已并入水域栅格 */
+  lakeEnabled?: boolean;
+  lakeDensity?: number;
   riverEnabled?: boolean;
   riverDensity?: number;
+  /** @deprecated 旧「总水域」开关，读档时映射到 ocean */
+  waterEnabled?: boolean;
+  waterRatio?: number;
   greenEnabled?: boolean;
   greenDensity?: number;
 };
