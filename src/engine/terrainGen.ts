@@ -315,7 +315,7 @@ function generateRiverCellPaths(
   const count = Math.max(1, Math.round(1 + density * 5));
   const paths: number[][] = [];
   const used = new Uint8Array(cols * rows);
-  const minLen = Math.max(16, Math.floor(Math.max(cols, rows) * 0.18));
+  const minLen = Math.max(20, Math.floor(Math.max(cols, rows) * 0.2));
   const outletDist = buildOutletDistance(cells, cols, rows);
 
   for (let i = 0; i < count * 6 && paths.length < count; i++) {
@@ -325,7 +325,7 @@ function generateRiverCellPaths(
     if (!isValidRiverPath(cellPath, cells, cols, rows, minLen)) continue;
 
     for (const idx of cellPath) {
-      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 5);
+      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 6);
     }
     paths.push(cellPath);
   }
@@ -481,8 +481,8 @@ function pickSourceCell(
 }
 
 /**
- * 平面蜿蜒水道：朝海/湖（或地图边缘）前进，用噪声左右摆动。
- * 不依赖等高线/高程——本产品无等高线。
+ * 沙盒常用做法：连续航向 + 惯性 + 横向蜿蜒噪声，再栅格化。
+ * （参考 Fantasy Map / Red Blob 一类：朝出水口生长，用 meander 位移，而非格点折线寻路）
  */
 function meanderToOutlet(
   cells: Uint8Array,
@@ -492,96 +492,161 @@ function meanderToOutlet(
   start: number,
   seed: number,
 ): number[] {
-  const path: number[] = [start];
-  const visited = new Set<number>([start]);
-  let cur = start;
-  const maxSteps = Math.floor(Math.max(cols, rows) * 3);
+  let x = (start % cols) + 0.5;
+  let y = ((start / cols) | 0) + 0.5;
 
-  const neighbors = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-    [1, 1],
-    [1, -1],
-    [-1, 1],
-    [-1, -1],
-  ] as const;
+  // 初始朝向：出水口距离场的下降方向
+  let heading = outletHeading(outletDist, cols, rows, x, y);
+  heading += (hashUnit(seed) - 0.5) * 0.9;
+
+  const meanderAmp = 0.85 + hashUnit(seed + 3) * 0.55;
+  const meanderFreq = 0.055 + hashUnit(seed + 5) * 0.05;
+  const stepLen = 0.48;
+  const maxSteps = Math.floor(Math.max(cols, rows) * 5);
+  const samples: { x: number; y: number }[] = [{ x, y }];
 
   for (let step = 0; step < maxSteps; step++) {
-    const x = cur % cols;
-    const y = (cur / cols) | 0;
-
-    let done = false;
-    for (const [dx, dy] of neighbors) {
-      if (Math.abs(dx) + Math.abs(dy) !== 1) continue;
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) {
-        done = true;
-        break;
-      }
-      if (cells[ny * cols + nx] === TERRAIN_WATER) {
-        done = true;
-        break;
-      }
-    }
-    if (done) break;
-    if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) break;
-
-    let best = -1;
-    let bestCost = Infinity;
-    for (const [dx, dy] of neighbors) {
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-      const j = ny * cols + nx;
-      if (visited.has(j)) continue;
-      if (cells[j] === TERRAIN_WATER) {
-        best = j;
-        bestCost = -Infinity;
-        break;
-      }
-      // 主目标：靠近出水口；噪声制造蜿蜒，不是顺坡
-      const wander =
-        (valueNoise2d(nx * 0.11, ny * 0.11, seed) - 0.5) * 2.4 +
-        (valueNoise2d(nx * 0.04 + step * 0.02, ny * 0.04, seed + 17) - 0.5) * 1.2;
-      const cost = outletDist[j] + wander;
-      if (cost < bestCost) {
-        bestCost = cost;
-        best = j;
-      }
-    }
-
-    if (best < 0) {
-      let escape = -1;
-      let escapeD = outletDist[cur];
-      for (const [dx, dy] of neighbors) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-        const j = ny * cols + nx;
-        if (visited.has(j)) continue;
-        if (outletDist[j] < escapeD - 1e-6) {
-          escapeD = outletDist[j];
-          escape = j;
-        }
-      }
-      if (escape < 0) break;
-      best = escape;
-    }
-
-    if (cells[best] === TERRAIN_WATER) {
-      path.push(best);
+    const cx = Math.floor(x);
+    const cy = Math.floor(y);
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) break;
+    if (cells[cy * cols + cx] === TERRAIN_WATER) break;
+    if (touchesWaterOrBorder(cells, cols, rows, cx, cy)) {
+      samples.push({ x, y });
       break;
     }
-    visited.add(best);
-    path.push(best);
-    cur = best;
-    if (outletDist[cur] <= 0) break;
+
+    const progress = step / maxSteps;
+    // 靠近河口时减弱摆动，避免入海前乱甩
+    const amp = meanderAmp * (0.45 + 0.55 * (1 - progress) ** 0.6);
+
+    // 主航向缓缓对准出水口（惯性，不像格点贪心那样直角折）
+    const target = outletHeading(outletDist, cols, rows, x, y);
+    heading = lerpAngle(heading, target, 0.07 + progress * 0.06);
+
+    // 横向蜿蜒：低频正弦 + 位置噪声（类似 Azgaar meander / curl noise）
+    const phase = seed * 0.001 + step * meanderFreq;
+    const sway =
+      Math.sin(phase * Math.PI * 2) * amp * 0.85 +
+      (valueNoise2d(x * 0.055, y * 0.055, seed + 11) - 0.5) * amp * 1.35 +
+      (valueNoise2d(x * 0.025 + step * 0.008, y * 0.025, seed + 29) - 0.5) * amp * 0.7;
+    heading += sway * 0.32;
+
+    // 限速转向，保留弧线感
+    const prev = samples.length >= 2 ? samples[samples.length - 2]! : null;
+    if (prev) {
+      const prevH = Math.atan2(y - prev.y, x - prev.x);
+      heading = lerpAngle(prevH, heading, 0.42);
+    }
+
+    x += Math.cos(heading) * stepLen;
+    y += Math.sin(heading) * stepLen;
+    samples.push({ x, y });
+
+    if (outletDist[cy * cols + cx] <= 1.5) break;
   }
 
-  return path;
+  // Chaikin 平滑，去掉锯齿折角
+  const smooth = chaikin(samples, 3);
+  return rasterizePolyline(smooth, cols, rows);
+}
+
+function outletHeading(
+  outletDist: Float32Array,
+  cols: number,
+  rows: number,
+  x: number,
+  y: number,
+): number {
+  const ix = Math.max(1, Math.min(cols - 2, Math.floor(x)));
+  const iy = Math.max(1, Math.min(rows - 2, Math.floor(y)));
+  const dx =
+    outletDist[iy * cols + (ix + 1)] - outletDist[iy * cols + (ix - 1)];
+  const dy =
+    outletDist[(iy + 1) * cols + ix] - outletDist[(iy - 1) * cols + ix];
+  // 朝距离减小的方向走
+  if (Math.abs(dx) + Math.abs(dy) < 1e-6) {
+    return hashUnit((ix * 73856093) ^ (iy * 19349663)) * Math.PI * 2;
+  }
+  return Math.atan2(-dy, -dx);
+}
+
+function touchesWaterOrBorder(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  cx: number,
+  cy: number,
+): boolean {
+  if (cx <= 0 || cy <= 0 || cx >= cols - 1 || cy >= rows - 1) return true;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (cells[(cy + dy) * cols + (cx + dx)] === TERRAIN_WATER) return true;
+    }
+  }
+  return false;
+}
+
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * Math.max(0, Math.min(1, t));
+}
+
+/** Chaikin corner-cutting：折线变圆滑 */
+function chaikin(
+  pts: { x: number; y: number }[],
+  rounds: number,
+): { x: number; y: number }[] {
+  let cur = pts;
+  for (let r = 0; r < rounds; r++) {
+    if (cur.length < 3) break;
+    const next: { x: number; y: number }[] = [cur[0]!];
+    for (let i = 0; i < cur.length - 1; i++) {
+      const p = cur[i]!;
+      const q = cur[i + 1]!;
+      next.push(
+        { x: p.x * 0.75 + q.x * 0.25, y: p.y * 0.75 + q.y * 0.25 },
+        { x: p.x * 0.25 + q.x * 0.75, y: p.y * 0.25 + q.y * 0.75 },
+      );
+    }
+    next.push(cur[cur.length - 1]!);
+    cur = next;
+  }
+  return cur;
+}
+
+function rasterizePolyline(
+  pts: { x: number; y: number }[],
+  cols: number,
+  rows: number,
+): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  const push = (cx: number, cy: number) => {
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+    const i = cy * cols + cx;
+    if (seen.has(i)) return;
+    seen.add(i);
+    out.push(i);
+  };
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const steps = Math.max(1, Math.ceil(dist * 2.2));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      push(Math.floor(x), Math.floor(y));
+      // 轻微加粗采样，减少断点
+      push(Math.floor(x + 0.35), Math.floor(y));
+      push(Math.floor(x), Math.floor(y + 0.35));
+    }
+  }
+  return out;
 }
 
 /** 内陆湖泊：低洼盆地成封闭水塘（同水色） */
