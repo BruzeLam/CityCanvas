@@ -141,16 +141,18 @@ export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
 
 export type TerrainSeedMeta = {
   seed: number;
-  /** 是否生成海洋；缺省视为 true（兼容旧存档） */
+  /** 是否生成水域；缺省视为 true */
+  waterEnabled?: boolean;
+  /** 水域占比；优先于 oceanRatio */
+  waterRatio?: number;
+  /** @deprecated 同 waterEnabled */
   oceanEnabled?: boolean;
+  /** @deprecated 同 waterRatio；旧存档字段 */
   oceanRatio: number;
-  /** 是否生成河流；缺省视为 false（旧存档无河） */
+  /** @deprecated 已并入水域栅格 */
   riverEnabled?: boolean;
-  /** 河网密度 0..1 */
   riverDensity?: number;
-  /** 是否生成绿地；缺省视为 false（旧存档无绿地种子） */
   greenEnabled?: boolean;
-  /** 绿地占陆地比例 0..1 */
   greenDensity?: number;
 };
 

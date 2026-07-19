@@ -1,22 +1,23 @@
-import type { MapFeature, MapSettings, Point } from '../types';
-import { createId } from '../types';
+import type { MapSettings, Point } from '../types';
 import { fbm2d, valueNoise2d } from './noise';
 import {
-  DEFAULT_TERRAIN_CELL_M,
   TERRAIN_GREEN,
   TERRAIN_LAND,
   TERRAIN_WATER,
   createTerrain,
+  preferredTerrainCellSizeM,
   type TerrainGrid,
 } from './terrain';
 
-export const DEFAULT_OCEAN_RATIO = 0.28;
-export const OCEAN_RATIO_MIN = 0.08;
-export const OCEAN_RATIO_MAX = 0.65;
+/** 水域总占比（海/湖/河道统称，由形状区分） */
+export const DEFAULT_WATER_RATIO = 0.28;
+export const WATER_RATIO_MIN = 0.08;
+export const WATER_RATIO_MAX = 0.65;
 
-export const DEFAULT_RIVER_DENSITY = 0.45;
-export const RIVER_DENSITY_MIN = 0.1;
-export const RIVER_DENSITY_MAX = 1;
+/** @deprecated 同 DEFAULT_WATER_RATIO */
+export const DEFAULT_OCEAN_RATIO = DEFAULT_WATER_RATIO;
+export const OCEAN_RATIO_MIN = WATER_RATIO_MIN;
+export const OCEAN_RATIO_MAX = WATER_RATIO_MAX;
 
 export const DEFAULT_GREEN_DENSITY = 0.28;
 export const GREEN_DENSITY_MIN = 0.08;
@@ -24,35 +25,29 @@ export const GREEN_DENSITY_MAX = 0.7;
 
 export type TerrainGenParams = {
   seed: number;
-  oceanEnabled: boolean;
-  /** 海洋占比 0..1；oceanEnabled=false 时忽略 */
-  oceanRatio: number;
-  riverEnabled: boolean;
-  /** 河网密度 0..1；riverEnabled=false 时忽略 */
-  riverDensity: number;
+  waterEnabled: boolean;
+  /** 水域占比 0..1；waterEnabled=false 时忽略 */
+  waterRatio: number;
   greenEnabled: boolean;
-  /** 绿地占陆地比例 0..1；greenEnabled=false 时忽略 */
+  /** 绿地占陆地比例 0..1 */
   greenDensity: number;
 };
 
 export type LandscapeResult = {
   terrain: TerrainGrid;
-  rivers: MapFeature[];
-  /** 实际海洋格占比（勾选关闭时为 0） */
-  oceanPct: number;
-  /** 实际绿地格占比（勾选关闭时为 0） */
+  /** 实际水域格占比 */
+  waterPct: number;
+  /** 实际绿地格占比 */
   greenPct: number;
 };
 
-export function clampOceanRatio(r: number): number {
-  if (!Number.isFinite(r)) return DEFAULT_OCEAN_RATIO;
-  return Math.max(OCEAN_RATIO_MIN, Math.min(OCEAN_RATIO_MAX, r));
+export function clampWaterRatio(r: number): number {
+  if (!Number.isFinite(r)) return DEFAULT_WATER_RATIO;
+  return Math.max(WATER_RATIO_MIN, Math.min(WATER_RATIO_MAX, r));
 }
 
-export function clampRiverDensity(r: number): number {
-  if (!Number.isFinite(r)) return DEFAULT_RIVER_DENSITY;
-  return Math.max(RIVER_DENSITY_MIN, Math.min(RIVER_DENSITY_MAX, r));
-}
+/** @deprecated 使用 clampWaterRatio */
+export const clampOceanRatio = clampWaterRatio;
 
 export function clampGreenDensity(r: number): number {
   if (!Number.isFinite(r)) return DEFAULT_GREEN_DENSITY;
@@ -66,74 +61,61 @@ export function randomTerrainSeed(): number {
 export function defaultTerrainGenParams(seed?: number): TerrainGenParams {
   return {
     seed: seed ?? randomTerrainSeed(),
-    oceanEnabled: true,
-    oceanRatio: DEFAULT_OCEAN_RATIO,
-    riverEnabled: true,
-    riverDensity: DEFAULT_RIVER_DENSITY,
+    waterEnabled: true,
+    waterRatio: DEFAULT_WATER_RATIO,
     greenEnabled: true,
     greenDensity: DEFAULT_GREEN_DENSITY,
   };
 }
 
 /**
- * 架空地貌：连贯海陆 + 可选顺坡河流。
- * 粒度比 MVP 略细（岸线有褶皱），但仍保持大块结构。
+ * 架空地貌：统一水域（海/湖/河同色，形状区分）+ 可选绿地。
+ * 河道直接刻进栅格，不再生成独立河流折线。
  */
 export function generateLandscape(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
   params: TerrainGenParams,
-  cellSizeM = DEFAULT_TERRAIN_CELL_M,
+  cellSizeM = preferredTerrainCellSizeM(settings),
 ): LandscapeResult {
   const grid = createTerrain(settings, cellSizeM);
   const { cols, rows, cells } = grid;
   const seed = params.seed >>> 0;
   const n = cols * rows;
   if (n === 0) {
-    return { terrain: grid, rivers: [], oceanPct: 0, greenPct: 0 };
+    return { terrain: grid, waterPct: 0, greenPct: 0 };
   }
 
   const field = buildHeightField(cols, rows, seed);
-  let oceanPct = 0;
+  let waterPct = 0;
   let greenPct = 0;
 
-  if (params.oceanEnabled) {
-    const oceanRatio = clampOceanRatio(params.oceanRatio);
-    const threshold = percentileThreshold(field, oceanRatio);
+  if (params.waterEnabled) {
+    const waterRatio = clampWaterRatio(params.waterRatio);
+    const threshold = percentileThreshold(field, waterRatio);
     for (let i = 0; i < n; i++) {
       cells[i] = field[i] <= threshold ? TERRAIN_WATER : TERRAIN_LAND;
     }
+    smoothWaterLand(cells, cols, rows, 2);
     cleanupTerrain(cells, cols, rows);
-    let water = 0;
-    for (let i = 0; i < n; i++) if (cells[i] === TERRAIN_WATER) water++;
-    oceanPct = water / n;
-  } else {
-    cells.fill(TERRAIN_LAND);
-  }
 
-  let rivers: MapFeature[] = [];
-  if (params.riverEnabled) {
-    const density = clampRiverDensity(params.riverDensity);
-    const paths = generateRivers(
+    // 顺坡河道刻进水域栅格（宽窄由形状表现，不另做河流要素）
+    const channelDensity = 0.35 + waterRatio * 0.55;
+    const cellPaths = generateRiverCellPaths(
       cells,
       field,
       cols,
       rows,
-      settings,
-      cellSizeM,
       seed,
-      density,
-      params.oceanEnabled,
+      channelDensity,
     );
-    // 河口附近略拓宽水面（仅勾选海洋时）
-    if (params.oceanEnabled) {
-      carveRiverMouths(cells, cols, rows, paths, cellSizeM);
-    }
-    rivers = paths.map((points) => ({
-      id: createId(),
-      kind: 'river' as const,
-      points,
-      closed: false,
-    }));
+    carveWaterChannels(cells, cols, rows, cellPaths);
+    smoothWaterLand(cells, cols, rows, 1);
+
+    let water = 0;
+    for (let i = 0; i < n; i++) if (cells[i] === TERRAIN_WATER) water++;
+    waterPct = water / n;
+  } else {
+    cells.fill(TERRAIN_LAND);
   }
 
   if (params.greenEnabled) {
@@ -143,25 +125,25 @@ export function generateLandscape(
     greenPct = green / n;
   }
 
-  return { terrain: grid, rivers, oceanPct, greenPct };
+  return { terrain: grid, waterPct, greenPct };
 }
 
 /** @deprecated 使用 generateLandscape */
 export function generateTerrain(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
-  params: Pick<TerrainGenParams, 'seed' | 'oceanRatio'> & {
+  params: Pick<TerrainGenParams, 'seed' | 'waterRatio'> & {
+    oceanRatio?: number;
+    waterEnabled?: boolean;
     oceanEnabled?: boolean;
   },
-  cellSizeM = DEFAULT_TERRAIN_CELL_M,
+  cellSizeM = preferredTerrainCellSizeM(settings),
 ): TerrainGrid {
   return generateLandscape(
     settings,
     {
       seed: params.seed,
-      oceanEnabled: params.oceanEnabled ?? true,
-      oceanRatio: params.oceanRatio,
-      riverEnabled: false,
-      riverDensity: DEFAULT_RIVER_DENSITY,
+      waterEnabled: params.waterEnabled ?? params.oceanEnabled ?? true,
+      waterRatio: params.waterRatio ?? params.oceanRatio ?? DEFAULT_WATER_RATIO,
       greenEnabled: false,
       greenDensity: DEFAULT_GREEN_DENSITY,
     },
@@ -191,7 +173,6 @@ function paintGreens(
     const y = (i / cols) | 0;
     const u = (x + 0.5) / cols;
     const v = (y + 0.5) / rows;
-    // 中频斑块 + 略偏好较高地
     const patch = fbm2d(u * 3.4, v * 3.4, seed + 401, 3, 2.1, 0.5);
     const detail = fbm2d(u * 7.5, v * 7.5, seed + 419, 2, 2.0, 0.5);
     scores[k] = patch * 0.72 + detail * 0.18 + height[i] * 0.1;
@@ -207,9 +188,8 @@ function paintGreens(
     if (scores[k] >= thr) cells[landIdx[k]] = TERRAIN_GREEN;
   }
 
-  // 去掉过碎的绿地斑点
   const labels = labelComponents(cells, cols, rows, TERRAIN_GREEN);
-  const minKeep = Math.max(12, Math.floor(landIdx.length * 0.004));
+  const minKeep = Math.max(18, Math.floor(landIdx.length * 0.004));
   for (const comp of labels.components) {
     if (comp.cells.length < minKeep) {
       for (const i of comp.cells) cells[i] = TERRAIN_LAND;
@@ -223,9 +203,8 @@ function buildHeightField(cols: number, rows: number, seed: number): Float32Arra
   const biasX = Math.cos(biasAngle);
   const biasY = Math.sin(biasAngle);
 
-  // 略提高频率：岸线更细，但仍是大块大陆
-  const continentFreq = 1.85 + hashUnit(seed + 7) * 0.65;
-  const warpAmt = 0.14 + hashUnit(seed + 13) * 0.12;
+  const continentFreq = 1.9 + hashUnit(seed + 7) * 0.7;
+  const warpAmt = 0.12 + hashUnit(seed + 13) * 0.1;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -239,17 +218,16 @@ function buildHeightField(cols: number, rows: number, seed: number): Float32Arra
       const uu = u + wu;
       const vv = v + wv;
 
-      let h = fbm2d(uu * continentFreq, vv * continentFreq, seed, 4, 2.05, 0.45);
-      const macro = fbm2d(uu * 0.75, vv * 0.75, seed + 33, 2, 2.0, 0.5);
-      h = h * 0.58 + macro * 0.42;
+      let h = fbm2d(uu * continentFreq, vv * continentFreq, seed, 5, 2.05, 0.48);
+      const macro = fbm2d(uu * 0.72, vv * 0.72, seed + 33, 3, 2.0, 0.5);
+      h = h * 0.56 + macro * 0.44;
 
       const side = (u - 0.5) * biasX + (v - 0.5) * biasY;
-      h -= Math.max(0, side) * 0.36;
-      h += Math.max(0, -side) * 0.07;
+      h -= Math.max(0, side) * 0.34;
+      h += Math.max(0, -side) * 0.06;
 
-      // 中频岸线褶皱（比之前更明显一点）
-      const ripples = fbm2d(u * 5.2, v * 5.2, seed + 77, 2, 2.1, 0.5);
-      h += (ripples - 0.5) * 0.085;
+      const ripples = fbm2d(u * 6.2, v * 6.2, seed + 77, 3, 2.1, 0.48);
+      h += (ripples - 0.5) * 0.07;
 
       field[r * cols + c] = h;
     }
@@ -257,43 +235,89 @@ function buildHeightField(cols: number, rows: number, seed: number): Float32Arra
   return field;
 }
 
-function generateRivers(
+/** 多数票平滑岸线，减轻锯齿 */
+function smoothWaterLand(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  passes: number,
+): void {
+  for (let p = 0; p < passes; p++) {
+    const next = new Uint8Array(cells);
+    for (let y = 1; y < rows - 1; y++) {
+      for (let x = 1; x < cols - 1; x++) {
+        const i = y * cols + x;
+        if (cells[i] === TERRAIN_GREEN) continue;
+        let water = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (cells[(y + dy) * cols + (x + dx)] === TERRAIN_WATER) water++;
+          }
+        }
+        if (water >= 5) next[i] = TERRAIN_WATER;
+        else if (water <= 3) next[i] = TERRAIN_LAND;
+      }
+    }
+    cells.set(next);
+  }
+}
+
+function generateRiverCellPaths(
   cells: Uint8Array,
   field: Float32Array,
   cols: number,
   rows: number,
-  settings: Pick<MapSettings, 'widthM' | 'heightM'>,
-  cellSizeM: number,
   seed: number,
   density: number,
-  hasOcean: boolean,
-): Point[][] {
+): number[][] {
   const count = Math.max(1, Math.round(1 + density * 5));
-  const paths: Point[][] = [];
+  const paths: number[][] = [];
   const used = new Uint8Array(cols * rows);
+  const minLen = Math.max(12, Math.floor(Math.max(cols, rows) * 0.08));
 
-  for (let i = 0; i < count * 3 && paths.length < count; i++) {
-    const source = pickSourceCell(cells, field, cols, rows, seed + i * 97, used, hasOcean);
+  for (let i = 0; i < count * 4 && paths.length < count; i++) {
+    const source = pickSourceCell(cells, field, cols, rows, seed + i * 97, used);
     if (source == null) break;
-    const cellPath = flowDownhill(cells, field, cols, rows, source, hasOcean);
-    if (cellPath.length < 8) continue;
+    const cellPath = flowDownhill(cells, field, cols, rows, source);
+    if (cellPath.length < minLen) continue;
 
-    // 标记走廊，避免河靠太近
     for (const idx of cellPath) {
-      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 3);
+      markCorridor(used, cols, rows, idx % cols, (idx / cols) | 0, 4);
     }
-
-    const simplified = simplifyCellPath(cellPath, cols, 2);
-    const world = simplified.map((idx) =>
-      cellToWorld(idx % cols, (idx / cols) | 0, cellSizeM, settings),
-    );
-    if (polylineLength(world) < Math.min(settings.widthM, settings.heightM) * 0.12) {
-      continue;
-    }
-    paths.push(world);
+    paths.push(cellPath);
   }
 
   return paths;
+}
+
+function carveWaterChannels(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  paths: number[][],
+): void {
+  for (const path of paths) {
+    if (path.length < 2) continue;
+    const n = path.length;
+    for (let i = 0; i < n; i++) {
+      const idx = path[i];
+      const x = idx % cols;
+      const y = (idx / cols) | 0;
+      // 上游窄、下游（近水体）略宽
+      const t = i / (n - 1);
+      const radius = t > 0.72 ? 2 : t > 0.4 ? 1 : 0;
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx * dx + dy * dy > radius * radius + 0.2) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+          const j = ny * cols + nx;
+          if (cells[j] !== TERRAIN_WATER) cells[j] = TERRAIN_WATER;
+        }
+      }
+    }
+  }
 }
 
 function pickSourceCell(
@@ -303,29 +327,27 @@ function pickSourceCell(
   rows: number,
   seed: number,
   used: Uint8Array,
-  hasOcean: boolean,
 ): number | null {
   let best = -1;
   let bestScore = -Infinity;
-  const attempts = 80;
+  const attempts = 100;
   for (let a = 0; a < attempts; a++) {
     const x = Math.floor(hashUnit(seed + a * 3) * cols);
     const y = Math.floor(hashUnit(seed + a * 5 + 1) * rows);
     const i = y * cols + x;
     if (cells[i] !== TERRAIN_LAND || used[i]) continue;
-    // 偏高、偏内陆
     const edge = Math.min(x, y, cols - 1 - x, rows - 1 - y) / Math.max(cols, rows);
     let nearWater = false;
-    for (let dy = -4; dy <= 4 && !nearWater; dy++) {
-      for (let dx = -4; dx <= 4; dx++) {
+    for (let dy = -5; dy <= 5 && !nearWater; dy++) {
+      for (let dx = -5; dx <= 5; dx++) {
         const nx = x + dx;
         const ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
         if (cells[ny * cols + nx] === TERRAIN_WATER) nearWater = true;
       }
     }
-    if (hasOcean && nearWater) continue;
-    const score = field[i] * 2 + edge * 0.8 + hashUnit(seed + a) * 0.15;
+    if (nearWater) continue;
+    const score = field[i] * 2 + edge * 0.85 + hashUnit(seed + a) * 0.12;
     if (score > bestScore) {
       bestScore = score;
       best = i;
@@ -340,38 +362,33 @@ function flowDownhill(
   cols: number,
   rows: number,
   start: number,
-  hasOcean: boolean,
 ): number[] {
   const path: number[] = [start];
   const visited = new Set<number>([start]);
   let cur = start;
-  const maxSteps = Math.floor(Math.max(cols, rows) * 1.8);
+  const maxSteps = Math.floor(Math.max(cols, rows) * 2);
 
   for (let step = 0; step < maxSteps; step++) {
     const x = cur % cols;
     const y = (cur / cols) | 0;
 
-    if (hasOcean) {
-      // 邻接海洋则入海结束
-      let hitSea = false;
-      for (const [dx, dy] of [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-      ] as const) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-        if (cells[ny * cols + nx] === TERRAIN_WATER) {
-          hitSea = true;
-          break;
-        }
+    let hitWater = false;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      if (cells[ny * cols + nx] === TERRAIN_WATER) {
+        hitWater = true;
+        break;
       }
-      if (hitSea) break;
-    } else if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) {
-      break;
     }
+    if (hitWater) break;
+    if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) break;
 
     let next = -1;
     let nextH = field[cur];
@@ -414,36 +431,6 @@ function flowDownhill(
   return path;
 }
 
-function carveRiverMouths(
-  cells: Uint8Array,
-  cols: number,
-  rows: number,
-  paths: Point[][],
-  cellSizeM: number,
-): void {
-  for (const path of paths) {
-    if (path.length < 2) continue;
-    // 末端附近拓宽
-    const tail = path.slice(-Math.min(6, path.length));
-    for (const p of tail) {
-      const cx = Math.floor(p.x / cellSizeM);
-      const cy = Math.floor(p.y / cellSizeM);
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const x = cx + dx;
-          const y = cy + dy;
-          if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
-          // 仅把陆地刷成水，形成窄河口
-          const i = y * cols + x;
-          if (cells[i] === TERRAIN_LAND && Math.abs(dx) + Math.abs(dy) <= 1) {
-            cells[i] = TERRAIN_WATER;
-          }
-        }
-      }
-    }
-  }
-}
-
 function markCorridor(
   used: Uint8Array,
   cols: number,
@@ -462,38 +449,11 @@ function markCorridor(
   }
 }
 
-function simplifyCellPath(path: number[], _cols: number, step: number): number[] {
-  if (path.length <= 2) return path;
-  const out: number[] = [path[0]];
-  for (let i = step; i < path.length - 1; i += step) out.push(path[i]);
-  out.push(path[path.length - 1]);
-  return out;
-}
-
-function cellToWorld(
-  c: number,
-  r: number,
-  cellSizeM: number,
-  settings: Pick<MapSettings, 'widthM' | 'heightM'>,
-): Point {
-  return {
-    x: Math.min(settings.widthM, Math.max(0, (c + 0.5) * cellSizeM)),
-    y: Math.min(settings.heightM, Math.max(0, (r + 0.5) * cellSizeM)),
-  };
-}
-
-function polylineLength(points: Point[]): number {
-  let len = 0;
-  for (let i = 1; i < points.length; i++) {
-    len += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
-  }
-  return len;
-}
-
 function cleanupTerrain(cells: Uint8Array, cols: number, rows: number): void {
   const n = cols * rows;
-  const minOceanKeep = Math.max(40, Math.floor(n * 0.012));
-  const minIslandKeep = Math.max(24, Math.floor(n * 0.006));
+  const minSeaKeep = Math.max(48, Math.floor(n * 0.01));
+  const minLakeKeep = Math.max(28, Math.floor(n * 0.004));
+  const minIslandKeep = Math.max(28, Math.floor(n * 0.005));
 
   const waterLabels = labelComponents(cells, cols, rows, TERRAIN_WATER);
   for (const comp of waterLabels.components) {
@@ -502,9 +462,12 @@ function cleanupTerrain(cells: Uint8Array, cols: number, rows: number): void {
       const y = (i / cols) | 0;
       return x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
     });
-    if (!touchesBorder && comp.cells.length < minOceanKeep * 3) {
-      for (const i of comp.cells) cells[i] = TERRAIN_LAND;
-    } else if (touchesBorder && comp.cells.length < minOceanKeep) {
+    if (touchesBorder) {
+      if (comp.cells.length < minSeaKeep) {
+        for (const i of comp.cells) cells[i] = TERRAIN_LAND;
+      }
+    } else if (comp.cells.length < minLakeKeep) {
+      // 过小内陆水斑去掉；够大的保留为湖
       for (const i of comp.cells) cells[i] = TERRAIN_LAND;
     }
   }
@@ -576,6 +539,7 @@ function despeckle(cells: Uint8Array, cols: number, rows: number): void {
   for (let y = 1; y < rows - 1; y++) {
     for (let x = 1; x < cols - 1; x++) {
       const i = y * cols + x;
+      if (cells[i] === TERRAIN_GREEN) continue;
       const me = cells[i];
       let same = 0;
       for (let dy = -1; dy <= 1; dy++) {
@@ -608,7 +572,7 @@ function hashUnit(seed: number): number {
 
 function percentileThreshold(field: Float32Array, ratio: number): number {
   const sample =
-    field.length > 16000 ? downsample(field, 16000) : Float32Array.from(field);
+    field.length > 24000 ? downsample(field, 24000) : Float32Array.from(field);
   sample.sort();
   const idx = Math.max(
     0,
@@ -625,23 +589,28 @@ function downsample(field: Float32Array, maxN: number): Float32Array {
   return out.subarray(0, j);
 }
 
-/** 预览：海陆绿地底图 + 河流折线 */
+/** 预览：陆地 / 水域 / 绿地（平滑缩放） */
 export function paintTerrainPreview(
   canvas: HTMLCanvasElement,
   grid: TerrainGrid,
-  rivers: Point[][] = [],
-  settings?: Pick<MapSettings, 'widthM' | 'heightM'>,
+  _rivers?: Point[][],
+  _settings?: Pick<MapSettings, 'widthM' | 'heightM'>,
   landColor = '#f2efe9',
   waterColor = '#aad3df',
   greenColor = '#add19e',
-  riverColor = '#5b9fb5',
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const { cols, rows, cells } = grid;
   const w = canvas.width;
   const h = canvas.height;
-  const img = ctx.createImageData(w, h);
+
+  const off = document.createElement('canvas');
+  off.width = cols;
+  off.height = rows;
+  const octx = off.getContext('2d');
+  if (!octx) return;
+  const img = octx.createImageData(cols, rows);
   const data = img.data;
 
   const parse = (hex: string) => {
@@ -652,36 +621,20 @@ export function paintTerrainPreview(
   const water = parse(waterColor);
   const green = parse(greenColor);
 
-  for (let y = 0; y < h; y++) {
-    const gr = Math.min(rows - 1, Math.floor((y / h) * rows));
-    for (let x = 0; x < w; x++) {
-      const gc = Math.min(cols - 1, Math.floor((x / w) * cols));
-      const cell = cells[gr * cols + gc];
-      const [cr, cg, cb] =
-        cell === TERRAIN_WATER ? water : cell === TERRAIN_GREEN ? green : land;
-      const i = (y * w + x) * 4;
-      data[i] = cr;
-      data[i + 1] = cg;
-      data[i + 2] = cb;
-      data[i + 3] = 255;
-    }
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    const [cr, cg, cb] =
+      cell === TERRAIN_WATER ? water : cell === TERRAIN_GREEN ? green : land;
+    const o = i * 4;
+    data[o] = cr;
+    data[o + 1] = cg;
+    data[o + 2] = cb;
+    data[o + 3] = 255;
   }
-  ctx.putImageData(img, 0, 0);
+  octx.putImageData(img, 0, 0);
 
-  if (!settings || rivers.length === 0) return;
-  ctx.strokeStyle = riverColor;
-  ctx.lineWidth = Math.max(1.5, Math.min(w, h) * 0.008);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  for (const path of rivers) {
-    if (path.length < 2) continue;
-    ctx.beginPath();
-    for (let i = 0; i < path.length; i++) {
-      const px = (path[i].x / settings.widthM) * w;
-      const py = (path[i].y / settings.heightM) * h;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.stroke();
-  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(off, 0, 0, w, h);
 }

@@ -898,7 +898,7 @@ input {
   border: 1px solid var(--line);
   border-radius: 2px;
   background: #f2efe9;
-  image-rendering: pixelated;
+  image-rendering: auto;
   object-fit: contain;
 }
 

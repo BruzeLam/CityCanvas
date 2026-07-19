@@ -56,24 +56,27 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
     terrainFromJSON(payload.terrain) ?? ensureTerrain(payload.settings, null);
 
   const terrainSeed =
-    payload.terrainSeed &&
-    typeof payload.terrainSeed.seed === 'number' &&
-    typeof payload.terrainSeed.oceanRatio === 'number'
-      ? {
-          seed: payload.terrainSeed.seed >>> 0,
-          oceanEnabled: payload.terrainSeed.oceanEnabled !== false,
-          oceanRatio: payload.terrainSeed.oceanRatio,
-          riverEnabled: payload.terrainSeed.riverEnabled === true,
-          riverDensity:
-            typeof payload.terrainSeed.riverDensity === 'number'
-              ? payload.terrainSeed.riverDensity
-              : undefined,
-          greenEnabled: payload.terrainSeed.greenEnabled === true,
-          greenDensity:
-            typeof payload.terrainSeed.greenDensity === 'number'
-              ? payload.terrainSeed.greenDensity
-              : undefined,
-        }
+    payload.terrainSeed && typeof payload.terrainSeed.seed === 'number'
+      ? (() => {
+          const raw = payload.terrainSeed;
+          const waterRatio =
+            typeof raw.waterRatio === 'number'
+              ? raw.waterRatio
+              : typeof raw.oceanRatio === 'number'
+                ? raw.oceanRatio
+                : undefined;
+          if (waterRatio == null) return undefined;
+          return {
+            seed: raw.seed >>> 0,
+            waterEnabled: raw.waterEnabled ?? raw.oceanEnabled !== false,
+            waterRatio,
+            oceanEnabled: raw.waterEnabled ?? raw.oceanEnabled !== false,
+            oceanRatio: waterRatio,
+            greenEnabled: raw.greenEnabled === true,
+            greenDensity:
+              typeof raw.greenDensity === 'number' ? raw.greenDensity : undefined,
+          };
+        })()
       : undefined;
 
   return {

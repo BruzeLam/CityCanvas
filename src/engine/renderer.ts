@@ -220,9 +220,9 @@ function drawTerrainGrid(
     { x: cols * cellSizeM, y: rows * cellSizeM },
     viewport,
   );
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(canvas, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
   ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
 }
 
 function drawMapBase(

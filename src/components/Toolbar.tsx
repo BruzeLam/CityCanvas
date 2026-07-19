@@ -45,10 +45,10 @@ type Props = {
 
 const TERRAIN_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
   { id: 'land', label: '陆地', icon: '🏝️', hint: '陆地刷 · 擦回米白底图' },
-  { id: 'ocean', label: '水域', icon: '🌊', hint: '水域刷 · 浅蓝色毛边' },
+  { id: 'ocean', label: '水域', icon: '🌊', hint: '水域刷 · 海/湖/河同色，形状自辨' },
   { id: 'mountain', label: '绿地', icon: '🌲', hint: '绿地/山地刷 · 平面绿色，无等高线' },
   { id: 'eraser', label: '橡皮', icon: '🧹', hint: '橡皮刷 · 擦回陆地并删除刷区内要素' },
-  { id: 'river', label: '河流', icon: '💧', hint: '窄河道折线（面状水域请用水域刷）' },
+  { id: 'river', label: '河道线', icon: '💧', hint: '可选中心线标注；面状水域请用水域刷' },
 ];
 
 const PATH_MODE_ICONS: Record<PathDrawMode, string> = {

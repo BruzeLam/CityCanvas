@@ -7,7 +7,7 @@ export const TERRAIN_LAND: TerrainCell = 0;
 export const TERRAIN_WATER: TerrainCell = 1;
 export const TERRAIN_GREEN: TerrainCell = 2;
 
-export const DEFAULT_TERRAIN_CELL_M = 25;
+export const DEFAULT_TERRAIN_CELL_M = 10;
 
 export type TerrainGrid = {
   cellSizeM: number;
@@ -15,6 +15,22 @@ export type TerrainGrid = {
   rows: number;
   cells: Uint8Array;
 };
+
+/** 按地图尺寸选栅格粒度：尽量细、控制在约 700 格边长内 */
+export function preferredTerrainCellSizeM(
+  settings: Pick<MapSettings, 'widthM' | 'heightM'>,
+): number {
+  const maxDim = Math.max(settings.widthM, settings.heightM);
+  const target = 720;
+  const raw = maxDim / target;
+  if (raw <= 8) return 8;
+  if (raw <= 10) return 10;
+  if (raw <= 12) return 12;
+  if (raw <= 16) return 16;
+  if (raw <= 20) return 20;
+  if (raw <= 25) return 25;
+  return 32;
+}
 
 /** 可 JSON 序列化的地形（cells 用 base64） */
 export type TerrainGridJSON = {
@@ -100,7 +116,7 @@ function hash2(ix: number, iy: number): number {
 }
 
 /**
- * 毛边刷 stamp：thickness 0–1 控制边缘噪声幅度（天际线式锯齿，非等高线）。
+ * 毛边刷 stamp：thickness 0–1 控制边缘起伏（偏平滑，细栅格下不再大锯齿）。
  */
 export function stampBrush(
   grid: TerrainGrid,
@@ -113,10 +129,10 @@ export function stampBrush(
   const t = Math.max(0, Math.min(1, thickness));
   const { cellSizeM: cs, cols, rows, cells } = grid;
 
-  const minC = Math.max(0, Math.floor((world.x - r * 1.35) / cs));
-  const maxC = Math.min(cols - 1, Math.ceil((world.x + r * 1.35) / cs));
-  const minR = Math.max(0, Math.floor((world.y - r * 1.35) / cs));
-  const maxR = Math.min(rows - 1, Math.ceil((world.y + r * 1.35) / cs));
+  const minC = Math.max(0, Math.floor((world.x - r * 1.25) / cs));
+  const maxC = Math.min(cols - 1, Math.ceil((world.x + r * 1.25) / cs));
+  const minR = Math.max(0, Math.floor((world.y - r * 1.25) / cs));
+  const maxR = Math.min(rows - 1, Math.ceil((world.y + r * 1.25) / cs));
 
   for (let row = minR; row <= maxR; row++) {
     for (let col = minC; col <= maxC; col++) {
@@ -127,10 +143,9 @@ export function stampBrush(
       const dist = Math.hypot(dx, dy);
       const ang = Math.atan2(dy, dx);
 
-      const n1 = Math.sin(ang * 5.3 + hash2(col, row) * Math.PI * 2);
-      const n2 = Math.sin(ang * 11.1 + hash2(col + 17, row - 9) * Math.PI * 2);
-      const n3 = hash2(col * 3, row * 5) * 2 - 1;
-      const jagged = (n1 * 0.45 + n2 * 0.3 + n3 * 0.25) * t * r * 0.42;
+      const n1 = Math.sin(ang * 3.1 + hash2(col, row) * Math.PI * 2);
+      const n2 = Math.sin(ang * 7.4 + hash2(col + 17, row - 9) * Math.PI * 2);
+      const jagged = (n1 * 0.65 + n2 * 0.35) * t * r * 0.18;
 
       if (dist <= r + jagged) {
         cells[row * cols + col] = value;
