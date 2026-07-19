@@ -351,7 +351,18 @@ export function MapCanvas({
   const commitPathFeatures = useCallback(
     (incoming: MapFeature[]) => {
       if (incoming.length === 0) return;
-      let feats = project.features;
+      const base = project.features;
+
+      // 平行批量：姐妹路互不挂接 / 互不续接，否则间距小于吸附半径时两端会被吸成同一点
+      if (incoming.length > 1) {
+        onProjectChange({
+          ...project,
+          features: [...base, ...incoming],
+        });
+        return;
+      }
+
+      let feats = base;
       for (const feature of incoming) {
         if (feature.kind === 'road' || feature.kind === 'railway') {
           const merged = tryMergeHeadToTail(feats, feature);

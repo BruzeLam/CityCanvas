@@ -31,7 +31,7 @@ function unitNormal(ax: number, ay: number, bx: number, by: number): { nx: numbe
 
 /**
  * 折线平行偏移（米）。offset>0 为左侧，offset<0 为右侧。
- * 转角用相邻段法向平均，避免明显断裂。
+ * 转角用法向平均 + 斜接上限，端点严格按切线法向偏移（避免两端收束成一点）。
  */
 export function offsetPolyline(points: Point[], offsetM: number): Point[] {
   if (points.length < 2 || Math.abs(offsetM) < 1e-6) {
@@ -39,7 +39,8 @@ export function offsetPolyline(points: Point[], offsetM: number): Point[] {
   }
 
   const n = points.length;
-  const result: Point[] = [];
+  const result: Point[] = new Array(n);
+  const MITER_LIMIT = 2.5;
 
   for (let i = 0; i < n; i++) {
     const prev = points[Math.max(0, i - 1)];
@@ -68,22 +69,36 @@ export function offsetPolyline(points: Point[], offsetM: number): Point[] {
     }
 
     if (count === 0) {
-      result.push({ ...curr });
+      result[i] = { ...curr };
       continue;
     }
 
-    const len = Math.hypot(nx, ny);
+    let len = Math.hypot(nx, ny);
     if (len < 1e-6) {
-      result.push({ ...curr });
+      result[i] = { ...curr };
       continue;
     }
-
     nx /= len;
     ny /= len;
-    result.push({
-      x: curr.x + nx * offsetM,
-      y: curr.y + ny * offsetM,
-    });
+
+    // 斜接：两法向夹角大时放大偏移，但封顶，避免尖角爆炸
+    let scale = 1;
+    if (count === 2 && i > 0 && i < n - 1) {
+      const a = unitNormal(prev.x, prev.y, curr.x, curr.y);
+      const b = unitNormal(curr.x, curr.y, next.x, next.y);
+      if (a && b) {
+        const dot = Math.max(-1, Math.min(1, a.nx * b.nx + a.ny * b.ny));
+        const cosHalf = Math.sqrt(Math.max(0, (1 + dot) / 2));
+        if (cosHalf > 1e-3) {
+          scale = Math.min(MITER_LIMIT, 1 / cosHalf);
+        }
+      }
+    }
+
+    result[i] = {
+      x: curr.x + nx * offsetM * scale,
+      y: curr.y + ny * offsetM * scale,
+    };
   }
 
   return result;
@@ -93,6 +108,8 @@ export function offsetPolyline(points: Point[], offsetM: number): Point[] {
  * 根据平行侧向，从引导线生成实际要提交的路径列表。
  * - both：±spacing/2（引导线作中线，不落路）
  * - left/right：引导线 + 单侧整间距偏移
+ *
+ * 过短引导线相对间距过小时，平行端会视觉重叠；仍生成，但保持端点分离。
  */
 export function buildParallelPaths(
   guide: Point[],
