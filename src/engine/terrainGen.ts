@@ -195,7 +195,6 @@ function labelComponents(
 }
 
 function despeckle(cells: Uint8Array, cols: number, rows: number): void {
-  const n = cols * rows;
   const next = new Uint8Array(cells);
   for (let y = 1; y < rows - 1; y++) {
     for (let x = 1; x < cols - 1; x++) {
