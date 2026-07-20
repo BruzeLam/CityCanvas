@@ -409,72 +409,45 @@ function splitCasingOutsideHosts(
   return segs;
 }
 
-/** 宿主路缘在汇入口留缝（沿弧长） */
-function splitHostCasingAtMouths(
-  points: Point[],
-  hostId: string,
+/**
+ * 只擦掉主路侧边路缘那一圈墨线（沿汇入方向、tip 宽），
+ * 绝不沿主路中心线挖空 → 不会缺一大块。
+ * 仅匝道汇入口；须在主路 casing 之后、fill 之前。
+ */
+function eraseHostSideRingAtRampMouths(
+  ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
-): Point[][] {
-  const gaps = mouths.filter((m) => m.hostId === hostId);
-  if (gaps.length === 0 || points.length < 2) return [points];
-
-  const cum = [0];
-  for (let i = 1; i < points.length; i++) {
-    cum.push(
-      cum[i - 1] +
-        Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y),
-    );
+  band: number,
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  const z = viewport.zoom;
+  const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * z) : 2 * z;
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  for (const m of mouths) {
+    if (Math.floor(m.grade + 1e-9) !== band) continue;
+    const p = toScreen(m.point, viewport);
+    const hostBodyW = Math.max(2, m.hostWidth * z);
+    const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
+    const ax = m.approachX;
+    const ay = m.approachY;
+    // 只扫过路缘环：外缘 → 刚进路面
+    const outer = hostBodyW * 0.5 + casingExtra + 1;
+    const inner = hostBodyW * 0.5 - 1;
+    if (outer <= inner) continue;
+    ctx.beginPath();
+    ctx.moveTo(p.x - ax * outer, p.y - ay * outer);
+    ctx.lineTo(p.x - ax * inner, p.y - ay * inner);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = tipCasingW + 1;
+    ctx.lineCap = 'butt';
+    ctx.stroke();
   }
-  const total = cum[cum.length - 1] || 1;
-
-  type Cut = { a: number; b: number };
-  const cuts: Cut[] = [];
-  for (const m of gaps) {
-    let bestD = Infinity;
-    let bestS = 0;
-    for (let i = 0; i < points.length - 1; i++) {
-      const on = closestOnSegment(m.point, { a: points[i], b: points[i + 1] });
-      if (on.dist < bestD) {
-        bestD = on.dist;
-        const segLen = cum[i + 1] - cum[i];
-        bestS = cum[i] + on.t * segLen;
-      }
-    }
-    if (bestD > m.hostWidth * 0.6 + 4) continue;
-    const sinA = Math.abs(m.hostDirX * m.approachY - m.hostDirY * m.approachX);
-    // 沿主路只留 tip 投影宽度，不拉长假
-    const half = (m.tipWidth * 0.5) / Math.max(sinA, 0.22) + 0.8;
-    cuts.push({
-      a: Math.max(0, bestS - half),
-      b: Math.min(total, bestS + half),
-    });
-  }
-  if (cuts.length === 0) return [points];
-  cuts.sort((x, y) => x.a - y.a);
-  const merged: Cut[] = [];
-  for (const c of cuts) {
-    const last = merged[merged.length - 1];
-    if (last && c.a <= last.b + 0.5) last.b = Math.max(last.b, c.b);
-    else merged.push({ ...c });
-  }
-
-  const segs: Point[][] = [];
-  let cursor = 0;
-  for (const c of merged) {
-    if (c.a - cursor > 1.2) {
-      const slice = slicePolylineByArc(points, cum, cursor, c.a);
-      if (slice.length >= 2) segs.push(slice);
-    }
-    cursor = c.b;
-  }
-  if (total - cursor > 1.2) {
-    const slice = slicePolylineByArc(points, cum, cursor, total);
-    if (slice.length >= 2) segs.push(slice);
-  }
-  return segs.length > 0 ? segs : [points];
+  ctx.restore();
 }
 
-/** 同层：主路 fill 压住汇入口；匝道路缘只画在主路外 */
+/** 同层：主路路缘不断；只擦汇入口侧边墨线；匝道路缘跳过碰撞区 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -572,9 +545,10 @@ function drawRoadsMerged(
         casingTrim,
         piece.subPoints,
         roads,
-        mouths,
       );
     }
+    // 只擦汇入口侧边墨线，不挖主路中心
+    eraseHostSideRingAtRampMouths(ctx, mouths, band, viewport, style);
     for (const piece of mains) {
       drawRoadFill(
         ctx,
@@ -586,7 +560,7 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 匝道路缘最后画，且跳过主路碰撞区 → 汇入口无横切线
+    // 匝道路缘最后画，碰撞区内不画
     for (const piece of ramps) {
       drawRoadCasing(
         ctx,
@@ -597,7 +571,6 @@ function drawRoadsMerged(
         casingTrim,
         piece.subPoints,
         roads,
-        mouths,
       );
     }
     i = j;
@@ -1065,7 +1038,7 @@ function sketchRoadFill(color: string): string {
   return `rgb(${Math.round(p.r * 0.15 + 240)},${Math.round(p.g * 0.15 + 240)},${Math.round(p.b * 0.15 + 240)})`;
 }
 
-/** 路缘：碰撞区内不画 tip 边线；宿主汇入口留缝；不 destination-out */
+/** 路缘：主路完整；匝道碰撞区内不画边线 */
 function drawRoadCasing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
@@ -1075,7 +1048,6 @@ function drawRoadCasing(
   casingTrim: Map<string, number>,
   subPoints?: Point[],
   peers?: MapFeature[],
-  mouths?: JoinMouth[],
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
   const isRamp = level === 'ramp' || isRampFeature(feature);
@@ -1111,7 +1083,7 @@ function drawRoadCasing(
     world = trimmed;
   }
 
-  // 仅匝道：碰撞区内不画路缘（汇入口横切线）
+  // 仅匝道：碰撞区内不画路缘（去掉 tip 横切线）；主路路缘完整不断
   let worldSegs: Point[][] = [world];
   if (peers && peers.length > 0 && isRamp) {
     const hosts = peers.filter(
@@ -1127,14 +1099,6 @@ function drawRoadCasing(
       hosts,
       roadBodyWidthM(feature) * 0.5,
     );
-  }
-  // 主路：汇入口沿中心线留缝
-  if (mouths && mouths.length > 0 && !isRamp) {
-    const gapped: Point[][] = [];
-    for (const seg of worldSegs) {
-      gapped.push(...splitHostCasingAtMouths(seg, feature.id, mouths));
-    }
-    worldSegs = gapped;
   }
   if (worldSegs.length === 0) return;
 

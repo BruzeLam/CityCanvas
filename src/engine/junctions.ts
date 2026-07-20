@@ -1562,16 +1562,12 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     host: MapFeature,
   ) => {
     if (host.kind !== 'road' || host.points.length < 2) return;
+    // 只处理匝道 tip：普通丁字/十字不擦边、不留缝
+    if (joiner.roadLevel !== 'ramp' && !isRampFeature(joiner)) return;
     // 宿主也是匝道：互挂不画汇入口
     if (host.roadLevel === 'ramp' || isRampFeature(host)) return;
-    // 共线续接不是侧挂 / 丁字（匝道一律开口）
-    if (
-      joiner.roadLevel !== 'ramp' &&
-      !isRampFeature(joiner) &&
-      isCollinearTipContinuation(tipPoint, joiner, end, host)
-    ) {
-      return;
-    }
+    // 共线续接不是侧挂
+    if (isCollinearTipContinuation(tipPoint, joiner, end, host)) return;
 
     const hostGrade = featureGrade(host);
     const hostCls = roadVisualClass(host);
