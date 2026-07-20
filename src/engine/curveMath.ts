@@ -53,7 +53,9 @@ function sampleArcAngles(
   maxSegmentM: number,
 ): Point[] {
   const arcLen = Math.abs(sweep) * radius;
-  const n = Math.max(4, Math.ceil(arcLen / maxSegmentM));
+  // 加密采样，避免弯道折线锯齿；长弧按弧长分段
+  const step = Math.min(Math.max(3, maxSegmentM), 10);
+  const n = Math.max(12, Math.ceil(arcLen / step));
   const points: Point[] = [];
   for (let i = 0; i <= n; i++) {
     const t = i / n;
@@ -69,12 +71,13 @@ function sampleArcAngles(
 /**
  * 天际线 / TF2 式弯道：从 start 出发，沿 heading 切线，画到 end 的圆弧。
  * 圆心在切线法向上，半径由终点几何唯一确定。
+ * 不再把优弧夹成 180° 再硬贴终点（那会造成末段折线锯齿）；环匝可超过 180°。
  */
 export function curveFromTangent(
   start: Point,
   headingRad: number,
   end: Point,
-  maxSegmentM = 36,
+  maxSegmentM = 8,
 ): { points: Point[]; radius: number; sweepDeg: number; endHeading: number } | null {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -119,10 +122,9 @@ export function curveFromTangent(
     while (sweep < -Math.PI * 2) sweep += Math.PI * 2;
   }
 
-  // 劣弧：圆心角不超过 180°；夹紧后仍强制落到用户终点
-  const maxSweep = Math.PI;
-  if (Math.abs(sweep) > maxSweep) {
-    sweep = Math.sign(sweep) * maxSweep;
+  // 接近整圆时略收，避免重合起终点采样异常；保留 >180° 环匝
+  if (Math.abs(sweep) > Math.PI * 2 - 1e-3) {
+    sweep = Math.sign(sweep) * (Math.PI * 2 - 1e-3);
   }
 
   const points = sampleArcAngles(center, radius, ang0, sweep, maxSegmentM);
@@ -175,7 +177,7 @@ export function curveFromThreePoints(
   a: Point,
   b: Point,
   c: Point,
-  maxSegmentM = 36,
+  maxSegmentM = 8,
 ): CurveResult | null {
   const chordAC = dist(a, c);
   if (chordAC < 2 || dist(a, b) < 2 || dist(b, c) < 2) return null;
@@ -268,7 +270,7 @@ export function curveAdaptiveViaControl(
   c: Point,
   startHeading: number | null,
   endHeading: number | null,
-  maxSegmentM = 36,
+  maxSegmentM = 8,
 ): CurveResult | null {
   const h0 = startHeading ?? bearingRad(a, b);
   const arc1 = curveFromTangent(a, h0, b, maxSegmentM);

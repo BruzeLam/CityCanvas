@@ -1,5 +1,11 @@
-import type { CityProject, MapFeature, MapStyle } from '../types';
-import { clampGrade, DEFAULT_GRADE, isLegacyLandformPolygon, normalizeFeatureKind } from '../types';
+import type { CityProject, MapFeature, MapStyle, RoadLevel } from '../types';
+import {
+  clampGrade,
+  DEFAULT_GRADE,
+  isLegacyLandformPolygon,
+  normalizeFeatureKind,
+  ROAD_STYLES,
+} from '../types';
 import { reweaveAllCrossings } from '../engine/junctions';
 import {
   ensureTerrain,
@@ -48,6 +54,12 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
           : undefined,
         gradeEnd:
           needsGrade && typeof f.gradeEnd === 'number' ? clampGrade(f.gradeEnd) : undefined,
+        roadLevelEnd:
+          kind === 'road' &&
+          typeof f.roadLevelEnd === 'string' &&
+          f.roadLevelEnd in ROAD_STYLES
+            ? (f.roadLevelEnd as RoadLevel)
+            : undefined,
       };
     })
     .filter((f) => !isLegacyLandformPolygon(f.kind));

@@ -312,9 +312,12 @@ export function MapCanvas({
       project,
       preview,
       selectedFeatureId ? { featureId: selectedFeatureId } : null,
-      { terrainDraft: brushPainting.current },
+      {
+        terrainDraft: brushPainting.current,
+        showJunctionNodes: tool === 'select',
+      },
     );
-  }, [project, preview, selectedFeatureId]);
+  }, [project, preview, selectedFeatureId, tool]);
 
   useEffect(() => {
     paint();
@@ -525,13 +528,21 @@ export function MapCanvas({
   );
 
   const resolvePathGrades = useCallback(
-    (points: Point[]): { grade: FeatureGrade; gradeEnd?: FeatureGrade } => {
+    (
+      points: Point[],
+    ): {
+      grade: FeatureGrade;
+      gradeEnd?: FeatureGrade;
+      roadLevel?: RoadLevel;
+      roadLevelEnd?: RoadLevel;
+    } => {
       const startTip = findPathTipAt(projectRef.current.features, points[0]);
       const startNear = findNearestAnyGradeAttachment(
         projectRef.current.features,
         points[0],
         RAMP_ATTACH_M,
       );
+      const startFeat = startTip?.feature ?? startNear?.feature;
       const startG =
         draftStartGrade ??
         (startTip
@@ -549,20 +560,41 @@ export function MapCanvas({
         points[points.length - 1],
         RAMP_ATTACH_M,
       );
+      const endFeat = endTip?.feature ?? endNear?.feature;
 
-      let endG = drawGrade;
+      // 整段匝道留在分支起点所在层；gradeEnd 仅用于挂到异层目标
+      let endG = startG;
       if (endTip) {
         endG = featureGrade(endTip.feature);
       } else if (endNear) {
         endG = endNear.grade;
       }
 
+      const startLevel =
+        startFeat?.kind === 'road'
+          ? (startFeat.roadLevel ?? roadLevel)
+          : roadLevel;
+      const endLevel =
+        endFeat?.kind === 'road' ? (endFeat.roadLevel ?? startLevel) : startLevel;
+
+      const result: {
+        grade: FeatureGrade;
+        gradeEnd?: FeatureGrade;
+        roadLevel?: RoadLevel;
+        roadLevelEnd?: RoadLevel;
+      } = {
+        grade: startG,
+        roadLevel: startLevel,
+      };
       if (endG !== startG) {
-        return { grade: startG, gradeEnd: endG };
+        result.gradeEnd = endG;
       }
-      return { grade: startG };
+      if (endLevel !== startLevel) {
+        result.roadLevelEnd = endLevel;
+      }
+      return result;
     },
-    [draftStartGrade, drawGrade],
+    [draftStartGrade, drawGrade, roadLevel],
   );
 
   const finishPolyline = useCallback(() => {
@@ -572,10 +604,8 @@ export function MapCanvas({
       return;
     }
 
-    const grades: { grade?: FeatureGrade; gradeEnd?: FeatureGrade } =
-      kind === 'road' || kind === 'railway'
-        ? resolvePathGrades(polyDraft)
-        : {};
+    const meta =
+      kind === 'road' || kind === 'railway' ? resolvePathGrades(polyDraft) : null;
 
     const pathList =
       parallelEnabled && (kind === 'road' || kind === 'railway')
@@ -588,14 +618,15 @@ export function MapCanvas({
         kind,
         points,
         closed: false,
-        roadLevel: kind === 'road' ? roadLevel : undefined,
+        roadLevel: kind === 'road' ? (meta?.roadLevel ?? roadLevel) : undefined,
+        roadLevelEnd: kind === 'road' ? meta?.roadLevelEnd : undefined,
         railKind: kind === 'railway' ? railKind : undefined,
         metroColor:
           kind === 'railway' && railKind === 'metro'
             ? metroColor || DEFAULT_METRO_COLOR
             : undefined,
-        grade: grades.grade,
-        gradeEnd: grades.gradeEnd,
+        grade: meta?.grade,
+        gradeEnd: meta?.gradeEnd,
       })),
     );
     resetDrafts();
@@ -1217,7 +1248,7 @@ export function MapCanvas({
       const endLabel = formatGrade(drawGrade);
       const gradeHint =
         draftStartGrade != null && draftStartGrade !== drawGrade
-          ? `匝道 ${startLabel} → ${endLabel} · -/= 换终点层`
+          ? `匝道留在 ${startLabel}（不抬到终点层）· 配色可渐变 · -/= 不影响本段高度`
           : `标高 ${endLabel} · -/= 换层`;
       const parallelHint = parallelEnabled
         ? ` · 平行 ${parallelSpacingM} m（${parallelSide === 'both' ? '双侧' : parallelSide === 'left' ? '左' : '右'}）`
@@ -1258,8 +1289,8 @@ export function MapCanvas({
     const tagText = tag ? ` · ${tag}` : '';
     const shiftHint = shiftSnap ? ' · Shift' : '';
     const gradeLine =
-      draftStartGrade != null && draftStartGrade !== drawGrade
-        ? `标高 ${formatGrade(draftStartGrade)} → ${formatGrade(drawGrade)}`
+      draftStartGrade != null
+        ? `匝道留在 ${formatGrade(draftStartGrade)}`
         : `标高 ${formatGrade(drawGrade)}`;
 
     if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {

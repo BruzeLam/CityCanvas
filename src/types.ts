@@ -60,6 +60,8 @@ export type MapFeature = {
   points: Point[];
   closed: boolean;
   roadLevel?: RoadLevel;
+  /** 匝道终点道路等级（与 roadLevel 不同时绘制配色渐变） */
+  roadLevelEnd?: RoadLevel;
   /** 轨道细分；缺省视为普通铁路 */
   railKind?: RailKind;
   /** 地铁线路色（可选） */
@@ -85,9 +87,20 @@ export function featureGradeEnd(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): Feat
   return clampGrade(f.gradeEnd);
 }
 
-/** 跨层匝道（起终点标高不同） */
+/** 跨层匝道（起终点标高不同）——仅用于挂接；绘制 z-order 仍用起点层 */
 export function isRampFeature(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): boolean {
   return f.gradeEnd != null && featureGradeEnd(f) !== featureGrade(f);
+}
+
+/** 异级道路渐变（白→黄等） */
+export function isLevelBlendRoad(
+  f: Pick<MapFeature, 'kind' | 'roadLevel' | 'roadLevelEnd'>,
+): boolean {
+  return (
+    f.kind === 'road' &&
+    f.roadLevelEnd != null &&
+    f.roadLevelEnd !== (f.roadLevel ?? 'local')
+  );
 }
 
 export function clampGrade(n: number): FeatureGrade {
@@ -155,7 +168,7 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   railways: true,
   rivers: true,
   labels: true,
-  junctions: true,
+  junctions: false,
   grid: true,
 };
 
@@ -166,7 +179,7 @@ export const LAYER_TOGGLE_LABELS: Record<LayerKey, string> = {
   railways: '铁路',
   rivers: '河流',
   labels: '标注',
-  junctions: '路口',
+  junctions: '路口节点',
   grid: '网格',
 };
 

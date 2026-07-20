@@ -526,7 +526,7 @@ export function Toolbar({
                 checked={showJunctions}
                 onChange={(e) => onShowJunctionsChange(e.target.checked)}
               />
-              显示路口节点
+              路口节点（选择时自动显示；勾选则始终显示）
             </label>
             {tool === 'road' && (
               <>

@@ -7,7 +7,8 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, RAIL_STYLES, featureGrade, featureGradeEnd, getLayers, isRampFeature } from '../types';
+import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, isLevelBlendRoad, isRampFeature } from '../types';
+import type { RoadLevel } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
   curveFromThreePoints,
@@ -25,9 +26,61 @@ function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
   return renderGrade(a) - renderGrade(b);
 }
 
-/** 匝道按较高一层参与 z-order，避免被下层盖住 */
+/** 匝道按起点层参与 z-order（整段留在分支道路所在层，不抬到终点层） */
 function renderGrade(f: MapFeature): number {
-  return Math.max(featureGrade(f), featureGradeEnd(f));
+  return featureGrade(f);
+}
+
+function lerpColor(a: string, b: string, t: number): string {
+  const pa = parseColor(a);
+  const pb = parseColor(b);
+  if (!pa || !pb) return t < 0.5 ? a : b;
+  const u = Math.max(0, Math.min(1, t));
+  const r = Math.round(pa.r + (pb.r - pa.r) * u);
+  const g = Math.round(pa.g + (pb.g - pa.g) * u);
+  const bl = Math.round(pa.b + (pb.b - pa.b) * u);
+  return `rgb(${r},${g},${bl})`;
+}
+
+function parseColor(c: string): { r: number; g: number; b: number } | null {
+  if (c.startsWith('#') && (c.length === 7 || c.length === 4)) {
+    if (c.length === 4) {
+      return {
+        r: parseInt(c[1] + c[1], 16),
+        g: parseInt(c[2] + c[2], 16),
+        b: parseInt(c[3] + c[3], 16),
+      };
+    }
+    return {
+      r: parseInt(c.slice(1, 3), 16),
+      g: parseInt(c.slice(3, 5), 16),
+      b: parseInt(c.slice(5, 7), 16),
+    };
+  }
+  const m = c.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (!m) return null;
+  return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
+}
+
+function strokePolylineSegments(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  width: number,
+  colorAt: (t: number) => string,
+  lineCap: CanvasLineCap,
+) {
+  if (points.length < 2) return;
+  ctx.lineWidth = width;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = lineCap;
+  for (let i = 0; i < points.length - 1; i++) {
+    const t = (i + 0.5) / (points.length - 1);
+    ctx.strokeStyle = colorAt(t);
+    ctx.beginPath();
+    ctx.moveTo(points[i].x, points[i].y);
+    ctx.lineTo(points[i + 1].x, points[i + 1].y);
+    ctx.stroke();
+  }
 }
 
 /** 同层先画完所有路缘，再画路面，避免后画的路「盖住」路口 */
@@ -326,21 +379,35 @@ function drawRoadCasing(
   joinedCaps: Set<string>,
 ) {
   if (style === 'sketch') return;
-  const level = feature.roadLevel ?? 'local';
+  const level = (feature.roadLevel ?? 'local') as RoadLevel;
+  const levelEnd = (feature.roadLevelEnd ?? level) as RoadLevel;
   const roadStyle = ROAD_STYLES[level];
+  const endStyle = ROAD_STYLES[levelEnd];
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
   const width = roadStyle.width * viewport.zoom;
-  const casingW = width + 2 * viewport.zoom;
+  const endWidth = endStyle.width * viewport.zoom;
+  const casingExtra = 2 * viewport.zoom;
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
-  tracePath(ctx, points, false);
-  ctx.strokeStyle = roadStyle.casing;
-  ctx.lineWidth = casingW;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = strokeCap;
-  ctx.stroke();
-  drawFreeEndCaps(ctx, freeEnds, viewport, casingW, roadStyle.casing);
+
+  if (isLevelBlendRoad(feature)) {
+    strokePolylineSegments(
+      ctx,
+      points,
+      Math.max(width, endWidth) + casingExtra,
+      (t) => lerpColor(roadStyle.casing, endStyle.casing, t),
+      strokeCap,
+    );
+  } else {
+    tracePath(ctx, points, false);
+    ctx.strokeStyle = roadStyle.casing;
+    ctx.lineWidth = width + casingExtra;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = strokeCap;
+    ctx.stroke();
+  }
+  drawFreeEndCaps(ctx, freeEnds, viewport, width + casingExtra, roadStyle.casing);
 }
 
 function drawRoadFill(
@@ -350,38 +417,54 @@ function drawRoadFill(
   style: MapStyle,
   joinedCaps: Set<string>,
 ) {
-  const level = feature.roadLevel ?? 'local';
+  const level = (feature.roadLevel ?? 'local') as RoadLevel;
+  const levelEnd = (feature.roadLevelEnd ?? level) as RoadLevel;
   const roadStyle = ROAD_STYLES[level];
+  const endStyle = ROAD_STYLES[levelEnd];
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
   const width = roadStyle.width * viewport.zoom;
+  const endWidth = endStyle.width * viewport.zoom;
   const fillW = style === 'sketch' ? Math.max(1, width * 0.5) : width;
   const fillColor = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
+  const endColor = style === 'blueprint' ? '#e8f4ff' : endStyle.color;
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
-  tracePath(ctx, points, false);
-  ctx.strokeStyle = fillColor;
-  ctx.lineWidth = fillW;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = strokeCap;
-  ctx.stroke();
+
+  if (isLevelBlendRoad(feature) && style !== 'blueprint') {
+    strokePolylineSegments(
+      ctx,
+      points,
+      fillW,
+      (t) => {
+        // 宽度也略作插值：分段线宽用平均
+        void endWidth;
+        return lerpColor(fillColor, endColor, t);
+      },
+      strokeCap,
+    );
+  } else {
+    tracePath(ctx, points, false);
+    ctx.strokeStyle = fillColor;
+    ctx.lineWidth = fillW;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = strokeCap;
+    ctx.stroke();
+  }
   drawFreeEndCaps(ctx, freeEnds, viewport, fillW, fillColor);
 
-  // 跨层匝道：在挂接端画略大的接合圆，视觉上接到目标层
-  if (isRampFeature(feature)) {
+  // 跨层挂接端：小接合点（不再用大圆抢戏）
+  if (isRampFeature(feature) || isLevelBlendRoad(feature)) {
     const tips = [feature.points[0], feature.points[feature.points.length - 1]];
-    for (const tip of tips) {
+    const tipColors = [fillColor, endColor];
+    tips.forEach((tip, i) => {
       const s = toScreen(tip, viewport);
+      const r = Math.max(1.2, fillW * 0.28);
       ctx.beginPath();
-      ctx.arc(s.x, s.y, fillW * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = fillColor;
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = tipColors[i];
       ctx.fill();
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, fillW * 0.55 + 1.2 * viewport.zoom, 0, Math.PI * 2);
-      ctx.strokeStyle = roadStyle.casing;
-      ctx.lineWidth = Math.max(1, 1.2 * viewport.zoom);
-      ctx.stroke();
-    }
+    });
   }
 }
 
@@ -394,10 +477,10 @@ function drawJunctionNodes(
   const nodes = collectJunctionNodes(features);
   for (const node of nodes) {
     const p = toScreen(node.point, viewport);
-    const r = Math.max(2.5, 3.2 * viewport.zoom);
+    const r = Math.max(1.4, 1.6 * viewport.zoom);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r + 1.2 * viewport.zoom, 0, Math.PI * 2);
-    ctx.fillStyle = style === 'blueprint' ? '#0b1e33' : '#888888';
+    ctx.arc(p.x, p.y, r + 0.7 * viewport.zoom, 0, Math.PI * 2);
+    ctx.fillStyle = style === 'blueprint' ? '#0b1e33' : '#9a9a9a';
     ctx.fill();
     ctx.beginPath();
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
@@ -771,8 +854,10 @@ function drawPreviewCurve(
       const screen = curve.points.map((p) => toScreen(p, viewport));
       tracePath(ctx, screen, false);
       ctx.strokeStyle = palette.preview;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 2.25;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.setLineDash([5, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
 
@@ -812,8 +897,10 @@ function drawPreviewCurve(
     const screen = curve.points.map((p) => toScreen(p, viewport));
     tracePath(ctx, screen, false);
     ctx.strokeStyle = palette.preview;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2.25;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.setLineDash([5, 4]);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -898,12 +985,14 @@ export function renderMap(
   project: CityProject,
   preview: PreviewState,
   selection: SelectionState = null,
-  opts?: { terrainDraft?: boolean },
+  opts?: { terrainDraft?: boolean; showJunctionNodes?: boolean },
 ) {
   const palette = PALETTES[project.mapStyle];
   const { viewport, features } = project;
   const layers = getLayers(project);
   const terrainQuality: TerrainPaintQuality = opts?.terrainDraft ? 'draft' : 'final';
+  const showJunctions =
+    opts?.showJunctionNodes === true || layers.junctions === true;
 
   ctx.fillStyle = '#e7e5e4';
   ctx.fillRect(0, 0, canvasW, canvasH);
@@ -948,7 +1037,7 @@ export function renderMap(
   }
 
   if (layers.roads || layers.railways) {
-    if (layers.junctions !== false) {
+    if (showJunctions) {
       const paths = features.filter(
         (f) =>
           (layers.roads && f.kind === 'road') || (layers.railways && f.kind === 'railway'),
