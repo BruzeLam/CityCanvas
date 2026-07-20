@@ -256,7 +256,7 @@ export const ROAD_STYLES: Record<
   collector: { label: '次干路', width: 7.5, color: '#ffffff', casing: '#888888' },
   local: { label: '支路', width: 5, color: '#e8e8e8', casing: '#aaaaaa' },
   /** 细匝道：连接异级/异层；配色由 roadLevelFrom→End 渐变，接合处加宽过渡 */
-  ramp: { label: '匝道', width: 3.2, color: '#ececec', casing: '#9a9a9a' },
+  ramp: { label: '匝道', width: 4.5, color: '#ececec', casing: '#9a9a9a' },
 };
 
 export const LAYER_LABELS: Record<FeatureKind, string> = {

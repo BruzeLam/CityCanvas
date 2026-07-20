@@ -30,6 +30,85 @@ function quantizeKey(p: Point, step = JUNCTION_SNAP_M): string {
   return `${Math.round(p.x / step) * step},${Math.round(p.y / step) * step}`;
 }
 
+/** 三点近似共线且同向（延伸合并后可删中间点） */
+function isCollinearContinuation(a: Point, b: Point, c: Point): boolean {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const bcx = c.x - b.x;
+  const bcy = c.y - b.y;
+  const lab = Math.hypot(abx, aby);
+  const lbc = Math.hypot(bcx, bcy);
+  if (lab < EPS || lbc < EPS) return true;
+  const crossAbs = Math.abs(abx * bcy - aby * bcx) / (lab * lbc);
+  const dot = (abx * bcx + aby * bcy) / (lab * lbc);
+  return crossAbs < 0.045 && dot > 0.95;
+}
+
+function otherFeatureTouchesPoint(
+  features: MapFeature[],
+  selfId: string,
+  point: Point,
+  grade: FeatureGrade,
+  maxDist = ENDPOINT_MERGE_M,
+): boolean {
+  for (const f of features) {
+    if (f.id === selfId || !isPathKind(f) || f.points.length < 2) continue;
+    if (isRampFeature(f)) {
+      if (featureGrade(f) === grade && dist(point, f.points[0]) <= maxDist) return true;
+      if (featureGradeEnd(f) === grade && dist(point, f.points[f.points.length - 1]) <= maxDist) {
+        return true;
+      }
+      continue;
+    }
+    if (featureGrade(f) !== grade) continue;
+    for (const p of f.points) {
+      if (dist(point, p) <= maxDist) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 去掉「非交叉口」的共线中间点：延伸合并后原端点可消失，只留弯折与真正路口。
+ */
+export function simplifyPathKeepingJunctions(
+  points: Point[],
+  selfId: string,
+  features: MapFeature[],
+  grade: FeatureGrade,
+): Point[] {
+  if (points.length <= 2) return points.map((p) => ({ ...p }));
+  const out: Point[] = [{ ...points[0] }];
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i];
+    if (otherFeatureTouchesPoint(features, selfId, p, grade)) {
+      out.push({ ...p });
+      continue;
+    }
+    const prev = out[out.length - 1];
+    const next = points[i + 1];
+    if (!isCollinearContinuation(prev, p, next)) {
+      out.push({ ...p });
+    }
+  }
+  out.push({ ...points[points.length - 1] });
+  return out;
+}
+
+function canMergeInto(
+  host: MapFeature,
+  draft: MapFeature,
+  grade: FeatureGrade,
+): boolean {
+  if (host.kind !== draft.kind) return false;
+  if (isRampFeature(host) || isLevelBlendRoad(host) || host.roadLevel === 'ramp') return false;
+  if (featureGrade(host) !== grade) return false;
+  if (draft.kind === 'road' && (host.roadLevel ?? 'local') !== (draft.roadLevel ?? 'local')) {
+    return false;
+  }
+  return true;
+}
+
 /** 两开线段真交（不含端点）；返回参数 t∈(0,1)、u∈(0,1) 与交点 */
 export function segmentIntersection(
   a1: Point,
@@ -205,8 +284,8 @@ export function findPathTipAt(
 }
 
 /**
- * 同层首尾相接：把 draft 并入已有路径（消除端点圆帽）。
- * 仅同 kind / 同等级 / 同标高且非匝道时合并。
+ * 同层首尾相接：把 draft 并入已有路径（消除端点圆帽与延伸处多余节点）。
+ * 仅同 kind / 同等级 / 同标高且非匝道时合并；起终点任一端贴上都可续接。
  */
 export function tryMergeHeadToTail(
   features: MapFeature[],
@@ -216,31 +295,57 @@ export function tryMergeHeadToTail(
   if (isRampFeature(draft) || isLevelBlendRoad(draft) || draft.roadLevel === 'ramp') return null;
 
   const grade = featureGrade(draft);
-  const tip = findPathTipAt(features, draft.points[0], ENDPOINT_MERGE_M, (f) => {
-    if (f.kind !== draft.kind) return false;
-    if (isRampFeature(f)) return false;
-    if (featureGrade(f) !== grade) return false;
-    if (draft.kind === 'road' && (f.roadLevel ?? 'local') !== (draft.roadLevel ?? 'local')) {
-      return false;
+  const filter = (f: MapFeature) => canMergeInto(f, draft, grade);
+
+  type Merge = { host: MapFeature; points: Point[] };
+  let best: Merge | null = null;
+
+  const startTip = findPathTipAt(features, draft.points[0], ENDPOINT_MERGE_M, filter);
+  if (startTip) {
+    const extension = draft.points.slice(1);
+    if (extension.length > 0) {
+      const points =
+        startTip.end === 'end'
+          ? [...startTip.feature.points, ...extension]
+          : [...extension.reverse(), ...startTip.feature.points];
+      best = { host: startTip.feature, points };
     }
-    return true;
-  });
-  if (!tip) return null;
+  }
 
-  const extension = draft.points.slice(1);
-  if (extension.length === 0) return null;
+  const endTip = findPathTipAt(
+    features,
+    draft.points[draft.points.length - 1],
+    ENDPOINT_MERGE_M,
+    filter,
+  );
+  if (endTip && (!best || endTip.feature.id !== best.host.id)) {
+    const extension = draft.points.slice(0, -1);
+    if (extension.length > 0) {
+      const points =
+        endTip.end === 'end'
+          ? [...endTip.feature.points, ...extension.reverse()]
+          : [...extension, ...endTip.feature.points];
+      // 若两端都能合，优先更长的合并结果
+      if (!best || points.length > best.points.length) {
+        best = { host: endTip.feature, points };
+      }
+    }
+  }
 
-  const mergedPoints =
-    tip.end === 'end'
-      ? [...tip.feature.points, ...extension]
-      : [...extension.reverse(), ...tip.feature.points];
+  if (!best) return null;
 
+  const without = features.filter((f) => f.id !== best!.host.id);
+  const simplified = simplifyPathKeepingJunctions(
+    best.points,
+    best.host.id,
+    without,
+    grade,
+  );
   const merged: MapFeature = {
-    ...tip.feature,
-    points: mergedPoints,
+    ...best.host,
+    points: simplified,
   };
 
-  const without = features.filter((f) => f.id !== tip.feature.id);
   return weaveSameGradeCrossings(without, merged);
 }
 
@@ -480,7 +585,17 @@ export function weaveSameGradeCrossings(
     return { ...f, points: applyHitsToPolyline(f.points, hits) };
   });
 
-  return [...nextFeatures, wovenIncoming];
+  const simplifiedIncoming: MapFeature = {
+    ...wovenIncoming,
+    points: simplifyPathKeepingJunctions(
+      wovenIncoming.points,
+      wovenIncoming.id,
+      nextFeatures,
+      grade,
+    ),
+  };
+
+  return [...nextFeatures, simplifiedIncoming];
 }
 
 /**
@@ -504,37 +619,56 @@ export type JunctionNode = {
   degree: number;
 };
 
-/** 同层至少两条路径共享的顶点 → 路口节点 */
+/** 交叉口（≥2 条路）与路径端点；延伸合并后的共线中点不显示 */
 export function collectJunctionNodes(features: MapFeature[]): JunctionNode[] {
-  type Bucket = { point: Point; grade: FeatureGrade; ids: Set<string> };
+  type Bucket = {
+    point: Point;
+    grade: FeatureGrade;
+    ids: Set<string>;
+    isEndpoint: boolean;
+  };
   const buckets = new Map<string, Bucket>();
 
-  const addTip = (f: MapFeature, p: Point, grade: FeatureGrade) => {
+  const addPoint = (
+    f: MapFeature,
+    p: Point,
+    grade: FeatureGrade,
+    isEndpoint: boolean,
+  ) => {
     const key = `${grade}|${quantizeKey(p)}`;
     const existing = buckets.get(key);
     if (existing) {
       existing.ids.add(f.id);
+      if (isEndpoint) existing.isEndpoint = true;
     } else {
-      buckets.set(key, { point: { ...p }, grade, ids: new Set([f.id]) });
+      buckets.set(key, {
+        point: { ...p },
+        grade,
+        ids: new Set([f.id]),
+        isEndpoint,
+      });
     }
   };
 
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2) continue;
     if (isRampFeature(f)) {
-      addTip(f, f.points[0], featureGrade(f));
-      addTip(f, f.points[f.points.length - 1], featureGradeEnd(f));
+      addPoint(f, f.points[0], featureGrade(f), true);
+      addPoint(f, f.points[f.points.length - 1], featureGradeEnd(f), true);
       continue;
     }
     const grade = featureGrade(f);
-    for (const p of f.points) {
-      addTip(f, p, grade);
+    const last = f.points.length - 1;
+    for (let i = 0; i < f.points.length; i++) {
+      // 端点始终登记；中间点只为检出交叉口（与他路共享时 degree≥2）
+      addPoint(f, f.points[i], grade, i === 0 || i === last);
     }
   }
 
   const nodes: JunctionNode[] = [];
   for (const b of buckets.values()) {
-    if (b.ids.size >= 2) {
+    // 交叉口，或至少一条路的端点（死头/可续接点）
+    if (b.ids.size >= 2 || b.isEndpoint) {
       nodes.push({ point: b.point, grade: b.grade, degree: b.ids.size });
     }
   }

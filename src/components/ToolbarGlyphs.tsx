@@ -17,7 +17,7 @@ export function GlyphRoadLevel({
       arterial: 4.8,
       collector: 4.2,
       local: 2.8,
-      ramp: 2,
+      ramp: 2.4,
     }[level] ?? 2.8;
   const dash = level === 'expressway' || level === 'arterial';
   const bg = active
