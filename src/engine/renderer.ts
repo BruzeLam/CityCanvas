@@ -186,15 +186,55 @@ function drawTerrainGrid(
   viewport: Viewport,
   palette: StylePalette,
 ) {
-  const { cols, rows, cellSizeM, cells } = grid;
+  const { cols, rows, cellSizeM } = grid;
+  const bitmap = getTerrainBitmap(grid, palette);
+
+  const tl = toScreen({ x: 0, y: 0 }, viewport);
+  const br = toScreen(
+    { x: cols * cellSizeM, y: rows * cellSizeM },
+    viewport,
+  );
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+}
+
+/** 地形位图缓存：平移缩放复用，仅在 cells/配色变化时重建 */
+type TerrainBitmapCache = {
+  cells: Uint8Array;
+  cols: number;
+  rows: number;
+  waterKey: string;
+  greenKey: string;
+  canvas: HTMLCanvasElement;
+};
+
+let terrainBitmapCache: TerrainBitmapCache | null = null;
+
+function getTerrainBitmap(grid: TerrainGrid, palette: StylePalette): HTMLCanvasElement {
+  const { cols, rows, cells } = grid;
+  const waterKey = palette.water;
+  const greenKey = palette.mountain;
+  const hit = terrainBitmapCache;
+  if (
+    hit &&
+    hit.cells === cells &&
+    hit.cols === cols &&
+    hit.rows === rows &&
+    hit.waterKey === waterKey &&
+    hit.greenKey === greenKey
+  ) {
+    return hit.canvas;
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = cols;
   canvas.height = rows;
   const gctx = canvas.getContext('2d')!;
   const img = gctx.createImageData(cols, rows);
   const data = img.data;
-  const water = parseCssColor(palette.water);
-  const green = parseCssColor(palette.mountain);
+  const water = parseCssColor(waterKey);
+  const green = parseCssColor(greenKey);
 
   for (let i = 0; i < cells.length; i++) {
     const v = cells[i];
@@ -215,14 +255,8 @@ function drawTerrainGrid(
   }
   gctx.putImageData(img, 0, 0);
 
-  const tl = toScreen({ x: 0, y: 0 }, viewport);
-  const br = toScreen(
-    { x: cols * cellSizeM, y: rows * cellSizeM },
-    viewport,
-  );
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(canvas, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  terrainBitmapCache = { cells, cols, rows, waterKey, greenKey, canvas };
+  return canvas;
 }
 
 function drawMapBase(

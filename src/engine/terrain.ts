@@ -16,13 +16,17 @@ export type TerrainGrid = {
   cells: Uint8Array;
 };
 
-/** 按地图尺寸选栅格粒度：尽量细、控制在约 700 格边长内 */
+/** 按地图尺寸选栅格粒度：约 1600 格边长，5km 图约 3–4m/格 */
 export function preferredTerrainCellSizeM(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
 ): number {
   const maxDim = Math.max(settings.widthM, settings.heightM);
-  const target = 720;
+  const target = 1600;
   const raw = maxDim / target;
+  if (raw <= 3) return 3;
+  if (raw <= 4) return 4;
+  if (raw <= 5) return 5;
+  if (raw <= 6) return 6;
   if (raw <= 8) return 8;
   if (raw <= 10) return 10;
   if (raw <= 12) return 12;

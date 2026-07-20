@@ -147,7 +147,7 @@ export function generateLandscape(
   if (params.riverEnabled) {
     const density = clampRiverDensity(params.riverDensity);
     const rivers = generateRiverNetwork(cells, cols, rows, seed, density);
-    carveRiverNetwork(cells, cols, rows, rivers);
+    carveRiverNetwork(cells, cols, rows, rivers, cellSizeM);
   }
 
   let waterPct = 0;
@@ -607,33 +607,37 @@ function isValidRiverPath(
   return x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
 }
 
-/** 按层级刻河：主干粗、支流细、汇合/河口加宽 */
+/** 按层级刻河：宽度按米换算成格，细栅格下物理尺度不变 */
 function carveRiverNetwork(
   cells: Uint8Array,
   cols: number,
   rows: number,
   rivers: RiverSegment[],
+  cellSizeM: number,
 ): void {
   const sorted = [...rivers].sort((a, b) => b.order - a.order);
+  const cs = Math.max(1, cellSizeM);
   for (const river of sorted) {
     const path = river.cells;
     if (path.length < 2) continue;
     const n = path.length;
+    // 半宽（米）：主干 / 次干 / 细支
+    const baseHalfM = river.order >= 2 ? 14 : river.order >= 1 ? 9 : 5;
     for (let i = 0; i < n; i++) {
       const idx = path[i]!;
       const x = idx % cols;
       const y = (idx / cols) | 0;
       const t = i / (n - 1);
-      // order 2 主干 · 1 次干 · 0 细支
-      let radius = river.order >= 2 ? 2.4 : river.order >= 1 ? 1.35 : 0.85;
-      if (t > 0.45) radius += river.order >= 2 ? 0.6 : 0.35;
-      if (t > 0.72) radius += river.order >= 2 ? 0.8 : 0.45;
-      if (t > 0.88) radius += river.order >= 2 ? 0.7 : 0.55;
-      // 支流末端汇合口明显加粗，形成「Y」形汇点
-      if (river.order < 2 && t > 0.78) radius = Math.max(radius, 2.1);
-      if (river.order < 2 && t > 0.9) radius = Math.max(radius, 2.5);
-      const rMax = river.order >= 2 ? 3.6 : river.order >= 1 ? 2.6 : 2.4;
-      radius = Math.min(radius, rMax);
+      let halfM = baseHalfM;
+      if (t > 0.45) halfM += river.order >= 2 ? 4 : 2.5;
+      if (t > 0.72) halfM += river.order >= 2 ? 5 : 3;
+      if (t > 0.88) halfM += river.order >= 2 ? 5 : 3.5;
+      // 支流汇合口加宽，形成「Y」形汇点
+      if (river.order < 2 && t > 0.78) halfM = Math.max(halfM, 12);
+      if (river.order < 2 && t > 0.9) halfM = Math.max(halfM, 15);
+      const maxHalfM = river.order >= 2 ? 28 : river.order >= 1 ? 18 : 16;
+      halfM = Math.min(halfM, maxHalfM);
+      const radius = halfM / cs;
       const rCeil = Math.ceil(radius);
 
       for (let dy = -rCeil; dy <= rCeil; dy++) {

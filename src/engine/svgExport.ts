@@ -41,18 +41,23 @@ export function exportToSvg(project: CityProject): string {
   if (layers.terrain) {
     const terrain = ensureTerrain(project.settings, project.terrain);
     const { cols, rows, cellSizeM, cells } = terrain;
+    // 同行连续同色合并成一条 rect，避免高清栅格导出爆炸
     for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const v = cells[row * cols + col];
-        if (v === TERRAIN_WATER) {
-          parts.push(
-            `<rect x="${(col * cellSizeM).toFixed(1)}" y="${(row * cellSizeM).toFixed(1)}" width="${cellSizeM}" height="${cellSizeM}" fill="#aad3df"/>`,
-          );
-        } else if (v === TERRAIN_GREEN) {
-          parts.push(
-            `<rect x="${(col * cellSizeM).toFixed(1)}" y="${(row * cellSizeM).toFixed(1)}" width="${cellSizeM}" height="${cellSizeM}" fill="#add19e"/>`,
-          );
+      let col = 0;
+      while (col < cols) {
+        const v = cells[row * cols + col]!;
+        if (v !== TERRAIN_WATER && v !== TERRAIN_GREEN) {
+          col++;
+          continue;
         }
+        let end = col + 1;
+        while (end < cols && cells[row * cols + end] === v) end++;
+        const fill = v === TERRAIN_WATER ? '#aad3df' : '#add19e';
+        const w = (end - col) * cellSizeM;
+        parts.push(
+          `<rect x="${(col * cellSizeM).toFixed(1)}" y="${(row * cellSizeM).toFixed(1)}" width="${w.toFixed(1)}" height="${cellSizeM}" fill="${fill}"/>`,
+        );
+        col = end;
       }
     }
   }

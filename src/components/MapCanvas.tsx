@@ -403,7 +403,8 @@ export function MapCanvas({
     (points: Point[], cell: TerrainCell, eraseFeatures = false) => {
       if (points.length === 0) return;
       const current = projectRef.current;
-      const terrain = ensureTerrain(current.settings, current.terrain);
+      // clone：刷子改地形时换新 cells，渲染缓存才能失效
+      const terrain = cloneTerrain(ensureTerrain(current.settings, current.terrain));
       for (const p of points) {
         stampBrush(terrain, p, brushSizeM, brushThickness, cell);
       }
@@ -693,12 +694,13 @@ export function MapCanvas({
     const brushCell = brushCellForTool(activeTool);
     if (brushCell != null) {
       const current = projectRef.current;
-      const terrain = ensureTerrain(current.settings, current.terrain);
+      const base = ensureTerrain(current.settings, current.terrain);
       undoSnapshot.current = {
         ...current,
-        terrain: cloneTerrain(terrain),
+        terrain: cloneTerrain(base),
         features: current.features.slice(),
       };
+      const terrain = cloneTerrain(base);
       const eraseFeatures = activeTool === 'eraser';
       stampBrush(terrain, world, brushSizeM, brushThickness, brushCell);
       let features = current.features;
