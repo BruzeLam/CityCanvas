@@ -1,17 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  MAP_SIZE_PRESETS,
-  SCALE_PRESETS,
-  clampMapSize,
-  clampScale,
-  formatDistance,
-} from '../constants/mapPresets';
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import { formatDistance } from '../constants/mapPresets';
+import {
+  LANDSCAPE_PRESETS,
+  SIMPLE_MAP_SIZES,
+  landscapePresetById,
+  sampleLandscapeParams,
+  type LandscapePresetId,
+} from '../constants/landscapePresets';
 import { useAuth } from '../context/AuthContext';
 import {
-  DEFAULT_GREEN_DENSITY,
-  DEFAULT_LAKE_DENSITY,
-  DEFAULT_OCEAN_RATIO,
-  DEFAULT_RIVER_DENSITY,
   GREEN_DENSITY_MAX,
   GREEN_DENSITY_MIN,
   LAKE_DENSITY_MAX,
@@ -40,9 +44,12 @@ type Props = {
   onOpenCloud: (mapId: string) => void;
   onOpenFile: () => void;
   localOnly?: boolean;
-  /** 从编辑页进入「我的地图」时，可返回当前图 */
   onBack?: () => void;
 };
+
+type PreviewView = { zoom: number; panX: number; panY: number };
+
+const DEFAULT_VIEW: PreviewView = { zoom: 1, panX: 0, panY: 0 };
 
 export function ProjectSetup({
   onCreate,
@@ -53,26 +60,52 @@ export function ProjectSetup({
 }: Props) {
   const { user, logout } = useAuth();
   const [name, setName] = useState('未命名城市');
-  const [presetIdx, setPresetIdx] = useState(1);
-  const [customSize, setCustomSize] = useState(false);
-  const [widthKm, setWidthKm] = useState(5);
-  const [heightKm, setHeightKm] = useState(5);
-  const [scalePresetIdx, setScalePresetIdx] = useState(2);
-  const [customScale, setCustomScale] = useState(false);
-  const [scaleValue, setScaleValue] = useState(10000);
+  const [sizeIdx, setSizeIdx] = useState(1);
   const [cloudMaps, setCloudMaps] = useState<CloudMapSummary[]>([]);
   const [loadingMaps, setLoadingMaps] = useState(false);
 
+  const [presetId, setPresetId] = useState<LandscapePresetId>('coastal');
   const [terrainSeed, setTerrainSeed] = useState(() => randomTerrainSeed());
+  const [fineTuneOpen, setFineTuneOpen] = useState(false);
+
   const [oceanEnabled, setOceanEnabled] = useState(true);
-  const [oceanRatio, setOceanRatio] = useState(DEFAULT_OCEAN_RATIO);
+  const [oceanRatio, setOceanRatio] = useState(0.32);
   const [lakeEnabled, setLakeEnabled] = useState(true);
-  const [lakeDensity, setLakeDensity] = useState(DEFAULT_LAKE_DENSITY);
+  const [lakeDensity, setLakeDensity] = useState(0.08);
   const [riverEnabled, setRiverEnabled] = useState(true);
-  const [riverDensity, setRiverDensity] = useState(DEFAULT_RIVER_DENSITY);
+  const [riverDensity, setRiverDensity] = useState(0.55);
   const [greenEnabled, setGreenEnabled] = useState(true);
-  const [greenDensity, setGreenDensity] = useState(DEFAULT_GREEN_DENSITY);
+  const [greenDensity, setGreenDensity] = useState(0.22);
+
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previewWrapRef = useRef<HTMLDivElement>(null);
+  const [previewView, setPreviewView] = useState<PreviewView>(DEFAULT_VIEW);
+  const previewViewRef = useRef(previewView);
+  previewViewRef.current = previewView;
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+
+  const applyParams = useCallback((params: TerrainGenParams) => {
+    setOceanEnabled(params.oceanEnabled);
+    setOceanRatio(params.oceanRatio);
+    setLakeEnabled(params.lakeEnabled);
+    setLakeDensity(params.lakeDensity);
+    setRiverEnabled(params.riverEnabled);
+    setRiverDensity(params.riverDensity);
+    setGreenEnabled(params.greenEnabled);
+    setGreenDensity(params.greenDensity);
+  }, []);
+
+  // 首次 / 换预设 / 换种子：按配方落参数（微调打开时换种子仍重掷 random）
+  useEffect(() => {
+    const sampled = sampleLandscapeParams(presetId, terrainSeed);
+    applyParams(sampled);
+    setPreviewView(DEFAULT_VIEW);
+  }, [presetId, terrainSeed, applyParams]);
 
   useEffect(() => {
     if (!onBack) return;
@@ -104,23 +137,15 @@ export function ProjectSetup({
     loadCloudMaps();
   }, [loadCloudMaps]);
 
-  const buildSettings = (): MapSettings => {
-    if (customSize) {
-      return {
-        widthM: clampMapSize(widthKm * 1000),
-        heightM: clampMapSize(heightKm * 1000),
-        scale: customScale ? clampScale(scaleValue) : SCALE_PRESETS[scalePresetIdx].value,
-      };
-    }
-    const preset = MAP_SIZE_PRESETS[presetIdx];
-    return {
-      widthM: preset.widthM,
-      heightM: preset.heightM,
-      scale: customScale ? clampScale(scaleValue) : SCALE_PRESETS[scalePresetIdx].value,
-    };
-  };
-
-  const preview = buildSettings();
+  const size = SIMPLE_MAP_SIZES[sizeIdx] ?? SIMPLE_MAP_SIZES[1];
+  const settings: MapSettings = useMemo(
+    () => ({
+      widthM: size.widthM,
+      heightM: size.heightM,
+      scale: size.scale,
+    }),
+    [size],
+  );
 
   const genParams = useMemo((): TerrainGenParams => {
     return {
@@ -147,48 +172,106 @@ export function ProjectSetup({
   ]);
 
   const landscapePreview = useMemo(() => {
-    // 预览与成图同粒度，便于看清河网分布
-    return generateLandscape(preview, genParams, preferredTerrainCellSizeM(preview));
-  }, [preview.widthM, preview.heightM, genParams]);
+    return generateLandscape(
+      settings,
+      genParams,
+      preferredTerrainCellSizeM(settings),
+    );
+  }, [settings, genParams]);
 
   useEffect(() => {
     const canvas = previewCanvasRef.current;
-    if (!canvas) return;
+    const wrap = previewWrapRef.current;
+    if (!canvas || !wrap) return;
 
     const paint = () => {
-      const aspect = preview.widthM / preview.heightM;
-      const short = window.innerHeight < 820;
-      const maxW = short ? 260 : 360;
-      const maxH = short ? 220 : 320;
+      const aspect = settings.widthM / settings.heightM;
+      const rect = wrap.getBoundingClientRect();
+      const maxW = Math.max(280, Math.floor(rect.width - 8));
+      const maxH = Math.max(220, Math.floor(rect.height - 28));
       let w = maxW;
       let h = Math.round(maxW / aspect);
       if (h > maxH) {
         h = maxH;
         w = Math.round(maxH * aspect);
       }
-      canvas.width = w;
-      canvas.height = h;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.max(1, Math.round(w * dpr));
+      canvas.height = Math.max(1, Math.round(h * dpr));
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
       paintTerrainPreview(canvas, landscapePreview.terrain);
     };
 
     paint();
     window.addEventListener('resize', paint);
     return () => window.removeEventListener('resize', paint);
-  }, [landscapePreview, preview.widthM, preview.heightM]);
+  }, [landscapePreview, settings.widthM, settings.heightM]);
+
+  // 滚轮缩放需 non-passive，否则浏览器会拦截 preventDefault
+  useEffect(() => {
+    const wrap = previewWrapRef.current;
+    if (!wrap) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      setPreviewView((v) => ({
+        ...v,
+        zoom: Math.max(1, Math.min(3.5, +(v.zoom + delta).toFixed(2))),
+      }));
+    };
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    return () => wrap.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const clampPan = (panX: number, panY: number, zoom: number) => {
+    const limit = 120 * zoom;
+    return {
+      panX: Math.max(-limit, Math.min(limit, panX)),
+      panY: Math.max(-limit, Math.min(limit, panY)),
+    };
+  };
+
+  const onPreviewPointerDown = (e: ReactPointerEvent) => {
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const v = previewViewRef.current;
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: v.panX,
+      originY: v.panY,
+    };
+  };
+
+  const onPreviewPointerMove = (e: ReactPointerEvent) => {
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    setPreviewView((v) => {
+      const next = clampPan(
+        dragRef.current!.originX + dx,
+        dragRef.current!.originY + dy,
+        v.zoom,
+      );
+      return { zoom: v.zoom, ...next };
+    });
+  };
+
+  const onPreviewPointerUp = () => {
+    dragRef.current = null;
+  };
+
+  const selectPreset = (id: LandscapePresetId) => {
+    setPresetId(id);
+    setTerrainSeed(randomTerrainSeed());
+  };
+
+  const reshuffleSeed = () => {
+    setTerrainSeed(randomTerrainSeed());
+  };
 
   const handleCreate = () => {
-    const settings = buildSettings();
-    const params: TerrainGenParams = {
-      seed: terrainSeed,
-      oceanEnabled,
-      oceanRatio: clampOceanRatio(oceanRatio),
-      lakeEnabled,
-      lakeDensity: clampLakeDensity(lakeDensity),
-      riverEnabled,
-      riverDensity: clampRiverDensity(riverDensity),
-      greenEnabled,
-      greenDensity: clampGreenDensity(greenDensity),
-    };
+    const params = genParams;
     const { terrain } = generateLandscape(settings, params);
     onCreate(
       createProject(name.trim() || '未命名城市', settings, 'navigation', {
@@ -224,18 +307,15 @@ export function ProjectSetup({
     ? Math.round((landscapePreview.greenPct || 0) * 100)
     : 0;
   const landPct = Math.max(0, 100 - waterPct - greenPct);
-  const oceanSliderPct = Math.round(clampOceanRatio(oceanRatio) * 100);
-  const lakeSliderPct = Math.round(clampLakeDensity(lakeDensity) * 100);
-  const riverSliderPct = Math.round(clampRiverDensity(riverDensity) * 100);
-  const greenSliderPct = Math.round(clampGreenDensity(greenDensity) * 100);
+  const activePreset = landscapePresetById(presetId);
 
   return (
     <div className="setup-overlay">
-      <div className="setup-card setup-card-wide">
+      <div className="setup-card setup-card-wide setup-card-gen">
         <header className="setup-header setup-header-row">
           <div>
             <h1>CityCanvas</h1>
-            <p>设定范围、比例尺，并生成架空海陆底图</p>
+            <p>选场景 → 看预览 → 开画（高级参数可微调）</p>
           </div>
           <div className="setup-user">
             {onBack && (
@@ -252,7 +332,7 @@ export function ProjectSetup({
           </div>
         </header>
 
-        <div className="setup-body">
+        <div className="setup-body setup-body-gen">
           {user && !localOnly ? (
             <section className="cloud-maps-section">
               <div className="cloud-maps-head">
@@ -269,11 +349,15 @@ export function ProjectSetup({
                 <ul className="cloud-map-list">
                   {cloudMaps.map((m) => (
                     <li key={m.id} className="cloud-map-item">
-                      <button type="button" className="cloud-map-open" onClick={() => onOpenCloud(m.id)}>
+                      <button
+                        type="button"
+                        className="cloud-map-open"
+                        onClick={() => onOpenCloud(m.id)}
+                      >
                         <span className="cloud-map-name">{m.name}</span>
                         <span className="cloud-map-meta">
-                          {formatDistance(m.widthM)} × {formatDistance(m.heightM)} · {m.featureCount}{' '}
-                          要素
+                          {formatDistance(m.widthM)} × {formatDistance(m.heightM)} ·{' '}
+                          {m.featureCount} 要素
                         </span>
                         <span className="cloud-map-date">
                           更新于 {new Date(m.updatedAt + 'Z').toLocaleString('zh-CN')}
@@ -298,254 +382,232 @@ export function ProjectSetup({
             </section>
           )}
 
-          <label className="setup-field">
-            <span>城市名称</span>
-            <div className="city-title-wrap setup-name-wrap">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="例如：湾城岛"
-              />
-              <button
-                type="button"
-                className="city-title-dice"
-                title="随机架空城市名"
-                aria-label="随机生成城市名"
-                onClick={() => setName(randomCityName(name))}
-              >
-                🎲
-              </button>
-            </div>
-          </label>
-
-          <fieldset className="setup-field">
-            <span>地图大小</span>
-            <div className="preset-grid">
-              {MAP_SIZE_PRESETS.map((p, i) => (
-                <button
-                  key={p.label}
-                  type="button"
-                  className={!customSize && presetIdx === i ? 'active' : ''}
-                  onClick={() => {
-                    setCustomSize(false);
-                    setPresetIdx(i);
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={customSize ? 'active' : ''}
-                onClick={() => setCustomSize(true)}
-              >
-                自定义
-              </button>
-            </div>
-            {customSize && (
-              <div className="custom-row">
-                <label>
-                  宽 (km)
+          <div className="gen-main">
+            <div className="gen-left">
+              <label className="setup-field">
+                <span>城市名称</span>
+                <div className="city-title-wrap setup-name-wrap">
                   <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    step={0.5}
-                    value={widthKm}
-                    onChange={(e) => setWidthKm(Number(e.target.value))}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="例如：湾城岛"
                   />
-                </label>
-                <label>
-                  高 (km)
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    step={0.5}
-                    value={heightKm}
-                    onChange={(e) => setHeightKm(Number(e.target.value))}
-                  />
-                </label>
-              </div>
-            )}
-          </fieldset>
-
-          <fieldset className="setup-field">
-            <span>比例尺</span>
-            <div className="preset-grid">
-              {SCALE_PRESETS.map((p, i) => (
-                <button
-                  key={p.value}
-                  type="button"
-                  className={!customScale && scalePresetIdx === i ? 'active' : ''}
-                  onClick={() => {
-                    setCustomScale(false);
-                    setScalePresetIdx(i);
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={customScale ? 'active' : ''}
-                onClick={() => setCustomScale(true)}
-              >
-                自定义
-              </button>
-            </div>
-            {customScale && (
-              <label className="custom-scale">
-                1 :
-                <input
-                  type="number"
-                  min={500}
-                  max={100000}
-                  step={500}
-                  value={scaleValue}
-                  onChange={(e) => setScaleValue(Number(e.target.value))}
-                />
+                  <button
+                    type="button"
+                    className="city-title-dice"
+                    title="随机架空城市名"
+                    aria-label="随机生成城市名"
+                    onClick={() => setName(randomCityName(name))}
+                  >
+                    🎲
+                  </button>
+                </div>
               </label>
-            )}
-          </fieldset>
 
-          <fieldset className="setup-field terrain-seed-field">
-            <span>地貌种子 · 架空海陆</span>
-            <div className="terrain-seed-layout">
-              <div className="terrain-seed-preview">
-                <canvas ref={previewCanvasRef} className="terrain-preview-canvas" />
-                <p className="terrain-preview-legend">
-                  <span className="swatch land" /> 陆地 {landPct}%
-                  {anyWater && (
-                    <>
-                      <span className="swatch water" /> 水域 {waterPct}%
-                    </>
-                  )}
-                  {greenEnabled && (
-                    <>
-                      <span className="swatch green" /> 绿地 {greenPct}%
-                    </>
-                  )}
+              <fieldset className="setup-field">
+                <span>地图大小</span>
+                <div className="preset-grid gen-size-grid">
+                  {SIMPLE_MAP_SIZES.map((p, i) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={sizeIdx === i ? 'active' : ''}
+                      onClick={() => setSizeIdx(i)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="muted gen-size-hint">
+                  {formatDistance(settings.widthM)} × {formatDistance(settings.heightM)} · 1 :
+                  {settings.scale.toLocaleString()}
                 </p>
-              </div>
-              <div className="terrain-seed-controls">
-                <label className="terrain-seed-check">
-                  <input
-                    type="checkbox"
-                    checked={oceanEnabled}
-                    onChange={(e) => setOceanEnabled(e.target.checked)}
-                  />
-                  <span>有海洋</span>
-                </label>
-                {oceanEnabled && (
-                  <label className="terrain-seed-row">
-                    <span>海洋比例</span>
+              </fieldset>
+
+              <fieldset className="setup-field">
+                <span>场景</span>
+                <div className="landscape-preset-grid">
+                  {LANDSCAPE_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={
+                        presetId === p.id
+                          ? 'landscape-preset-card active'
+                          : 'landscape-preset-card'
+                      }
+                      onClick={() => selectPreset(p.id)}
+                    >
+                      <strong>{p.label}</strong>
+                      <em>{p.blurb}</em>
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+
+              <button
+                type="button"
+                className="gen-fine-toggle"
+                aria-expanded={fineTuneOpen}
+                onClick={() => setFineTuneOpen((o) => !o)}
+              >
+                {fineTuneOpen ? '收起微调' : '微调海 / 湖 / 河 / 绿'}
+                <span aria-hidden>{fineTuneOpen ? '▴' : '▾'}</span>
+              </button>
+
+              {fineTuneOpen && (
+                <div className="gen-fine-panel">
+                  <label className="terrain-seed-check">
                     <input
-                      type="range"
-                      min={OCEAN_RATIO_MIN}
-                      max={OCEAN_RATIO_MAX}
-                      step={0.01}
-                      value={oceanRatio}
-                      onChange={(e) => setOceanRatio(Number(e.target.value))}
+                      type="checkbox"
+                      checked={oceanEnabled}
+                      onChange={(e) => setOceanEnabled(e.target.checked)}
                     />
-                    <em>{oceanSliderPct}%</em>
+                    <span>有海洋</span>
                   </label>
-                )}
-                <label className="terrain-seed-check">
-                  <input
-                    type="checkbox"
-                    checked={lakeEnabled}
-                    onChange={(e) => setLakeEnabled(e.target.checked)}
-                  />
-                  <span>有湖泊</span>
-                </label>
-                {lakeEnabled && (
-                  <label className="terrain-seed-row">
-                    <span>湖泊密度</span>
+                  {oceanEnabled && (
+                    <label className="terrain-seed-row">
+                      <span>海洋比例</span>
+                      <input
+                        type="range"
+                        min={OCEAN_RATIO_MIN}
+                        max={OCEAN_RATIO_MAX}
+                        step={0.01}
+                        value={oceanRatio}
+                        onChange={(e) => setOceanRatio(Number(e.target.value))}
+                      />
+                      <em>{Math.round(clampOceanRatio(oceanRatio) * 100)}%</em>
+                    </label>
+                  )}
+                  <label className="terrain-seed-check">
                     <input
-                      type="range"
-                      min={LAKE_DENSITY_MIN}
-                      max={LAKE_DENSITY_MAX}
-                      step={0.01}
-                      value={lakeDensity}
-                      onChange={(e) => setLakeDensity(Number(e.target.value))}
+                      type="checkbox"
+                      checked={lakeEnabled}
+                      onChange={(e) => setLakeEnabled(e.target.checked)}
                     />
-                    <em>{lakeSliderPct}%</em>
+                    <span>有湖泊</span>
                   </label>
-                )}
-                <label className="terrain-seed-check">
-                  <input
-                    type="checkbox"
-                    checked={riverEnabled}
-                    onChange={(e) => setRiverEnabled(e.target.checked)}
-                  />
-                  <span>有河流</span>
-                </label>
-                {riverEnabled && (
-                  <label className="terrain-seed-row">
-                    <span>河网密度</span>
+                  {lakeEnabled && (
+                    <label className="terrain-seed-row">
+                      <span>湖泊密度</span>
+                      <input
+                        type="range"
+                        min={LAKE_DENSITY_MIN}
+                        max={LAKE_DENSITY_MAX}
+                        step={0.01}
+                        value={lakeDensity}
+                        onChange={(e) => setLakeDensity(Number(e.target.value))}
+                      />
+                      <em>{Math.round(clampLakeDensity(lakeDensity) * 100)}%</em>
+                    </label>
+                  )}
+                  <label className="terrain-seed-check">
                     <input
-                      type="range"
-                      min={RIVER_DENSITY_MIN}
-                      max={RIVER_DENSITY_MAX}
-                      step={0.01}
-                      value={riverDensity}
-                      onChange={(e) => setRiverDensity(Number(e.target.value))}
+                      type="checkbox"
+                      checked={riverEnabled}
+                      onChange={(e) => setRiverEnabled(e.target.checked)}
                     />
-                    <em>{riverSliderPct}%</em>
+                    <span>有河流</span>
                   </label>
-                )}
-                <label className="terrain-seed-check">
-                  <input
-                    type="checkbox"
-                    checked={greenEnabled}
-                    onChange={(e) => setGreenEnabled(e.target.checked)}
-                  />
-                  <span>有绿地</span>
-                </label>
-                {greenEnabled && (
-                  <label className="terrain-seed-row">
-                    <span>绿地密度</span>
+                  {riverEnabled && (
+                    <label className="terrain-seed-row">
+                      <span>河网密度</span>
+                      <input
+                        type="range"
+                        min={RIVER_DENSITY_MIN}
+                        max={RIVER_DENSITY_MAX}
+                        step={0.01}
+                        value={riverDensity}
+                        onChange={(e) => setRiverDensity(Number(e.target.value))}
+                      />
+                      <em>{Math.round(clampRiverDensity(riverDensity) * 100)}%</em>
+                    </label>
+                  )}
+                  <label className="terrain-seed-check">
                     <input
-                      type="range"
-                      min={GREEN_DENSITY_MIN}
-                      max={GREEN_DENSITY_MAX}
-                      step={0.01}
-                      value={greenDensity}
-                      onChange={(e) => setGreenDensity(Number(e.target.value))}
+                      type="checkbox"
+                      checked={greenEnabled}
+                      onChange={(e) => setGreenEnabled(e.target.checked)}
                     />
-                    <em>{greenSliderPct}%</em>
+                    <span>有绿地</span>
                   </label>
-                )}
-                <div className="terrain-seed-row">
-                  <span>种子</span>
+                  {greenEnabled && (
+                    <label className="terrain-seed-row">
+                      <span>绿地密度</span>
+                      <input
+                        type="range"
+                        min={GREEN_DENSITY_MIN}
+                        max={GREEN_DENSITY_MAX}
+                        step={0.01}
+                        value={greenDensity}
+                        onChange={(e) => setGreenDensity(Number(e.target.value))}
+                      />
+                      <em>{Math.round(clampGreenDensity(greenDensity) * 100)}%</em>
+                    </label>
+                  )}
+                  <p className="tool-note">
+                    微调会覆盖当前场景落点；换场景或「换一换」会重新套配方。
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="gen-right">
+              <div className="gen-preview-head">
+                <div>
+                  <strong>{activePreset.label}</strong>
+                  <p className="muted">{activePreset.blurb}</p>
+                </div>
+                <div className="gen-preview-actions">
                   <code className="terrain-seed-code">{terrainSeed.toString(16)}</code>
+                  <button type="button" className="chip" onClick={reshuffleSeed}>
+                    换一换
+                  </button>
                   <button
                     type="button"
                     className="chip"
-                    onClick={() => setTerrainSeed(randomTerrainSeed())}
+                    onClick={() => setPreviewView(DEFAULT_VIEW)}
+                    title="重置预览视角"
                   >
-                    刷新
+                    复位
                   </button>
                 </div>
-                <p className="tool-note">
-                  海/湖/河分控、同色水域。河网先主干入海，再支流汇入；汇合与河口更粗。创建后可用刷子微调。
-                </p>
               </div>
+              <div
+                ref={previewWrapRef}
+                className="gen-preview-stage"
+                onPointerDown={onPreviewPointerDown}
+                onPointerMove={onPreviewPointerMove}
+                onPointerUp={onPreviewPointerUp}
+                onPointerCancel={onPreviewPointerUp}
+              >
+                <div
+                  className="gen-preview-transform"
+                  style={{
+                    transform: `translate(${previewView.panX}px, ${previewView.panY}px) scale(${previewView.zoom})`,
+                  }}
+                >
+                  <canvas
+                    ref={previewCanvasRef}
+                    className="terrain-preview-canvas gen-preview-canvas"
+                  />
+                </div>
+                <p className="gen-preview-hint">拖拽平移 · 滚轮缩放</p>
+              </div>
+              <p className="terrain-preview-legend gen-preview-legend">
+                <span className="swatch land" /> 陆地 {landPct}%
+                {anyWater && (
+                  <>
+                    <span className="swatch water" /> 水域 {waterPct}%
+                  </>
+                )}
+                {greenEnabled && (
+                  <>
+                    <span className="swatch green" /> 绿地 {greenPct}%
+                  </>
+                )}
+              </p>
             </div>
-          </fieldset>
-
-          <div className="setup-preview">
-            <strong>地图概览</strong>
-            <p>
-              {formatDistance(preview.widthM)} × {formatDistance(preview.heightM)} · 1 :
-              {preview.scale.toLocaleString()}
-            </p>
-            <p className="muted">
-              {user && !localOnly
-                ? '绘制范围固定在此矩形内 · 自动保存到云端 SQLite'
-                : '绘制范围固定在此矩形内 · 自动写入浏览器本地缓存'}
-            </p>
           </div>
         </div>
 

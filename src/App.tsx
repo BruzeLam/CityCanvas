@@ -304,7 +304,7 @@ function App() {
     setLocalOnly(true);
   };
 
-  // H = 拖动，V = 编辑；数字键按当前工具切换子类型；Ctrl/⌘Z 撤销
+  // Q = 拖动，E = 编辑；数字键按当前工具切换子类型；Ctrl/⌘Z 撤销
   useEffect(() => {
     const roadLevels = Object.keys(ROAD_STYLES) as RoadLevel[];
     const terrainTools: Tool[] = ['land', 'ocean', 'mountain', 'eraser', 'river'];
@@ -321,13 +321,13 @@ function App() {
       }
 
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'h' || e.key === 'H') {
+      if (e.key === 'q' || e.key === 'Q') {
         e.preventDefault();
         setTool('pan');
         setSelectedFeatureId(null);
         return;
       }
-      if (e.key === 'v' || e.key === 'V') {
+      if (e.key === 'e' || e.key === 'E') {
         e.preventDefault();
         setTool('select');
         return;

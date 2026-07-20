@@ -240,25 +240,25 @@ export function Toolbar({
             type="button"
             className={tool === 'pan' ? 'mode-btn active' : 'mode-btn'}
             onClick={() => onToolChange('pan')}
-            title="拖图 · H"
+            title="拖图 · Q"
           >
             <span className="mode-emoji" aria-hidden>
               ✋
             </span>
             <span className="mode-label">拖动</span>
-            <kbd className="mode-kbd">H</kbd>
+            <kbd className="mode-kbd">Q</kbd>
           </button>
           <button
             type="button"
             className={tool === 'select' ? 'mode-btn active' : 'mode-btn'}
             onClick={() => onToolChange('select')}
-            title="编辑 · V"
+            title="编辑 · E"
           >
             <span className="mode-emoji" aria-hidden>
               ✏️
             </span>
             <span className="mode-label">编辑</span>
-            <kbd className="mode-kbd">V</kbd>
+            <kbd className="mode-kbd">E</kbd>
           </button>
         </div>
         <p className="mode-hint">

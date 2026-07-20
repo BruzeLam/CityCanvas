@@ -1356,9 +1356,9 @@ export function MapCanvas({
   ]);
 
   const hint = (() => {
-    if (tool === 'pan') return '拖动模式 · 左键拖图 · WASD/方向键平移 · 滚轮缩放';
+    if (tool === 'pan') return '拖动模式 · Q · 左键拖图 · WASD/方向键平移 · 滚轮缩放';
     if (tool === 'select') {
-      return '编辑模式 · 点击选中 · 拖顶点 · -/= 换标高 · Delete 删除 · 右键取消';
+      return '编辑模式 · E · 点击选中 · 拖顶点 · -/= 换标高 · Delete 删除 · 右键取消';
     }
     if (tool === 'eraser') {
       return `橡皮 · 只擦「${eraserTargetLabel(eraserTarget)}」· 调大小${
