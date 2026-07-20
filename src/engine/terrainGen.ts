@@ -252,7 +252,7 @@ export function generateLandscape(
       clampGreenDensity(params.greenDensity),
       dna,
     );
-    smoothGreenLand(cells, cols, rows, 3);
+    smoothGreenLand(cells, cols, rows, 1);
     let green = 0;
     for (let i = 0; i < n; i++) if (cells[i] === TERRAIN_GREEN) green++;
     greenPct = green / n;
@@ -360,6 +360,12 @@ function paintGreens(
   const ridgeX = Math.cos(biasAngle);
   const ridgeY = Math.sin(biasAngle);
 
+  const stretchAngle = hashUnit(seed + 521) * Math.PI * 2;
+  const sx = Math.cos(stretchAngle);
+  const sy = Math.sin(stretchAngle);
+  // 各向异性：拉长斑块，减少「圆形公园」感
+  const stretch = 1.55 + hashUnit(seed + 533) * 0.55;
+
   const scores = new Float32Array(landIdx.length);
   for (let k = 0; k < landIdx.length; k++) {
     const i = landIdx[k];
@@ -367,8 +373,14 @@ function paintGreens(
     const y = (i / cols) | 0;
     const u = (x + 0.5) / cols;
     const v = (y + 0.5) / rows;
-    const patch = fbm2d(u * 3.4, v * 3.4, seed + 401, 3, 2.1, 0.5);
-    const detail = fbm2d(u * 7.5, v * 7.5, seed + 419, 2, 2.0, 0.5);
+    const cu = u - 0.5;
+    const cv = v - 0.5;
+    const au = cu * sx + cv * sy;
+    const av = (-cu * sy + cv * sx) * stretch;
+    const uu = au + 0.5;
+    const vv = av + 0.5;
+    const patch = fbm2d(uu * 3.4, vv * 3.4, seed + 401, 3, 2.1, 0.5);
+    const detail = fbm2d(uu * 7.5, vv * 7.5, seed + 419, 2, 2.0, 0.5);
     let s = patch * 0.55 + detail * 0.15 + height[i] * 0.12;
 
     const edge =
@@ -387,6 +399,8 @@ function paintGreens(
       s += (1 - edge) * 0.08;
     } else {
       s += height[i] * 0.08;
+      // 水网平原：略压地图四角圆斑
+      if (edge < 0.06) s -= (0.06 - edge) * 1.2;
     }
 
     scores[k] = s;

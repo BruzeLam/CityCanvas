@@ -190,6 +190,7 @@ function fillRingsOnBake(
 
 /** 返回格点角坐标（非米），方便烘焙 */
 function extractSmoothRings(grid: TerrainGrid, target: TerrainCell): Point[][] {
+  const { cols, rows } = grid;
   const loops = extractCornerLoops(grid, target);
   const out: Point[][] = [];
   for (const loop of loops) {
@@ -197,8 +198,8 @@ function extractSmoothRings(grid: TerrainGrid, target: TerrainCell): Point[][] {
     const pts = loop.map(([cx, cy]) => ({ x: cx, y: cy }));
     const simplified = simplifyCollinear(pts, 0.35);
     if (simplified.length < 4) continue;
-    const iters = simplified.length < 20 ? 2 : 3;
-    out.push(chaikinClosed(simplified, iters));
+    // 只轻量削台阶；贴地图外框的点钉死，避免角上被抹成圆弧
+    out.push(chaikinClosedPinned(simplified, 1, cols, rows));
   }
   return out;
 }
@@ -331,6 +332,71 @@ function chaikinClosed(points: Point[], iters: number): Point[] {
       });
     }
     pts = next;
+  }
+  return pts;
+}
+
+/** 点是否落在地图外框上（格角坐标系） */
+function onMapFrame(p: Point, cols: number, rows: number): boolean {
+  const e = 1e-4;
+  return p.x <= e || p.y <= e || p.x >= cols - e || p.y >= rows - e;
+}
+
+/**
+ * 闭包 Chaikin，但钉住贴地图边框的顶点。
+ * 否则绿地/水域顶到画布角时，会被抹成「圆形边角」。
+ */
+function chaikinClosedPinned(
+  points: Point[],
+  iters: number,
+  cols: number,
+  rows: number,
+): Point[] {
+  let pts = points.map((p) => ({ x: p.x, y: p.y }));
+  for (let k = 0; k < iters; k++) {
+    const next: Point[] = [];
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i]!;
+      const b = pts[(i + 1) % n]!;
+      const aBorder = onMapFrame(a, cols, rows);
+      const bBorder = onMapFrame(b, cols, rows);
+      if (aBorder && bBorder) {
+        next.push(a);
+        continue;
+      }
+      if (aBorder) {
+        next.push(a);
+        next.push({
+          x: a.x * 0.25 + b.x * 0.75,
+          y: a.y * 0.25 + b.y * 0.75,
+        });
+        continue;
+      }
+      if (bBorder) {
+        next.push({
+          x: a.x * 0.75 + b.x * 0.25,
+          y: a.y * 0.75 + b.y * 0.25,
+        });
+        continue;
+      }
+      next.push({
+        x: a.x * 0.75 + b.x * 0.25,
+        y: a.y * 0.75 + b.y * 0.25,
+      });
+      next.push({
+        x: a.x * 0.25 + b.x * 0.75,
+        y: a.y * 0.25 + b.y * 0.75,
+      });
+    }
+    pts = next;
+  }
+  // 数值漂移时把边框点吸回边线
+  for (const p of pts) {
+    if (p.x < 0.5) p.x = 0;
+    if (p.y < 0.5) p.y = 0;
+    if (p.x > cols - 0.5) p.x = cols;
+    if (p.y > rows - 0.5) p.y = rows;
   }
   return pts;
 }
