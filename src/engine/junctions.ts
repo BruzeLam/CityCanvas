@@ -1366,18 +1366,19 @@ function roadVisualClass(f: MapFeature): Exclude<RoadLevel, 'ramp'> {
 export type JoinMouth = {
   point: Point;
   grade: FeatureGrade;
+  hostId: string;
   /** 宿主路面宽度（世界米） */
   hostWidth: number;
   hostColor: string;
   hostCasing: string;
-  /** 汇入方（较窄 tip 路）配色；与宿主不同时画渐变 */
+  /** 汇入方（tip 路）配色；与宿主不同时画渐变 */
   tipColor: string;
   tipCasing: string;
   tipWidth: number;
-  /** 汇入方向：从路内指向 junction（单位向量） */
+  /** 汇入方向：从路内指向 tip/junction（单位向量） */
   approachX: number;
   approachY: number;
-  /** 宿主中心线切向（单位向量），用于沿主路抹边线 */
+  /** 宿主中心线切向（单位向量） */
   hostDirX: number;
   hostDirY: number;
   joinerId: string;
@@ -1443,13 +1444,15 @@ function hostTangentAt(host: MapFeature, tip: Point): Point {
 }
 
 /**
- * 汇入口：端点挂在他路中心线/顶点。
- * 取最宽路为宿主；记录汇入臂与宿主切向，供渲染抹边线 + tip 渐变。
+ * 汇入口：某路 tip 挂在他路中心线/顶点上（匝道出入口、丁字尽头）。
+ * 十字穿越没有 tip 落点，不会进这里。
+ * 取最宽宿主；供撕开宿主侧路缘 + tip→宿主色渐变。
  */
 export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
   type Acc = {
     point: Point;
     grade: FeatureGrade;
+    hostId: string;
     hostWidth: number;
     hostRank: number;
     hostColor: string;
@@ -1472,6 +1475,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       byKey.set(key, {
         point: { ...patch.point },
         grade: patch.grade,
+        hostId: patch.hostId ?? '',
         hostWidth: patch.hostWidth ?? 0,
         hostRank: patch.hostRank ?? 0,
         hostColor: patch.hostColor ?? ROAD_STYLES.local.color,
@@ -1493,6 +1497,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       prev.hostRank = patch.hostRank ?? prev.hostRank;
       prev.hostColor = patch.hostColor ?? prev.hostColor;
       prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
+      if (patch.hostId) prev.hostId = patch.hostId;
       if (patch.hostDirX != null) prev.hostDirX = patch.hostDirX;
       if (patch.hostDirY != null) prev.hostDirY = patch.hostDirY;
     } else if (
@@ -1503,6 +1508,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       prev.hostRank = patch.hostRank ?? prev.hostRank;
       prev.hostColor = patch.hostColor ?? prev.hostColor;
       prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
+      if (patch.hostId) prev.hostId = patch.hostId;
     }
     if (
       patch.tipWidth != null &&
@@ -1518,6 +1524,29 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     }
   };
 
+  const tipHitsHost = (tip: Point, host: MapFeature): boolean => {
+    for (const p of host.points) {
+      if (dist(tip, p) <= ENDPOINT_MERGE_M) return true;
+    }
+    for (let i = 0; i < host.points.length - 1; i++) {
+      const on = closestOnSegment(tip, {
+        a: host.points[i],
+        b: host.points[i + 1],
+      });
+      if (on.dist <= ENDPOINT_MERGE_M) return true;
+    }
+    return false;
+  };
+
+  /** tip 是否落在宿主端点上（两路端点相接）：不算丁字汇入，避免误撕边 */
+  const tipOnHostEndpoint = (tip: Point, host: MapFeature): boolean => {
+    if (host.points.length < 2) return false;
+    return (
+      dist(tip, host.points[0]) <= ENDPOINT_MERGE_M ||
+      dist(tip, host.points[host.points.length - 1]) <= ENDPOINT_MERGE_M
+    );
+  };
+
   const considerJoin = (
     joiner: MapFeature,
     end: 'start' | 'end',
@@ -1525,22 +1554,23 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     host: MapFeature,
   ) => {
     if (host.kind !== 'road' || host.points.length < 2) return;
-    // 只处理匝道 tip 挂接；普通 T/十字路口不要画汇入口（会变成补丁）
-    if (joiner.roadLevel !== 'ramp' && !isRampFeature(joiner)) return;
+    // 宿主也是匝道：互挂不画汇入口
     if (host.roadLevel === 'ramp' || isRampFeature(host)) return;
-    const hostGrade = isRampFeature(host)
-      ? gradeAlongPath(host, tipPoint)
-      : featureGrade(host);
+    // 端点对端点续接：不是丁字/匝道挂侧边
+    if (tipOnHostEndpoint(tipPoint, host)) return;
+
+    const hostGrade = featureGrade(host);
     const hostCls = roadVisualClass(host);
     const hostWidth = roadBodyWidthM(host);
     const hostStyle = ROAD_STYLES[hostCls];
     const joinStyle = roadPaintStyle(joiner, end);
     const dir = approachDirAtTip(joiner, end);
     const ht = hostTangentAt(host, tipPoint);
-    const key = `${hostGrade}|${quantizeKey(tipPoint)}`;
+    const key = `${host.id}|${joiner.id}|${end}`;
     upsert(key, {
       point: tipPoint,
       grade: hostGrade,
+      hostId: host.id,
       hostWidth,
       hostRank: ROAD_CLASS_RANK[hostCls],
       hostColor: hostStyle.color,
@@ -1557,7 +1587,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     });
   };
 
-  // 端点挂接：tip 落在他路 → 记一口（不含纯十字交叉的「节点鼓包」）
+  // 端点挂接：tip 落在他路 → 记一口（十字穿越无 tip，不会进）
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
     const tips: { point: Point; end: 'start' | 'end' }[] = [
@@ -1567,26 +1597,8 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     for (const tip of tips) {
       for (const host of features) {
         if (!isPathKind(host) || host.id === f.id || host.kind !== 'road') continue;
-        let hit = false;
-        for (const p of host.points) {
-          if (dist(tip.point, p) <= ENDPOINT_MERGE_M) {
-            hit = true;
-            break;
-          }
-        }
-        if (!hit) {
-          for (let i = 0; i < host.points.length - 1; i++) {
-            const on = closestOnSegment(tip.point, {
-              a: host.points[i],
-              b: host.points[i + 1],
-            });
-            if (on.dist <= ENDPOINT_MERGE_M) {
-              hit = true;
-              break;
-            }
-          }
-        }
-        if (hit) considerJoin(f, tip.end, tip.point, host);
+        if (!tipHitsHost(tip.point, host)) continue;
+        considerJoin(f, tip.end, tip.point, host);
       }
     }
   }
@@ -1594,6 +1606,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
   return [...byKey.values()].map((a) => ({
     point: a.point,
     grade: a.grade,
+    hostId: a.hostId,
     hostWidth: a.hostWidth,
     hostColor: a.hostColor,
     hostCasing: a.hostCasing,

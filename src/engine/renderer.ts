@@ -345,10 +345,11 @@ function buildRampDrawPieces(
 }
 
 /**
- * 擦掉主路路缘在匝道挂接处的侧墙（destination-out），不重涂宿主色 → 无补丁。
- * 须在主路 casing 之后、fill 之前调用。
+ * 沿汇入方向撕开宿主侧路缘（destination-out）。
+ * 只清 tip 宽度的一条缝，不沿主路拉矩形 → 无补丁。
+ * 须在主路 casing 之后、fill 之前。
  */
-function eraseHostCasingAtJoins(
+function openHostMouthAlongApproach(
   ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
   band: number,
@@ -363,24 +364,19 @@ function eraseHostCasingAtJoins(
     if (Math.floor(m.grade + 1e-9) !== band) continue;
     const p = toScreen(m.point, viewport);
     const hostBodyW = Math.max(2, m.hostWidth * z);
-    const hostCasingW = hostBodyW + casingExtra;
     const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
     const tipFillW = Math.max(2, m.tipWidth * z);
-    const hx = m.hostDirX;
-    const hy = m.hostDirY;
-    const sinA = Math.abs(hx * m.approachY - hy * m.approachX);
-    // 开口长度 ≈ tip 路缘投影到主路切向；不要拉成一段长矩形
-    const openLen = Math.max(
-      tipCasingW / Math.max(sinA, 0.22),
-      tipFillW * 1.1,
-      3 * z,
-    );
+    // approach：路内 → tip；汇入从 tip 外侧扫向宿主中心
+    const ax = m.approachX;
+    const ay = m.approachY;
+    const outer = hostBodyW * 0.5 + casingExtra + tipFillW * 0.15;
+    const inner = Math.max(0, hostBodyW * 0.12);
 
     ctx.beginPath();
-    ctx.moveTo(p.x - hx * openLen * 0.5, p.y - hy * openLen * 0.5);
-    ctx.lineTo(p.x + hx * openLen * 0.5, p.y + hy * openLen * 0.5);
+    ctx.moveTo(p.x - ax * outer, p.y - ay * outer);
+    ctx.lineTo(p.x - ax * inner, p.y - ay * inner);
     ctx.strokeStyle = '#000';
-    ctx.lineWidth = hostCasingW + 1;
+    ctx.lineWidth = tipCasingW + 1;
     ctx.lineCap = 'butt';
     ctx.lineJoin = 'miter';
     ctx.stroke();
@@ -388,7 +384,10 @@ function eraseHostCasingAtJoins(
   ctx.restore();
 }
 
-/** tip→宿主色软过渡（仅 tip 路宽，无加宽涂抹） */
+/**
+ * tip → 宿主色渐变（匝道出入口 / 丁字尽头异色汇入）。
+ * 仅 tip 路宽，不做加宽涂抹。
+ */
 function drawJoinBlends(
   ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
@@ -401,7 +400,7 @@ function drawJoinBlends(
   const fillScale = style === 'sketch' ? 0.72 : 1;
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
-    if (m.tipColor === m.hostColor && m.tipWidth + 0.05 >= m.hostWidth) continue;
+    if (m.tipColor === m.hostColor) continue;
 
     const p = toScreen(m.point, viewport);
     let hostFill = m.hostColor;
@@ -412,16 +411,20 @@ function drawJoinBlends(
     }
     const tipFillW = Math.max(2, m.tipWidth * z * fillScale);
     const halfHost = (m.hostWidth * 0.5) * z;
-    const ix = -m.approachX;
-    const iy = -m.approachY;
+    const ax = m.approachX;
+    const ay = m.approachY;
+    // 从宿主路缘外缘内侧 → 中心：tip 色淡入宿主色
     const a = {
-      x: p.x + ix * (halfHost + tipFillW * 0.45),
-      y: p.y + iy * (halfHost + tipFillW * 0.45),
+      x: p.x - ax * (halfHost + tipFillW * 0.85),
+      y: p.y - ay * (halfHost + tipFillW * 0.85),
     };
-    const b = { x: p.x, y: p.y };
+    const b = {
+      x: p.x - ax * (tipFillW * 0.05),
+      y: p.y - ay * (tipFillW * 0.05),
+    };
     const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
     g.addColorStop(0, tipFill);
-    g.addColorStop(0.55, lerpColor(tipFill, hostFill, 0.55));
+    g.addColorStop(0.45, lerpColor(tipFill, hostFill, 0.35));
     g.addColorStop(1, hostFill);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
@@ -433,7 +436,7 @@ function drawJoinBlends(
   }
 }
 
-/** 同层：tip stub → 匝道 → 主路；只截路缘；汇入处沿主路开口 + 颜色渐变 */
+/** 同层：tip stub → 匝道 → 主路；tip 截路缘；汇入口撕侧边 + tip→宿主渐变 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -550,8 +553,8 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 擦掉挂接处主路路缘侧墙（不涂宿主色补丁）
-    eraseHostCasingAtJoins(ctx, mouths, band, viewport, style);
+    // 沿汇入方向撕开宿主侧路缘（tip 宽缝，无沿主路补丁）
+    openHostMouthAlongApproach(ctx, mouths, band, viewport, style);
     for (const piece of mains) {
       drawRoadFill(
         ctx,
