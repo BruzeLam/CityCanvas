@@ -314,28 +314,6 @@ function simplifyCollinear(points: Point[], eps: number): Point[] {
   return out.length >= 4 ? out : points;
 }
 
-function chaikinClosed(points: Point[], iters: number): Point[] {
-  let pts = points;
-  for (let k = 0; k < iters; k++) {
-    const next: Point[] = [];
-    const n = pts.length;
-    for (let i = 0; i < n; i++) {
-      const a = pts[i]!;
-      const b = pts[(i + 1) % n]!;
-      next.push({
-        x: a.x * 0.75 + b.x * 0.25,
-        y: a.y * 0.75 + b.y * 0.25,
-      });
-      next.push({
-        x: a.x * 0.25 + b.x * 0.75,
-        y: a.y * 0.25 + b.y * 0.75,
-      });
-    }
-    pts = next;
-  }
-  return pts;
-}
-
 /** 点是否落在地图外框上（格角坐标系） */
 function onMapFrame(p: Point, cols: number, rows: number): boolean {
   const e = 1e-4;
