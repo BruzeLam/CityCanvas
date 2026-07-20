@@ -568,18 +568,31 @@ export function collectJoinedCaps(features: MapFeature[]): Set<string> {
     }
   }
 
-  // 匝道挂接到他路中段：端点与他路任一顶点重合也算接合
+  // 匝道挂接到他路：端点落在他路顶点或中心线上都算接合（去掉鼓包圆帽）
   for (const tip of tips) {
     if (joined.has(`${tip.featureId}|${tip.end}`)) continue;
     for (const f of features) {
       if (!isPathKind(f) || f.id === tip.featureId) continue;
+      let hit = false;
       for (const p of f.points) {
         if (dist(tip.point, p) <= ENDPOINT_MERGE_M) {
-          joined.add(`${tip.featureId}|${tip.end}`);
+          hit = true;
           break;
         }
       }
-      if (joined.has(`${tip.featureId}|${tip.end}`)) break;
+      if (!hit) {
+        for (let i = 0; i < f.points.length - 1; i++) {
+          const on = closestOnSegment(tip.point, { a: f.points[i], b: f.points[i + 1] });
+          if (on.dist <= ENDPOINT_MERGE_M) {
+            hit = true;
+            break;
+          }
+        }
+      }
+      if (hit) {
+        joined.add(`${tip.featureId}|${tip.end}`);
+        break;
+      }
     }
   }
 

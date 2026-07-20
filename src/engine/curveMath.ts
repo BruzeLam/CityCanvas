@@ -70,9 +70,9 @@ function sampleArcAngles(
   maxSegmentM: number,
 ): Point[] {
   const arcLen = Math.abs(sweep) * radius;
-  // 更密采样：弧长步长约 2–4 m，最少 32 段，减轻折线感
-  const step = Math.min(Math.max(2, maxSegmentM), 4);
-  const n = Math.max(32, Math.ceil(arcLen / step));
+  // 密采样：约 1–2 m 一步，最少 64 段，弯道边缘更圆
+  const step = Math.min(Math.max(1, maxSegmentM), 2);
+  const n = Math.max(64, Math.ceil(arcLen / step));
   const points: Point[] = [];
   for (let i = 0; i <= n; i++) {
     const t = i / n;
@@ -94,7 +94,7 @@ export function curveFromTangent(
   start: Point,
   headingRad: number,
   end: Point,
-  maxSegmentM = 3,
+  maxSegmentM = 1.5,
 ): { points: Point[]; radius: number; sweepDeg: number; endHeading: number } | null {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -158,6 +158,43 @@ export function curveFromTangent(
   };
 }
 
+/**
+ * 正反切线都试，选更自然的弧。
+ * 统一「已有端点向外」与「中心线新节点沿路」两种起点的手感。
+ */
+export function curveFromBestTangent(
+  start: Point,
+  headingRad: number,
+  end: Point,
+  maxSegmentM = 1.5,
+): { points: Point[]; radius: number; sweepDeg: number; endHeading: number } | null {
+  type Curve = NonNullable<ReturnType<typeof curveFromTangent>>;
+  let best: Curve | null = null;
+  let bestScore = Infinity;
+
+  for (const h of [headingRad, headingRad + Math.PI]) {
+    const curve = curveFromTangent(start, h, end, maxSegmentM);
+    if (!curve) continue;
+    if (!Number.isFinite(curve.radius)) {
+      if (5 < bestScore) {
+        best = curve;
+        bestScore = 5;
+      }
+      continue;
+    }
+    if (curve.radius < 12 || curve.radius > 2500) continue;
+    const forward =
+      Math.cos(h) * (end.x - start.x) + Math.sin(h) * (end.y - start.y);
+    const score = curve.sweepDeg * 1.2 + curve.radius * 0.02 + (forward < 0 ? 80 : 0);
+    if (score < bestScore) {
+      best = curve;
+      bestScore = score;
+    }
+  }
+
+  return best ?? curveFromTangent(start, headingRad, end, maxSegmentM);
+}
+
 /** 从已绘折线末段推算当前切线角；不足两点则返回 null */
 export function headingFromPolyline(points: Point[]): number | null {
   if (points.length < 2) return null;
@@ -194,7 +231,7 @@ export function curveFromThreePoints(
   a: Point,
   b: Point,
   c: Point,
-  maxSegmentM = 3,
+  maxSegmentM = 1.5,
 ): CurveResult | null {
   const chordAC = dist(a, c);
   if (chordAC < 2 || dist(a, b) < 2 || dist(b, c) < 2) return null;
@@ -287,16 +324,16 @@ export function curveAdaptiveViaControl(
   c: Point,
   startHeading: number | null,
   endHeading: number | null,
-  maxSegmentM = 3,
+  maxSegmentM = 1.5,
 ): CurveResult | null {
   const h0 = startHeading ?? bearingRad(a, b);
-  const arc1 = curveFromTangent(a, h0, b, maxSegmentM);
+  const arc1 = curveFromBestTangent(a, h0, b, maxSegmentM);
   if (!arc1) return curveFromThreePoints(a, b, c, maxSegmentM);
 
   let arc2: ReturnType<typeof curveFromTangent> = null;
   if (endHeading != null) {
     // 从 C 沿反向切线拉到 B，再反转，使终点切线贴近已有路
-    const rev = curveFromTangent(c, endHeading + Math.PI, b, maxSegmentM);
+    const rev = curveFromBestTangent(c, endHeading + Math.PI, b, maxSegmentM);
     if (rev && rev.points.length >= 2) {
       const forward = [...rev.points].reverse();
       arc2 = {
@@ -308,7 +345,7 @@ export function curveAdaptiveViaControl(
     }
   }
   if (!arc2) {
-    arc2 = curveFromTangent(b, arc1.endHeading, c, maxSegmentM);
+    arc2 = curveFromBestTangent(b, arc1.endHeading, c, maxSegmentM);
   }
   if (!arc2) return curveFromThreePoints(a, b, c, maxSegmentM);
 

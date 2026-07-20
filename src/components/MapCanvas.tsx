@@ -29,7 +29,7 @@ import {
   formatRadius,
   lineMetrics,
   curveFromThreePoints,
-  curveFromTangent,
+  curveFromBestTangent,
   headingFromPolyline,
   snapAnglePoint,
   softOrthoSnap,
@@ -255,7 +255,7 @@ export function MapCanvas({
       if (polyDraft.length > 0 && polyCursor) {
         const a = polyDraft[polyDraft.length - 1];
         if (!curveControl && startHeading != null) {
-          const curve = curveFromTangent(a, startHeading, polyCursor);
+          const curve = curveFromBestTangent(a, startHeading, polyCursor);
           if (curve) parallelGuide = [...polyDraft, ...curve.points.slice(1)];
           else parallelGuide = guideFromDraft(polyDraft, polyCursor);
         } else if (curveControl) {
@@ -916,13 +916,32 @@ export function MapCanvas({
           setLastSnapKind(hit.kind);
           let anchor: number | null = null;
           if (hit.kind === 'endpoint') {
-            anchor = headingAtPoint(hit.point, pathSegments, project.viewport.zoom);
+            anchor = headingAtPoint(
+              hit.point,
+              pathSegments,
+              project.viewport.zoom,
+              hit.ref ?? null,
+            );
           } else if (hit.kind === 'centerline') {
             anchor =
               (hit.ref
                 ? Math.atan2(hit.ref.b.y - hit.ref.a.y, hit.ref.b.x - hit.ref.a.x)
                 : null) ??
               headingAlongSegment(hit.point, pathSegments, project.viewport.zoom);
+          } else {
+            // 未命中吸附时也尝试附近路网，避免「空白落笔」与「贴路落笔」手感割裂
+            const near = findNearestAnyGradeAttachment(
+              projectRef.current.features,
+              hit.point,
+              RAMP_ATTACH_M,
+            );
+            if (near) {
+              const a = near.feature.points[near.segIndex];
+              const b = near.feature.points[near.segIndex + 1];
+              if (a && b) {
+                anchor = Math.atan2(b.y - a.y, b.x - a.x);
+              }
+            }
           }
           syncDrawGradeFromPoint(hit.point, { lockDraftStart: true });
           setPolyDraft([hit.point]);
@@ -952,7 +971,7 @@ export function MapCanvas({
           const c = hit.point;
           if (dist(a, c) < 4) return;
 
-          const curve = curveFromTangent(a, tangentHeading, c);
+          const curve = curveFromBestTangent(a, tangentHeading, c);
           if (curve && curve.points.length >= 2) {
             setPolyDraft([...polyDraft, ...curve.points.slice(1)]);
             setCurveControl(null);
@@ -1333,7 +1352,7 @@ export function MapCanvas({
       const tangentHeading = curveAnchorHeading ?? headingFromPolyline(polyDraft);
 
       if (!curveControl && tangentHeading != null) {
-        const curve = curveFromTangent(a, tangentHeading, polyCursor);
+        const curve = curveFromBestTangent(a, tangentHeading, polyCursor);
         if (curve) {
           if (!Number.isFinite(curve.radius)) {
             const m = lineMetrics(a, polyCursor);

@@ -235,8 +235,8 @@ export const ROAD_STYLES: Record<
   arterial: { label: '主干路', width: 10, color: '#ffd966', casing: '#b8960f' },
   collector: { label: '次干路', width: 7, color: '#ffffff', casing: '#888888' },
   local: { label: '支路', width: 4, color: '#e8e8e8', casing: '#aaaaaa' },
-  /** 细匝道：连接异级/异层；配色由 roadLevelFrom→End 渐变 */
-  ramp: { label: '匝道', width: 3.2, color: '#ececec', casing: '#9a9a9a' },
+  /** 细匝道：连接异级/异层；配色由 roadLevelFrom→End 渐变，接合处加宽过渡 */
+  ramp: { label: '匝道', width: 2.8, color: '#ececec', casing: '#9a9a9a' },
 };
 
 export const LAYER_LABELS: Record<FeatureKind, string> = {

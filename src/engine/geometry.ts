@@ -208,10 +208,26 @@ export function findPathGuideSnap(
   from?: Point | null,
   soft = true,
 ): GuideSnap {
-  const endpoint = findSnapPoint(cursor, endpoints, zoom);
-  if (endpoint) {
-    return { point: endpoint, kind: 'endpoint' };
+  // 端点吸附时带回所属路段，便于与中心线开岔一样锁切线
+  const threshold = snapThreshold(zoom);
+  let bestEnd: GuideSnap | null = null;
+  let bestEndDist = threshold;
+  for (const seg of segments) {
+    for (const end of [seg.a, seg.b] as const) {
+      const d = dist(cursor, end);
+      if (d < bestEndDist) {
+        bestEndDist = d;
+        bestEnd = { point: { ...end }, kind: 'endpoint', ref: seg };
+      }
+    }
   }
+  if (!bestEnd) {
+    const endpoint = findSnapPoint(cursor, endpoints, zoom);
+    if (endpoint) {
+      bestEnd = { point: endpoint, kind: 'endpoint' };
+    }
+  }
+  if (bestEnd) return bestEnd;
 
   if (!soft) {
     return { point: cursor, kind: 'none' };
@@ -233,28 +249,44 @@ export function findPathGuideSnap(
 
 /**
  * 估算端点处「向外延伸」的切线方向（从路段指向端点外侧）。
- * 用于从已有道路端点继续画弯道时锁定锚点航向。
+ * 优先使用已知路段 ref；多路交汇时取最长臂，避免乱锁。
  */
 export function headingAtPoint(
   point: Point,
   segments: Segment[],
   zoom: number,
+  preferred?: Segment | null,
 ): number | null {
+  if (preferred) {
+    const da = dist(point, preferred.a);
+    const db = dist(point, preferred.b);
+    if (da <= db) {
+      return Math.atan2(preferred.a.y - preferred.b.y, preferred.a.x - preferred.b.x);
+    }
+    return Math.atan2(preferred.b.y - preferred.a.y, preferred.b.x - preferred.a.x);
+  }
+
   const threshold = snapThreshold(zoom) * 1.2;
   let bestDir: number | null = null;
-  let bestDist = threshold;
+  let bestScore = -Infinity;
 
   for (const seg of segments) {
     const da = dist(point, seg.a);
     const db = dist(point, seg.b);
-    // 在 a 端：沿 b→a 向外；在 b 端：沿 a→b 向外
-    if (da < bestDist) {
-      bestDist = da;
-      bestDir = Math.atan2(seg.a.y - seg.b.y, seg.a.x - seg.b.x);
+    const len = dist(seg.a, seg.b);
+    if (da < threshold) {
+      const score = len - da * 10;
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = Math.atan2(seg.a.y - seg.b.y, seg.a.x - seg.b.x);
+      }
     }
-    if (db < bestDist) {
-      bestDist = db;
-      bestDir = Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x);
+    if (db < threshold) {
+      const score = len - db * 10;
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x);
+      }
     }
   }
   return bestDir;
