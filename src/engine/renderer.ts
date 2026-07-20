@@ -29,14 +29,12 @@ import {
   curveFromBestTangent,
 } from './curveMath';
 import type { GuideSnap, Segment } from './geometry';
-import { closestOnSegment, dist } from './geometry';
 import {
   collectJoinedCaps,
   collectJunctionNodes,
   collectJoinMouths,
   collectCasingTrimM,
   ENDPOINT_MERGE_M,
-  roadBodyWidthM,
   segmentIntersection,
   type JoinMouth,
 } from './junctions';
@@ -129,42 +127,9 @@ function trimPolylineEnds(
 /** 匝道端点短截：与宿主同层绘制，避免中段抬升后整条压在主路上 */
 const RAMP_TIP_STUB_M = 14;
 
-/** 端点若挂在主路上，用宿主标高画 tip stub（可压在宿主下，避免 +2 tip 叠在 0 层上） */
-function hostGradeAtAttachment(
-  tip: Point,
-  selfId: string,
-  peers: MapFeature[],
-): number | null {
-  let bestD = Infinity;
-  let bestG: number | null = null;
-  for (const host of peers) {
-    if (host.id === selfId || host.kind !== 'road' || host.points.length < 2) continue;
-    // 匝道互挂不算宿主层
-    if (isRampRoadFeature(host)) continue;
-    for (const p of host.points) {
-      const d = dist(tip, p);
-      if (d <= ENDPOINT_MERGE_M && d < bestD) {
-        bestD = d;
-        bestG = featureGrade(host);
-      }
-    }
-    for (let i = 0; i < host.points.length - 1; i++) {
-      const on = closestOnSegment(tip, {
-        a: host.points[i],
-        b: host.points[i + 1],
-      });
-      if (on.dist <= ENDPOINT_MERGE_M && on.dist < bestD) {
-        bestD = on.dist;
-        bestG = featureGrade(host);
-      }
-    }
-  }
-  return bestG;
-}
-
 /**
  * 匝道拆段：
- * 1) 两端 tip stub（宿主标高优先，先于同层主路）
+ * 1) 两端 tip stub（端点标高，先于同层主路）
  * 2) 中段按匝道交叉切开（插值标高）
  */
 function buildRampDrawPieces(
@@ -179,12 +144,7 @@ function buildRampDrawPieces(
   const g0 = featureGrade(feature);
   const g1 = featureGradeEnd(feature);
   const tipM = Math.min(RAMP_TIP_STUB_M, total * 0.28);
-  // 跨层必拆；同层若两端都挂主路也拆，保证 tip 压在宿主下再开口
-  const attachedBoth =
-    hostGradeAtAttachment(pts[0], feature.id, peers) != null &&
-    hostGradeAtAttachment(pts[pts.length - 1], feature.id, peers) != null;
-  const canStub =
-    total > tipM * 2.4 && (Math.abs(g0 - g1) > 1e-6 || attachedBoth);
+  const canStub = total > tipM * 2.4 && Math.abs(g0 - g1) > 1e-6;
 
   type Split = { segIndex: number; t: number; point: Point };
   const splits: Split[] = [];
@@ -235,25 +195,11 @@ function buildRampDrawPieces(
   if (canStub) {
     const startStub = slicePolylineByArc(pts, cum, 0, tipM);
     const endStub = slicePolylineByArc(pts, cum, total - tipM, total);
-    const startHostG = hostGradeAtAttachment(pts[0], feature.id, peers);
-    const endHostG = hostGradeAtAttachment(pts[pts.length - 1], feature.id, peers);
     if (startStub.length >= 2) {
-      pieces.push({
-        feature,
-        grade: startHostG ?? g0,
-        order,
-        subPoints: startStub,
-        isTip: true,
-      });
+      pieces.push({ feature, grade: g0, order, subPoints: startStub, isTip: true });
     }
     if (endStub.length >= 2) {
-      pieces.push({
-        feature,
-        grade: endHostG ?? g1,
-        order,
-        subPoints: endStub,
-        isTip: true,
-      });
+      pieces.push({ feature, grade: g1, order, subPoints: endStub, isTip: true });
     }
   }
 
@@ -346,75 +292,11 @@ function buildRampDrawPieces(
 }
 
 /**
- * 点到宿主中心线的距离是否落在路面半宽 + pad 内（浅角碰撞区）
+ * 汇入口开口（无圆环 / 无 round 鼓包）：
+ * 1) 沿宿主中心线 butt 补一段路面色（宽度=路缘全宽）→ 撕开宿主侧边线
+ * 2) 沿汇入臂 butt 画 tip→host 渐变 → 颜色过渡
  */
-function pointInHostBody(p: Point, host: MapFeature, padM: number): boolean {
-  if (host.points.length < 2) return false;
-  const half = roadBodyWidthM(host) * 0.5 + padM;
-  for (let i = 0; i < host.points.length - 1; i++) {
-    const on = closestOnSegment(p, { a: host.points[i], b: host.points[i + 1] });
-    if (on.dist <= half) return true;
-  }
-  return false;
-}
-
-/** 折线加密，浅角碰撞区顶点不够时也能判进宿主 */
-function densifyPolyline(points: Point[], stepM: number): Point[] {
-  if (points.length < 2) return points.map((p) => ({ ...p }));
-  const out: Point[] = [{ ...points[0] }];
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i];
-    const b = points[i + 1];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    const n = Math.max(1, Math.ceil(len / Math.max(0.8, stepM)));
-    for (let k = 1; k <= n; k++) {
-      const t = k / n;
-      out.push({
-        x: a.x + (b.x - a.x) * t,
-        y: a.y + (b.y - a.y) * t,
-      });
-    }
-  }
-  return out;
-}
-
-/** 路缘只画在宿主路面外侧：碰撞区内不画 tip 边线 */
-function splitCasingOutsideHosts(
-  points: Point[],
-  selfId: string,
-  hosts: MapFeature[],
-  selfHalfM: number,
-): Point[][] {
-  if (points.length < 2 || hosts.length === 0) return [points];
-  const dense = densifyPolyline(points, 2);
-  // pad 含 tip 半宽，边线整条停在宿主外
-  const pad = selfHalfM + 1.2;
-  const inside = dense.map((p) =>
-    hosts.some((h) => h.id !== selfId && pointInHostBody(p, h, pad)),
-  );
-  const segs: Point[][] = [];
-  let cur: Point[] = [];
-  const flush = () => {
-    if (cur.length >= 2) segs.push(cur);
-    cur = [];
-  };
-  for (let i = 0; i < dense.length; i++) {
-    if (inside[i]) {
-      flush();
-      continue;
-    }
-    cur.push({ ...dense[i] });
-  }
-  flush();
-  return segs;
-}
-
-/**
- * 只擦掉主路侧边路缘那一圈墨线（沿汇入方向、tip 宽），
- * 绝不沿主路中心线挖空 → 不会缺一大块。
- * 仅匝道汇入口；须在主路 casing 之后、fill 之前。
- */
-function eraseHostSideRingAtRampMouths(
+function drawJoinOpenings(
   ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
   band: number,
@@ -422,32 +304,66 @@ function eraseHostSideRingAtRampMouths(
   style: MapStyle,
 ) {
   const z = viewport.zoom;
+  const fillScale = style === 'sketch' ? 0.72 : 1;
   const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * z) : 2 * z;
-  ctx.save();
-  ctx.globalCompositeOperation = 'destination-out';
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
     const p = toScreen(m.point, viewport);
-    const hostBodyW = Math.max(2, m.hostWidth * z);
-    const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
-    const ax = m.approachX;
-    const ay = m.approachY;
-    // 只扫过路缘环：外缘 → 刚进路面
-    const outer = hostBodyW * 0.5 + casingExtra + 1;
-    const inner = hostBodyW * 0.5 - 1;
-    if (outer <= inner) continue;
+
+    let hostFill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
+    let tipFill = style === 'blueprint' ? '#e8f4ff' : m.tipColor;
+    if (style === 'sketch') {
+      hostFill = sketchRoadFill(m.hostColor);
+      tipFill = sketchRoadFill(m.tipColor);
+    }
+
+    const hostFillW = Math.max(2, m.hostWidth * z * fillScale);
+    // 必须盖到路缘外沿，否则侧边线还在
+    const hostOpenW = Math.max(hostFillW, m.hostWidth * z) + 2 * casingExtra;
+    const tipFillW = Math.max(2, m.tipWidth * z * fillScale);
+    const openLen = Math.max(tipFillW * 1.05, 4 * z);
+    const halfHost = (m.hostWidth * 0.5) * z;
+
+    const hx = m.hostDirX;
+    const hy = m.hostDirY;
+    // 1) 沿主路撕开侧边线（butt，绝不用 round）
     ctx.beginPath();
-    ctx.moveTo(p.x - ax * outer, p.y - ay * outer);
-    ctx.lineTo(p.x - ax * inner, p.y - ay * inner);
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = tipCasingW + 1;
+    ctx.moveTo(p.x - hx * openLen * 0.5, p.y - hy * openLen * 0.5);
+    ctx.lineTo(p.x + hx * openLen * 0.5, p.y + hy * openLen * 0.5);
+    ctx.strokeStyle = hostFill;
+    ctx.lineWidth = hostOpenW;
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.stroke();
+
+    const useBlend =
+      style !== 'blueprint' &&
+      (m.tipColor !== m.hostColor || m.tipWidth + 0.05 < m.hostWidth);
+    if (!useBlend) continue;
+
+    // 2) 沿汇入臂：从臂内到中心，tip 色 → 宿主色（butt）
+    const ix = -m.approachX;
+    const iy = -m.approachY;
+    const a = {
+      x: p.x + ix * (halfHost + tipFillW * 0.4),
+      y: p.y + iy * (halfHost + tipFillW * 0.4),
+    };
+    const b = { x: p.x, y: p.y };
+    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    g.addColorStop(0, tipFill);
+    g.addColorStop(0.55, lerpColor(tipFill, hostFill, 0.55));
+    g.addColorStop(1, hostFill);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = tipFillW;
     ctx.lineCap = 'butt';
     ctx.stroke();
   }
-  ctx.restore();
 }
 
-/** 同层：主路路缘不断；只擦汇入口侧边墨线；匝道路缘跳过碰撞区 */
+/** 同层：tip stub → 匝道 → 主路；只截路缘；汇入处沿主路开口 + 颜色渐变 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -514,6 +430,15 @@ function drawRoadsMerged(
     );
 
     for (const piece of tips) {
+      drawRoadCasing(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        casingTrim,
+        piece.subPoints,
+      );
       drawRoadFill(
         ctx,
         piece.feature,
@@ -525,6 +450,15 @@ function drawRoadsMerged(
       );
     }
     for (const piece of ramps) {
+      drawRoadCasing(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        casingTrim,
+        piece.subPoints,
+      );
       drawRoadFill(
         ctx,
         piece.feature,
@@ -544,11 +478,8 @@ function drawRoadsMerged(
         joinedCaps,
         casingTrim,
         piece.subPoints,
-        roads,
       );
     }
-    // 只擦汇入口侧边墨线，不挖主路中心
-    eraseHostSideRingAtRampMouths(ctx, mouths, band, viewport, style);
     for (const piece of mains) {
       drawRoadFill(
         ctx,
@@ -560,19 +491,8 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 匝道路缘最后画，碰撞区内不画
-    for (const piece of ramps) {
-      drawRoadCasing(
-        ctx,
-        piece.feature,
-        viewport,
-        style,
-        joinedCaps,
-        casingTrim,
-        piece.subPoints,
-        roads,
-      );
-    }
+    // 沿主路 butt 开口 + 汇入臂渐变（无 round 鼓包）
+    drawJoinOpenings(ctx, mouths, band, viewport, style);
     i = j;
   }
 
@@ -1038,7 +958,7 @@ function sketchRoadFill(color: string): string {
   return `rgb(${Math.round(p.r * 0.15 + 240)},${Math.round(p.g * 0.15 + 240)},${Math.round(p.b * 0.15 + 240)})`;
 }
 
-/** 路缘：主路完整；匝道碰撞区内不画边线 */
+/** 路缘：汇入端按宿主半宽截断，边线在主路边开口，不封死路口 */
 function drawRoadCasing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
@@ -1047,10 +967,9 @@ function drawRoadCasing(
   joinedCaps: Set<string>,
   casingTrim: Map<string, number>,
   subPoints?: Point[],
-  peers?: MapFeature[],
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
-  const isRamp = level === 'ramp' || isRampFeature(feature);
+  const isRamp = level === 'ramp';
   const solid = isRamp ? rampSolidClass(feature) : normalizeRoadClass(level);
   const blend = isLevelBlendRoad(feature);
   const fromLevel = (feature.roadLevelFrom ?? solid ?? 'local') as RoadLevel;
@@ -1073,34 +992,19 @@ function drawRoadCasing(
       world[world.length - 1].y - feature.points[feature.points.length - 1].y,
     ) < tipEps;
 
+  // 整条路端点接合：路缘在宿主半宽处截断 → 边线开口
   let trimStart = 0;
   let trimEnd = 0;
   if (startsAtTip) trimStart = casingTrim.get(`${feature.id}|start`) ?? 0;
   if (endsAtTip) trimEnd = casingTrim.get(`${feature.id}|end`) ?? 0;
   if (trimStart > 0 || trimEnd > 0) {
     const trimmed = trimPolylineEnds(world, trimStart, trimEnd);
-    if (!trimmed) return;
+    if (!trimmed) return; // 过短：不画封死的路缘 stub
     world = trimmed;
   }
 
-  // 仅匝道：碰撞区内不画路缘（去掉 tip 横切线）；主路路缘完整不断
-  let worldSegs: Point[][] = [world];
-  if (peers && peers.length > 0 && isRamp) {
-    const hosts = peers.filter(
-      (h) =>
-        h.id !== feature.id &&
-        h.kind === 'road' &&
-        h.roadLevel !== 'ramp' &&
-        !isRampFeature(h),
-    );
-    worldSegs = splitCasingOutsideHosts(
-      world,
-      feature.id,
-      hosts,
-      roadBodyWidthM(feature) * 0.5,
-    );
-  }
-  if (worldSegs.length === 0) return;
+  const points = world.map((p) => toScreen(p, viewport));
+  if (points.length < 2) return;
 
   const width = bodyStyle.width * viewport.zoom;
   const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * viewport.zoom) : 2 * viewport.zoom;
@@ -1117,33 +1021,36 @@ function drawRoadCasing(
       : colorStyle.casing;
 
   const splitInterior = Boolean(subPoints) && !(startsAtTip && endsAtTip);
-  const opened = trimStart > 0 || trimEnd > 0 || worldSegs.length > 1;
-  const cap: CanvasLineCap =
-    opened || splitInterior ? 'butt' : strokeCap;
+  // 截断后的汇入端一律 butt，避免圆帽又把口封上
+  const opened = trimStart > 0 || trimEnd > 0;
+  const cap: CanvasLineCap = opened || splitInterior
+    ? startsAtTip || endsAtTip || opened
+      ? opened
+        ? 'butt'
+        : strokeCap
+      : 'butt'
+    : strokeCap;
 
-  for (const seg of worldSegs) {
-    if (seg.length < 2) continue;
-    const points = seg.map((p) => toScreen(p, viewport));
-    if (blend) {
-      const g = ctx.createLinearGradient(
-        points[0].x,
-        points[0].y,
-        points[points.length - 1].x,
-        points[points.length - 1].y,
-      );
-      g.addColorStop(0, casing0);
-      g.addColorStop(1, casing1);
-      ctx.strokeStyle = g;
-    } else {
-      ctx.strokeStyle = casingMid;
-    }
-    tracePath(ctx, points, false);
-    ctx.lineWidth = casingW;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = cap;
-    ctx.stroke();
+  if (blend) {
+    const g = ctx.createLinearGradient(
+      points[0].x,
+      points[0].y,
+      points[points.length - 1].x,
+      points[points.length - 1].y,
+    );
+    g.addColorStop(0, casing0);
+    g.addColorStop(1, casing1);
+    ctx.strokeStyle = g;
+  } else {
+    ctx.strokeStyle = casingMid;
   }
+  tracePath(ctx, points, false);
+  ctx.lineWidth = casingW;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = cap;
+  ctx.stroke();
 
+  // 已开口的端不补自由端圆盘
   const tips: Point[] = [];
   if (
     startsAtTip &&

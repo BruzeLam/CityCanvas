@@ -1366,19 +1366,18 @@ function roadVisualClass(f: MapFeature): Exclude<RoadLevel, 'ramp'> {
 export type JoinMouth = {
   point: Point;
   grade: FeatureGrade;
-  hostId: string;
   /** 宿主路面宽度（世界米） */
   hostWidth: number;
   hostColor: string;
   hostCasing: string;
-  /** 汇入方（tip 路）配色；与宿主不同时画渐变 */
+  /** 汇入方（较窄 tip 路）配色；与宿主不同时画渐变 */
   tipColor: string;
   tipCasing: string;
   tipWidth: number;
-  /** 汇入方向：从路内指向 tip/junction（单位向量） */
+  /** 汇入方向：从路内指向 junction（单位向量） */
   approachX: number;
   approachY: number;
-  /** 宿主中心线切向（单位向量） */
+  /** 宿主中心线切向（单位向量），用于沿主路抹边线 */
   hostDirX: number;
   hostDirY: number;
   joinerId: string;
@@ -1444,15 +1443,13 @@ function hostTangentAt(host: MapFeature, tip: Point): Point {
 }
 
 /**
- * 汇入口：某路 tip 挂在他路中心线/顶点上（匝道出入口、丁字尽头）。
- * 十字穿越没有 tip 落点，不会进这里。
- * 取最宽宿主；供撕开宿主侧路缘 + tip→宿主色渐变。
+ * 汇入口：端点挂在他路中心线/顶点。
+ * 取最宽路为宿主；记录汇入臂与宿主切向，供渲染抹边线 + tip 渐变。
  */
 export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
   type Acc = {
     point: Point;
     grade: FeatureGrade;
-    hostId: string;
     hostWidth: number;
     hostRank: number;
     hostColor: string;
@@ -1475,7 +1472,6 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       byKey.set(key, {
         point: { ...patch.point },
         grade: patch.grade,
-        hostId: patch.hostId ?? '',
         hostWidth: patch.hostWidth ?? 0,
         hostRank: patch.hostRank ?? 0,
         hostColor: patch.hostColor ?? ROAD_STYLES.local.color,
@@ -1497,7 +1493,6 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       prev.hostRank = patch.hostRank ?? prev.hostRank;
       prev.hostColor = patch.hostColor ?? prev.hostColor;
       prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
-      if (patch.hostId) prev.hostId = patch.hostId;
       if (patch.hostDirX != null) prev.hostDirX = patch.hostDirX;
       if (patch.hostDirY != null) prev.hostDirY = patch.hostDirY;
     } else if (
@@ -1508,7 +1503,6 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       prev.hostRank = patch.hostRank ?? prev.hostRank;
       prev.hostColor = patch.hostColor ?? prev.hostColor;
       prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
-      if (patch.hostId) prev.hostId = patch.hostId;
     }
     if (
       patch.tipWidth != null &&
@@ -1524,37 +1518,6 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     }
   };
 
-  const tipHitsHost = (tip: Point, host: MapFeature): boolean => {
-    for (const p of host.points) {
-      if (dist(tip, p) <= ENDPOINT_MERGE_M) return true;
-    }
-    for (let i = 0; i < host.points.length - 1; i++) {
-      const on = closestOnSegment(tip, {
-        a: host.points[i],
-        b: host.points[i + 1],
-      });
-      if (on.dist <= ENDPOINT_MERGE_M) return true;
-    }
-    return false;
-  };
-
-  /** 端点对端点且近似共线：续接，不是侧向汇入 */
-  const isCollinearTipContinuation = (
-    tip: Point,
-    joiner: MapFeature,
-    end: 'start' | 'end',
-    host: MapFeature,
-  ): boolean => {
-    if (host.points.length < 2) return false;
-    const onEnd =
-      dist(tip, host.points[0]) <= ENDPOINT_MERGE_M ||
-      dist(tip, host.points[host.points.length - 1]) <= ENDPOINT_MERGE_M;
-    if (!onEnd) return false;
-    const ht = hostTangentAt(host, tip);
-    const dir = approachDirAtTip(joiner, end);
-    return Math.abs(ht.x * dir.x + ht.y * dir.y) > 0.85;
-  };
-
   const considerJoin = (
     joiner: MapFeature,
     end: 'start' | 'end',
@@ -1562,25 +1525,19 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     host: MapFeature,
   ) => {
     if (host.kind !== 'road' || host.points.length < 2) return;
-    // 只处理匝道 tip：普通丁字/十字不擦边、不留缝
-    if (joiner.roadLevel !== 'ramp' && !isRampFeature(joiner)) return;
-    // 宿主也是匝道：互挂不画汇入口
-    if (host.roadLevel === 'ramp' || isRampFeature(host)) return;
-    // 共线续接不是侧挂
-    if (isCollinearTipContinuation(tipPoint, joiner, end, host)) return;
-
-    const hostGrade = featureGrade(host);
+    const hostGrade = isRampFeature(host)
+      ? gradeAlongPath(host, tipPoint)
+      : featureGrade(host);
     const hostCls = roadVisualClass(host);
     const hostWidth = roadBodyWidthM(host);
     const hostStyle = ROAD_STYLES[hostCls];
     const joinStyle = roadPaintStyle(joiner, end);
     const dir = approachDirAtTip(joiner, end);
     const ht = hostTangentAt(host, tipPoint);
-    const key = `${host.id}|${joiner.id}|${end}`;
+    const key = `${hostGrade}|${quantizeKey(tipPoint)}`;
     upsert(key, {
       point: tipPoint,
       grade: hostGrade,
-      hostId: host.id,
       hostWidth,
       hostRank: ROAD_CLASS_RANK[hostCls],
       hostColor: hostStyle.color,
@@ -1597,7 +1554,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     });
   };
 
-  // 端点挂接：tip 落在他路 → 记一口（十字穿越无 tip，不会进）
+  // 端点挂接：tip 落在他路 → 记一口（不含纯十字交叉的「节点鼓包」）
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
     const tips: { point: Point; end: 'start' | 'end' }[] = [
@@ -1607,8 +1564,26 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     for (const tip of tips) {
       for (const host of features) {
         if (!isPathKind(host) || host.id === f.id || host.kind !== 'road') continue;
-        if (!tipHitsHost(tip.point, host)) continue;
-        considerJoin(f, tip.end, tip.point, host);
+        let hit = false;
+        for (const p of host.points) {
+          if (dist(tip.point, p) <= ENDPOINT_MERGE_M) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) {
+          for (let i = 0; i < host.points.length - 1; i++) {
+            const on = closestOnSegment(tip.point, {
+              a: host.points[i],
+              b: host.points[i + 1],
+            });
+            if (on.dist <= ENDPOINT_MERGE_M) {
+              hit = true;
+              break;
+            }
+          }
+        }
+        if (hit) considerJoin(f, tip.end, tip.point, host);
       }
     }
   }
@@ -1616,7 +1591,6 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
   return [...byKey.values()].map((a) => ({
     point: a.point,
     grade: a.grade,
-    hostId: a.hostId,
     hostWidth: a.hostWidth,
     hostColor: a.hostColor,
     hostCasing: a.hostCasing,
@@ -1633,20 +1607,18 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
 }
 
 /**
- * 已接合端点截断 tip 路缘：停在宿主路面内侧，避免 butt 封口线露在汇入口。
- * 浅角汇入按 1/sin 加长截断。
- * key = `${featureId}|start|end` → 截断米数。
+ * 已接合端点应对宿主半宽 + 路缘厚度截断路缘：key = `${featureId}|start|end` → 截断米数。
  */
 export function collectCasingTrimM(features: MapFeature[]): Map<string, number> {
   const trim = new Map<string, number>();
   const joined = collectJoinedCaps(features);
-  const CASING_UNDER_FILL_M = 1.5;
+  /** 路缘比路面大约外扩 1m（屏幕 2px/zoom 的世界近似） */
+  const CASING_PAD_M = 1.25;
 
-  const hostTrimAt = (tip: Point, selfId: string, approach: Point): number => {
+  const hostHalfAt = (tip: Point, selfId: string): number => {
     let best = 0;
     for (const host of features) {
       if (!isPathKind(host) || host.id === selfId || host.kind !== 'road') continue;
-      if (host.roadLevel === 'ramp' || isRampFeature(host)) continue;
       let hit = false;
       for (const p of host.points) {
         if (dist(tip, p) <= ENDPOINT_MERGE_M) {
@@ -1667,11 +1639,7 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
         }
       }
       if (!hit) continue;
-      const half = roadBodyWidthM(host) * 0.5;
-      const ht = hostTangentAt(host, tip);
-      const sinA = Math.abs(ht.x * approach.y - ht.y * approach.x);
-      const along = half / Math.max(sinA, 0.22);
-      best = Math.max(best, along + CASING_UNDER_FILL_M);
+      best = Math.max(best, roadBodyWidthM(host) * 0.5 + CASING_PAD_M);
     }
     return best;
   };
@@ -1679,16 +1647,12 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
     if (joined.has(`${f.id}|start`)) {
-      const t = hostTrimAt(f.points[0], f.id, approachDirAtTip(f, 'start'));
-      if (t > 0.5) trim.set(`${f.id}|start`, t);
+      const half = hostHalfAt(f.points[0], f.id);
+      if (half > 0.5) trim.set(`${f.id}|start`, half);
     }
     if (joined.has(`${f.id}|end`)) {
-      const t = hostTrimAt(
-        f.points[f.points.length - 1],
-        f.id,
-        approachDirAtTip(f, 'end'),
-      );
-      if (t > 0.5) trim.set(`${f.id}|end`, t);
+      const half = hostHalfAt(f.points[f.points.length - 1], f.id);
+      if (half > 0.5) trim.set(`${f.id}|end`, half);
     }
   }
   return trim;
