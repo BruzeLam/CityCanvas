@@ -55,9 +55,13 @@ type Props = {
 type PreviewView = { zoom: number; panX: number; panY: number };
 const DEFAULT_VIEW: PreviewView = { zoom: 1, panX: 0, panY: 0 };
 
-/** 预览用更大格网，保证拖滑条时即时反馈 */
+/**
+ * 预览格网：略粗于正式图以保滑条跟手（约 1.5×），上限 12m/格，
+ * 不再强制 48m 大方块。
+ */
 function previewCellSizeM(settings: Pick<MapSettings, 'widthM' | 'heightM'>): number {
-  return Math.max(preferredTerrainCellSizeM(settings) * 2.2, 48);
+  const fine = preferredTerrainCellSizeM(settings);
+  return Math.min(Math.max(Math.round(fine * 1.5), fine), 12);
 }
 
 export function ProjectSetup({
