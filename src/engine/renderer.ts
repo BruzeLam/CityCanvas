@@ -19,7 +19,7 @@ import {
   ensureTerrain,
   type TerrainGrid,
 } from './terrain';
-import { buildTerrainRings, fillTerrainRings, type TerrainRings } from './terrainDraw';
+import { getTerrainBitmap, type TerrainPaintQuality } from './terrainDraw';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
   return renderGrade(a) - renderGrade(b);
@@ -159,45 +159,22 @@ function drawTerrainGrid(
   _project: CityProject,
   viewport: Viewport,
   palette: StylePalette,
+  quality: TerrainPaintQuality = 'final',
 ) {
-  const rings = getTerrainRings(grid);
-  const mapPt = (p: { x: number; y: number }) => toScreen(p, viewport);
-  // 矢量实心填充：放大不发糊，Chaikin 后岸线更顺
-  fillTerrainRings(ctx, rings.water, mapPt, palette.water, palette.waterStroke);
-  fillTerrainRings(ctx, rings.green, mapPt, palette.mountain, palette.mountainStroke);
-}
-
-/** 地形轮廓缓存：刷子改 cells 引用后失效 */
-type TerrainRingsCache = {
-  cells: Uint8Array;
-  cols: number;
-  rows: number;
-  cellSizeM: number;
-  rings: TerrainRings;
-};
-
-let terrainRingsCache: TerrainRingsCache | null = null;
-
-function getTerrainRings(grid: TerrainGrid): TerrainRings {
-  const hit = terrainRingsCache;
-  if (
-    hit &&
-    hit.cells === grid.cells &&
-    hit.cols === grid.cols &&
-    hit.rows === grid.rows &&
-    hit.cellSizeM === grid.cellSizeM
-  ) {
-    return hit.rings;
-  }
-  const rings = buildTerrainRings(grid);
-  terrainRingsCache = {
-    cells: grid.cells,
-    cols: grid.cols,
-    rows: grid.rows,
-    cellSizeM: grid.cellSizeM,
-    rings,
-  };
-  return rings;
+  const { cols, rows, cellSizeM } = grid;
+  const bitmap = getTerrainBitmap(grid, palette.water, palette.mountain, quality);
+  const tl = toScreen({ x: 0, y: 0 }, viewport);
+  const br = toScreen(
+    { x: cols * cellSizeM, y: rows * cellSizeM },
+    viewport,
+  );
+  const dw = br.x - tl.x;
+  const dh = br.y - tl.y;
+  // 仅在缩小到屏幕时平滑；放大用邻近采样，避免毛玻璃
+  const downscaling = dw < bitmap.width * 0.98 || dh < bitmap.height * 0.98;
+  ctx.imageSmoothingEnabled = downscaling && quality === 'final';
+  if (ctx.imageSmoothingEnabled) ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, tl.x, tl.y, dw, dh);
 }
 
 function drawMapBase(
@@ -205,6 +182,7 @@ function drawMapBase(
   project: CityProject,
   viewport: Viewport,
   palette: StylePalette,
+  terrainQuality: TerrainPaintQuality = 'final',
 ) {
   const { widthM, heightM } = project.settings;
   const tl = toScreen({ x: 0, y: 0 }, viewport);
@@ -215,13 +193,12 @@ function drawMapBase(
   ctx.fillStyle = palette.outside;
   ctx.fillRect(tl.x, tl.y, w, h);
 
-  // 默认全陆地（米白）
   ctx.fillStyle = palette.land;
   ctx.fillRect(tl.x, tl.y, w, h);
 
   if (getLayers(project).terrain !== false) {
     const terrain = ensureTerrain(project.settings, project.terrain);
-    drawTerrainGrid(ctx, terrain, project, viewport, palette);
+    drawTerrainGrid(ctx, terrain, project, viewport, palette, terrainQuality);
   }
 
   ctx.strokeStyle = palette.border;
@@ -913,15 +890,17 @@ export function renderMap(
   project: CityProject,
   preview: PreviewState,
   selection: SelectionState = null,
+  opts?: { terrainDraft?: boolean },
 ) {
   const palette = PALETTES[project.mapStyle];
   const { viewport, features } = project;
   const layers = getLayers(project);
+  const terrainQuality: TerrainPaintQuality = opts?.terrainDraft ? 'draft' : 'final';
 
   ctx.fillStyle = '#e7e5e4';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  drawMapBase(ctx, project, viewport, palette);
+  drawMapBase(ctx, project, viewport, palette, terrainQuality);
   if (layers.grid) drawGrid(ctx, project, viewport, palette);
 
   const tl = toScreen({ x: 0, y: 0 }, viewport);

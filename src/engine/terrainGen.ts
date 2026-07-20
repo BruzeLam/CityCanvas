@@ -8,7 +8,7 @@ import {
   preferredTerrainCellSizeM,
   type TerrainGrid,
 } from './terrain';
-import { buildTerrainRings, fillTerrainRings } from './terrainDraw';
+import { paintTerrainBitmapToCanvas } from './terrainDraw';
 
 /** 海洋占比（接边大水体） */
 export const DEFAULT_OCEAN_RATIO = 0.26;
@@ -1104,7 +1104,7 @@ function downsample(field: Float32Array, maxN: number): Float32Array {
   return out.subarray(0, j);
 }
 
-/** 预览：陆地 / 水域 / 绿地（矢量轮廓，避免模糊放大） */
+/** 预览：双线性超采样位图（清晰对角线岸，无毛玻璃） */
 export function paintTerrainPreview(
   canvas: HTMLCanvasElement,
   grid: TerrainGrid,
@@ -1114,21 +1114,5 @@ export function paintTerrainPreview(
   waterColor = '#aad3df',
   greenColor = '#add19e',
 ): void {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const w = canvas.width;
-  const h = canvas.height;
-  const worldW = grid.cols * grid.cellSizeM;
-  const worldH = grid.rows * grid.cellSizeM;
-  const sx = w / worldW;
-  const sy = h / worldH;
-
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = landColor;
-  ctx.fillRect(0, 0, w, h);
-
-  const rings = buildTerrainRings(grid);
-  const mapPt = (p: Point) => ({ x: p.x * sx, y: p.y * sy });
-  fillTerrainRings(ctx, rings.water, mapPt, waterColor, '#7eb8c9');
-  fillTerrainRings(ctx, rings.green, mapPt, greenColor, '#8fbc7a');
+  paintTerrainBitmapToCanvas(canvas, grid, landColor, waterColor, greenColor);
 }

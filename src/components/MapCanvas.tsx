@@ -58,7 +58,9 @@ import {
   ensureTerrain,
   stampBrush,
   type TerrainCell,
+  type TerrainGrid,
 } from '../engine/terrain';
+import { invalidateTerrainBitmapCache } from '../engine/terrainDraw';
 import {
   buildParallelPaths,
   guideFromDraft,
@@ -173,6 +175,9 @@ export function MapCanvas({
   const panning = useRef<{ start: Point; origin: Point } | null>(null);
   const brushPainting = useRef(false);
   const lastBrushPoint = useRef<Point | null>(null);
+  /** 一笔刷子共用的地形缓冲，避免每点 clone + 全图超采样 */
+  const workingTerrain = useRef<TerrainGrid | null>(null);
+  const brushFlushRaf = useRef<number | null>(null);
   const draggingVertex = useRef<{ featureId: string; index: number; moved: boolean } | null>(null);
   const undoSnapshot = useRef<CityProject | null>(null);
   const projectRef = useRef(project);
@@ -210,6 +215,11 @@ export function MapCanvas({
     setPointerScreen(null);
     brushPainting.current = false;
     lastBrushPoint.current = null;
+    workingTerrain.current = null;
+    if (brushFlushRaf.current != null) {
+      cancelAnimationFrame(brushFlushRaf.current);
+      brushFlushRaf.current = null;
+    }
     undoSnapshot.current = null;
   }, [tool, pathDrawMode]);
 
@@ -308,7 +318,15 @@ export function MapCanvas({
 
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderMap(ctx, width, height, project, preview, selectedFeatureId ? { featureId: selectedFeatureId } : null);
+    renderMap(
+      ctx,
+      width,
+      height,
+      project,
+      preview,
+      selectedFeatureId ? { featureId: selectedFeatureId } : null,
+      { terrainDraft: brushPainting.current },
+    );
   }, [project, preview, selectedFeatureId]);
 
   useEffect(() => {
@@ -416,21 +434,53 @@ export function MapCanvas({
     setActiveGuide(null);
     brushPainting.current = false;
     lastBrushPoint.current = null;
+    workingTerrain.current = null;
+    if (brushFlushRaf.current != null) {
+      cancelAnimationFrame(brushFlushRaf.current);
+      brushFlushRaf.current = null;
+    }
   }, []);
+
+  const flushWorkingTerrain = useCallback(() => {
+    brushFlushRaf.current = null;
+    const wt = workingTerrain.current;
+    if (!wt) return;
+    const next = { ...projectRef.current, terrain: wt };
+    projectRef.current = next;
+    onProjectChange(next);
+  }, [onProjectChange]);
+
+  const scheduleFlushWorkingTerrain = useCallback(() => {
+    if (brushFlushRaf.current != null) return;
+    brushFlushRaf.current = requestAnimationFrame(flushWorkingTerrain);
+  }, [flushWorkingTerrain]);
 
   const stampBrushPoints = useCallback(
     (points: Point[], cell: TerrainCell) => {
       if (points.length === 0) return;
-      const current = projectRef.current;
-      const terrain = cloneTerrain(ensureTerrain(current.settings, current.terrain));
+      let terrain = workingTerrain.current;
+      if (!terrain) {
+        const current = projectRef.current;
+        terrain = cloneTerrain(ensureTerrain(current.settings, current.terrain));
+        workingTerrain.current = terrain;
+      }
       for (const p of points) {
         stampBrush(terrain, p, brushSizeM, brushThickness, cell);
       }
-      const next = { ...current, terrain };
+      if (brushPainting.current) {
+        scheduleFlushWorkingTerrain();
+        return;
+      }
+      invalidateTerrainBitmapCache();
+      const next = {
+        ...projectRef.current,
+        terrain: cloneTerrain(terrain),
+      };
+      workingTerrain.current = null;
       projectRef.current = next;
       onProjectChange(next);
     },
-    [brushSizeM, brushThickness, onProjectChange],
+    [brushSizeM, brushThickness, onProjectChange, scheduleFlushWorkingTerrain],
   );
 
   const eraseFeaturePoints = useCallback(
@@ -742,8 +792,16 @@ export function MapCanvas({
         terrain: cloneTerrain(ensureTerrain(current.settings, current.terrain)),
         features: current.features.slice(),
       };
-      applyBrushPoints([world]);
+      // 地貌类：先建工作缓冲；要素橡皮不碰地形
+      if (brushCell != null || (isEraser && eraserTarget === 'terrain')) {
+        workingTerrain.current = cloneTerrain(
+          ensureTerrain(current.settings, current.terrain),
+        );
+      } else {
+        workingTerrain.current = null;
+      }
       brushPainting.current = true;
+      applyBrushPoints([world]);
       lastBrushPoint.current = world;
       setBrushCursor(world);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -1007,9 +1065,23 @@ export function MapCanvas({
     if (brushPainting.current) {
       brushPainting.current = false;
       lastBrushPoint.current = null;
+      if (brushFlushRaf.current != null) {
+        cancelAnimationFrame(brushFlushRaf.current);
+        brushFlushRaf.current = null;
+      }
       const snapshot = undoSnapshot.current;
       undoSnapshot.current = null;
-      if (snapshot) {
+      const wt = workingTerrain.current;
+      workingTerrain.current = null;
+      if (wt) {
+        invalidateTerrainBitmapCache();
+        const next = {
+          ...projectRef.current,
+          terrain: cloneTerrain(wt),
+        };
+        projectRef.current = next;
+        onProjectChange(next, snapshot ? { undoSnapshot: snapshot } : undefined);
+      } else if (snapshot) {
         onProjectChange(projectRef.current, { undoSnapshot: snapshot });
       }
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
