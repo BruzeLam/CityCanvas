@@ -599,13 +599,14 @@ export function MapCanvas({
         roadLevelEnd?: RoadLevel;
       } = {
         grade: startG,
-        roadLevel: usingRamp ? 'ramp' : (startClass ?? roadLevel),
+        // 普通道路：始终用工具栏所选等级，不继承对向路；仅匝道自适应配色
+        roadLevel: usingRamp ? 'ramp' : roadLevel,
       };
       if (endG !== startG) {
         result.gradeEnd = endG;
       }
       if (usingRamp) {
-        // 只锚定到非匝道主路；未接保持 undefined → 灰色；两端不同 → 渐变
+        // 匝道：只锚定到非匝道主路；未接保持 undefined → 灰色；两端不同 → 渐变
         if (startClass && endClass) {
           result.roadLevelFrom = startClass;
           result.roadLevelEnd = endClass;
@@ -614,9 +615,6 @@ export function MapCanvas({
           result.roadLevelFrom = only;
           result.roadLevelEnd = only;
         }
-      } else if (startClass && endClass && endClass !== startClass) {
-        result.roadLevelFrom = startClass;
-        result.roadLevelEnd = endClass;
       }
       return result;
     },

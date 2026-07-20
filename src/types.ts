@@ -146,20 +146,14 @@ export function displayGrade(g: number): FeatureGrade {
   return clampGrade(Math.round(g));
 }
 
-/** 异级 / 匝道配色渐变：两端均锚定且等级不同才渐变 */
+/** 异级配色渐变：仅匝道；普通道路等级各自独立，不渐变 */
 export function isLevelBlendRoad(
   f: Pick<MapFeature, 'kind' | 'roadLevel' | 'roadLevelFrom' | 'roadLevelEnd'>,
 ): boolean {
-  if (f.kind !== 'road') return false;
-  if (f.roadLevel === 'ramp') {
-    const from = f.roadLevelFrom;
-    const to = f.roadLevelEnd;
-    return from != null && to != null && from !== to;
-  }
-  return (
-    f.roadLevelEnd != null &&
-    f.roadLevelEnd !== (f.roadLevelFrom ?? f.roadLevel ?? 'local')
-  );
+  if (f.kind !== 'road' || f.roadLevel !== 'ramp') return false;
+  const from = f.roadLevelFrom;
+  const to = f.roadLevelEnd;
+  return from != null && to != null && from !== to;
 }
 
 export function isRampRoad(f: Pick<MapFeature, 'roadLevel'>): boolean {
