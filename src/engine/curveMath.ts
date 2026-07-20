@@ -63,16 +63,16 @@ export function formatRadius(m: number): string {
 }
 
 /** 弧折线默认弦长上限（米） */
-export const DEFAULT_ARC_SEGMENT_M = 10;
+export const DEFAULT_ARC_SEGMENT_M = 6;
 
-/** 弧采样最大角步（弧度）≈ 8° —— 更圆，减少「折线拼接」感 */
-const ARC_MAX_ANGLE_RAD = (8 * Math.PI) / 180;
-/** 弧采样最小角步（弧度）≈ 4° */
-const ARC_MIN_ANGLE_RAD = (4 * Math.PI) / 180;
-const ARC_MIN_SEGMENTS = 6;
-const ARC_MAX_SEGMENTS = 40;
-/** 目标弦高误差（米） */
-const ARC_SAGITTA_ERR_M = 0.28;
+/** 弧采样最大角步（弧度）≈ 4° */
+const ARC_MAX_ANGLE_RAD = (4 * Math.PI) / 180;
+/** 弧采样最小角步（弧度）≈ 2.5° */
+const ARC_MIN_ANGLE_RAD = (2.5 * Math.PI) / 180;
+const ARC_MIN_SEGMENTS = 10;
+const ARC_MAX_SEGMENTS = 72;
+/** 目标弦高误差（米）——越小越圆 */
+const ARC_SAGITTA_ERR_M = 0.12;
 
 /**
  * 圆弧折线化：按弦高误差 + 弦长上限自适应段数，硬封顶避免运算爆炸。
@@ -97,7 +97,7 @@ function sampleArcAngles(
   }
 
   const segCap = Math.max(4, maxSegmentM);
-  // θ ≈ √(8ε/R)，再夹在 [5°, 12°]
+  // θ ≈ √(8ε/R)，再夹在 [2.5°, 4°]
   const angleFromErr =
     radius > 1 ? Math.sqrt((8 * ARC_SAGITTA_ERR_M) / radius) : ARC_MAX_ANGLE_RAD;
   const maxAngle = Math.min(

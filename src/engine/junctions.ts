@@ -15,12 +15,12 @@ const EPS = 1e-6;
 export const ENDPOINT_MERGE_M = 6;
 const JUNCTION_SNAP_M = 10;
 /** 匝道端点挂接到目标路（含中段）的搜索半径 */
-export const RAMP_ATTACH_M = 22;
+export const RAMP_ATTACH_M = 36;
 /** 超过此顶点数的折线在重织时做 RDP 简化（保留路口）；匝道更保守 */
 const DENSE_PATH_SIMPLIFY_AT = 48;
 const DENSE_PATH_SIMPLIFY_EPS_M = 0.35;
-const DENSE_RAMP_SIMPLIFY_AT = 64;
-const DENSE_RAMP_SIMPLIFY_EPS_M = 0.2;
+const DENSE_RAMP_SIMPLIFY_AT = 72;
+const DENSE_RAMP_SIMPLIFY_EPS_M = 0.12;
 
 type SegHit = {
   featureId: string;
@@ -560,6 +560,7 @@ export function findNearestAnyGradeAttachment(
 
 /**
  * 在指定标高的路径上找最近点（端点优先，其次中心线），用于匝道挂接。
+ * preferMain：优先非匝道主路（避免吸到另一条匝道上）。
  */
 export function findGradeAttachment(
   features: MapFeature[],
@@ -567,6 +568,7 @@ export function findGradeAttachment(
   grade: FeatureGrade,
   maxDist = RAMP_ATTACH_M,
   excludeId?: string,
+  preferMain = false,
 ): { feature: MapFeature; point: Point; segIndex: number; t: number } | null {
   let best: {
     feature: MapFeature;
@@ -579,7 +581,8 @@ export function findGradeAttachment(
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2) continue;
     if (excludeId && f.id === excludeId) continue;
-    // 普通路：整条同层；匝道：两端各算一层
+    if (preferMain && (f.roadLevel === 'ramp' || isRampFeature(f))) continue;
+    // 普通路：整条同层；跨层匝道：两端各算一层
     const gradesOnPath = isRampFeature(f)
       ? [featureGrade(f), featureGradeEnd(f)]
       : [featureGrade(f)];
@@ -588,7 +591,6 @@ export function findGradeAttachment(
     for (let i = 0; i < f.points.length - 1; i++) {
       const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
       if (hit.dist > maxDist) continue;
-      // 端点略优先，便于首尾相接
       const endBonus =
         hit.t < 0.02 || hit.t > 0.98 ? -2 : hit.t > 0.08 && hit.t < 0.92 ? 0 : -0.5;
       const score = hit.dist + endBonus;
@@ -613,13 +615,16 @@ export function findGradeAttachment(
   };
 }
 
+/**
+ * 在对向路上插入挂接节点（同级平面交叉的共享顶点）。
+ * 靠近线段端点时只挪对应顶点，避免把整条路远端拽过来。
+ */
 function insertAttachmentOnPeer(
   peer: MapFeature,
   segIndex: number,
   t: number,
   point: Point,
 ): MapFeature {
-  // 靠近该线段端点：只合并对应顶点（绝不能当成整条路的首/尾，否则会把远端点拽过来）
   if (t < 0.02 || t > 0.98) {
     const vi = t < 0.5 ? segIndex : segIndex + 1;
     if (vi < 0 || vi >= peer.points.length) return peer;
@@ -634,9 +639,124 @@ function insertAttachmentOnPeer(
   };
 }
 
+/** 仅在非匝道主路上找最近中心线挂接点（任意标高） */
+function findNearestMainAttachment(
+  features: MapFeature[],
+  point: Point,
+  maxDist: number,
+  excludeId?: string,
+): {
+  feature: MapFeature;
+  point: Point;
+  segIndex: number;
+  t: number;
+  grade: FeatureGrade;
+} | null {
+  let best: {
+    feature: MapFeature;
+    point: Point;
+    segIndex: number;
+    t: number;
+    grade: FeatureGrade;
+    dist: number;
+  } | null = null;
+
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2) continue;
+    if (excludeId && f.id === excludeId) continue;
+    if (f.roadLevel === 'ramp' || isRampFeature(f)) continue;
+    for (let i = 0; i < f.points.length - 1; i++) {
+      const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
+      if (hit.dist > maxDist) continue;
+      if (!best || hit.dist < best.dist) {
+        best = {
+          feature: f,
+          point: hit.point,
+          segIndex: i,
+          t: hit.t,
+          grade: gradeAlongPath(f, hit.point),
+          dist: hit.dist,
+        };
+      }
+    }
+  }
+  return best
+    ? {
+        feature: best.feature,
+        point: best.point,
+        segIndex: best.segIndex,
+        t: best.t,
+        grade: best.grade,
+      }
+    : null;
+}
+
+/**
+ * 匝道端点：就近吸到非匝道主路中心线（不强制预匹配标高），
+ * 并按挂接处主路标高回写 grade / gradeEnd，保证同级平面汇入。
+ *
+ * 注意：端点拉通 + 连续标高后，tip 的「预设 grade」常与目标主路不一致，
+ * 必须允许跨标高吸附到最近主路，再回写真实 grade。
+ */
+function snapRampTipsToMains(
+  features: MapFeature[],
+  incoming: MapFeature,
+): { features: MapFeature[]; ramp: MapFeature } {
+  let points = [...incoming.points];
+  let nextFeatures = [...features];
+  let startG = featureGrade(incoming);
+  let endG = featureGradeEnd(incoming);
+
+  const snapOne = (tipIndex: 0 | -1) => {
+    const tip = tipIndex === 0 ? points[0] : points[points.length - 1];
+    const preferredGrade = tipIndex === 0 ? startG : endG;
+
+    // 1) 标高匹配的主路  2) 任意标高最近主路（跳过其它匝道）
+    const hit:
+      | { feature: MapFeature; point: Point; segIndex: number; t: number; grade?: FeatureGrade }
+      | null =
+      findGradeAttachment(
+        nextFeatures,
+        tip,
+        preferredGrade,
+        RAMP_ATTACH_M,
+        incoming.id,
+        true,
+      ) ?? findNearestMainAttachment(nextFeatures, tip, RAMP_ATTACH_M, incoming.id);
+
+    if (!hit) return;
+
+    const g = hit.grade ?? gradeAlongPath(hit.feature, hit.point);
+    if (tipIndex === 0) startG = g;
+    else endG = g;
+
+    if (tipIndex === 0) {
+      points = [{ ...hit.point }, ...points.slice(1)];
+    } else {
+      points = [...points.slice(0, -1), { ...hit.point }];
+    }
+    nextFeatures = nextFeatures.map((f) =>
+      f.id === hit.feature.id
+        ? insertAttachmentOnPeer(f, hit.segIndex, hit.t, hit.point)
+        : f,
+    );
+  };
+
+  snapOne(0);
+  snapOne(-1);
+
+  const ramp: MapFeature = {
+    ...incoming,
+    points,
+    grade: startG,
+    gradeEnd: endG !== startG ? endG : undefined,
+  };
+  return { features: nextFeatures, ramp };
+}
+
 /**
  * 跨层匝道 / 异层挂接：把起终点吸到对应标高的路上，并在目标路上插入共享节点。
- * 中段仍不与异层织交叉（立交下穿保持分离）。
+ * 匝道：就近吸主路并回写两端标高（同级平面汇入）；中段不与异层织交叉。
  */
 export function attachCrossGradeTips(
   features: MapFeature[],
@@ -644,6 +764,11 @@ export function attachCrossGradeTips(
 ): MapFeature[] {
   if (!isPathKind(incoming) || incoming.points.length < 2) {
     return [...features, incoming];
+  }
+
+  if (incoming.kind === 'road' && incoming.roadLevel === 'ramp') {
+    const { features: next, ramp } = snapRampTipsToMains(features, incoming);
+    return refreshRampRoadClasses([...next, ramp], ramp.id);
   }
 
   const startG = featureGrade(incoming);
@@ -656,7 +781,14 @@ export function attachCrossGradeTips(
     grade: FeatureGrade,
   ) => {
     const tip = tipIndex === 0 ? points[0] : points[points.length - 1];
-    const hit = findGradeAttachment(nextFeatures, tip, grade, RAMP_ATTACH_M, incoming.id);
+    const hit = findGradeAttachment(
+      nextFeatures,
+      tip,
+      grade,
+      RAMP_ATTACH_M,
+      incoming.id,
+      true,
+    );
     if (!hit) return;
 
     if (tipIndex === 0) {
@@ -677,17 +809,8 @@ export function attachCrossGradeTips(
 
   const attached: MapFeature = { ...incoming, points };
 
-  // 跨层 / 异级 / 匝道：只挂端点，不与主路织交叉
-  if (
-    isRampFeature(attached) ||
-    startG !== endG ||
-    isLevelBlendRoad(attached) ||
-    attached.roadLevel === 'ramp'
-  ) {
-    const next = [...nextFeatures, attached];
-    return attached.roadLevel === 'ramp'
-      ? refreshRampRoadClasses(next, attached.id)
-      : next;
+  if (isRampFeature(attached) || startG !== endG || isLevelBlendRoad(attached)) {
+    return [...nextFeatures, attached];
   }
 
   return weaveSameGradeCrossings(nextFeatures, attached);

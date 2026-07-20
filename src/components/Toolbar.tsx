@@ -5,6 +5,7 @@ import type {
   PathDrawMode,
   RailKind,
   RoadLevel,
+  StationStyle,
   Tool,
 } from '../types';
 import {
@@ -18,6 +19,11 @@ import {
   clampGrade,
   formatGrade,
 } from '../types';
+import {
+  CHENGDU_METRO_PRESETS,
+  CHENGDU_TRAM_PRESETS,
+  presetLabelsOf,
+} from '../constants/metroPresets';
 import {
   PARALLEL_SIDES,
   PARALLEL_SPACING_MAX_M,
@@ -37,6 +43,7 @@ import {
   GlyphRail,
   GlyphRiverLine,
   GlyphRoadLevel,
+  GlyphStationDot,
   GlyphStationRect,
   GlyphStationRound,
   GlyphUndo,
@@ -48,6 +55,8 @@ type Props = {
   roadLevel: RoadLevel;
   railKind: RailKind;
   metroColor: string;
+  lineName: string;
+  stationStyle: StationStyle;
   drawGrade: FeatureGrade;
   pathDrawMode: PathDrawMode;
   parallelEnabled: boolean;
@@ -62,6 +71,8 @@ type Props = {
   onRoadLevelChange: (level: RoadLevel) => void;
   onRailKindChange: (kind: RailKind) => void;
   onMetroColorChange: (color: string) => void;
+  onLineNameChange: (name: string) => void;
+  onStationStyleChange: (style: StationStyle) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
   onParallelEnabledChange: (on: boolean) => void;
@@ -82,7 +93,8 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   (typeof ROAD_STYLES)[RoadLevel],
 ][];
 
-const METRO_COLORS = ['#e85d4c', '#3b82f6', '#22a06b', '#a855f7', '#f59e0b', '#0f766e'];
+const METRO_PRESET_LABELS = presetLabelsOf(CHENGDU_METRO_PRESETS);
+const TRAM_PRESET_LABELS = presetLabelsOf(CHENGDU_TRAM_PRESETS);
 
 const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t) || t === 'eraser';
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
@@ -156,6 +168,8 @@ export function Toolbar({
   roadLevel,
   railKind,
   metroColor,
+  lineName,
+  stationStyle,
   drawGrade,
   pathDrawMode,
   parallelEnabled,
@@ -170,6 +184,8 @@ export function Toolbar({
   onRoadLevelChange,
   onRailKindChange,
   onMetroColorChange,
+  onLineNameChange,
+  onStationStyleChange,
   onDrawGradeChange,
   onPathDrawModeChange,
   onParallelEnabledChange,
@@ -437,20 +453,46 @@ export function Toolbar({
                 />
               ))}
             </div>
-            {tool === 'railway' && railKind === 'metro' && (
+            {(tool === 'railway' || tool === 'station') &&
+              (railKind === 'metro' || railKind === 'tram') && (
               <div className="tb-options">
-                <p className="option-label">地铁色</p>
+                <p className="option-label">
+                  线路名 <span className="option-hint">可自定义</span>
+                </p>
+                <input
+                  className="tb-line-name"
+                  type="text"
+                  value={lineName}
+                  placeholder={railKind === 'metro' ? '如 1号线' : '如 蓉2号线'}
+                  maxLength={24}
+                  onChange={(e) => onLineNameChange(e.target.value)}
+                />
+                <p className="option-label">
+                  {railKind === 'metro' ? '成都地铁色' : '有轨配色'}
+                  <span className="option-hint">
+                    {railKind === 'metro' ? '已开通 + 大红' : '蓉1/蓉2 + 常用色'}
+                  </span>
+                </p>
                 <div className="chip-row metro-swatches">
-                  {METRO_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      className={metroColor === c ? 'swatch active' : 'swatch'}
-                      style={{ background: c }}
-                      title={c}
-                      onClick={() => onMetroColorChange(c)}
-                    />
-                  ))}
+                  {(railKind === 'metro' ? CHENGDU_METRO_PRESETS : CHENGDU_TRAM_PRESETS).map(
+                    (p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={metroColor === p.color ? 'swatch active' : 'swatch'}
+                        style={{ background: p.color }}
+                        title={p.label}
+                        onClick={() => {
+                          onMetroColorChange(p.color);
+                          const labels =
+                            railKind === 'metro' ? METRO_PRESET_LABELS : TRAM_PRESET_LABELS;
+                          if (!lineName.trim() || labels.has(lineName.trim())) {
+                            onLineNameChange(p.label);
+                          }
+                        }}
+                      />
+                    ),
+                  )}
                 </div>
               </div>
             )}
@@ -460,18 +502,45 @@ export function Toolbar({
                 label="铁路站"
                 soon
                 glyph={<GlyphStationRect />}
-                title="矩形站台 · 可拖大小 · 即将推出"
+                title="矩形站台 · 即将推出"
               />
               <Tile
                 label="地铁站"
-                soon
-                glyph={<GlyphStationRound />}
-                title="圆角站台 · 玩法后续扩容"
+                active={tool === 'station' && stationStyle === 'pill'}
+                glyph={
+                  <GlyphStationRound
+                    active={tool === 'station' && stationStyle === 'pill'}
+                    color={metroColor}
+                  />
+                }
+                title="药丸站台 · 吸附地铁线"
+                onClick={() => {
+                  selectTransit('rail');
+                  onRailKindChange('metro');
+                  onStationStyleChange('pill');
+                  onToolChange('station');
+                }}
+              />
+              <Tile
+                label="有轨站"
+                active={tool === 'station' && stationStyle === 'dot'}
+                glyph={
+                  <GlyphStationDot
+                    active={tool === 'station' && stationStyle === 'dot'}
+                    color={metroColor}
+                  />
+                }
+                title="小圆点 · 吸附有轨线"
+                onClick={() => {
+                  selectTransit('rail');
+                  onRailKindChange('tram');
+                  onStationStyleChange('dot');
+                  onToolChange('station');
+                }}
               />
             </div>
           </div>
         )}
-
         {transitOpen === 'water' && (
           <div className="tb-panel">
             <div className="tb-tile-grid">

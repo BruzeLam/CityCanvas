@@ -503,17 +503,49 @@ input {
 }
 
 .metro-swatches {
-  gap: 6px;
+  gap: 5px;
+  flex-wrap: wrap;
 }
 
 .swatch {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   margin: 0 !important;
   padding: 0 !important;
   border: 2px solid transparent !important;
   border-radius: 2px !important;
   cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.tb-line-name {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.selection-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.selection-field input {
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
 }
 
 .swatch.active {

@@ -11,7 +11,10 @@ import {
   ROAD_STYLES,
   RAIL_STYLES,
   ROAD_CLASS_RANK,
+  DEFAULT_METRO_COLOR,
   featureGrade,
+  featureGradeEnd,
+  featureLineColor,
   getLayers,
   gradeAtPathT,
   isLevelBlendRoad,
@@ -26,7 +29,11 @@ import {
   curveFromBestTangent,
 } from './curveMath';
 import type { GuideSnap, Segment } from './geometry';
-import { collectJoinedCaps, collectJunctionNodes } from './junctions';
+import {
+  collectJoinedCaps,
+  collectJunctionNodes,
+  segmentIntersection,
+} from './junctions';
 import {
   ensureTerrain,
   type TerrainGrid,
@@ -40,11 +47,264 @@ function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
 
 type RoadDrawPiece = {
   feature: MapFeature;
-  /** 连续标高，用于 z-order；跨层匝道沿路径插值 */
+  /** 连续标高，用于 z-order；匝道取子段中点插值 */
   grade: number;
-  /** 只画这一段折线边；null 表示整条 */
-  segIndex: number | null;
+  /** 创建顺序（features 下标）；标高相同时后创建的在上 */
+  order: number;
+  /**
+   * 只画这段世界坐标折线（匝道交叉拆分后的连续子路径）。
+   * 缺省画整条 feature.points。
+   */
+  subPoints?: Point[];
 };
+
+function isRampRoadFeature(f: MapFeature): boolean {
+  return f.kind === 'road' && (f.roadLevel === 'ramp' || isRampFeature(f));
+}
+
+/** 折线累计弧长与总长，用于把交点映射到路径参数 t∈[0,1] */
+function polylineCumLen(points: Point[]): { cum: number[]; total: number } {
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    cum.push(cum[i - 1] + Math.hypot(b.x - a.x, b.y - a.y));
+  }
+  return { cum, total: cum[cum.length - 1] || 1 };
+}
+
+/**
+ * 在匝道与其它匝道（及自交）的平面交叉处切开，
+ * 每段用中点插值标高参与 z-order；不织路口，只分层压盖。
+ */
+function buildRampDrawPieces(
+  feature: MapFeature,
+  peers: MapFeature[],
+  order: number,
+): RoadDrawPiece[] {
+  const pts = feature.points;
+  if (pts.length < 2) return [];
+
+  type Split = { segIndex: number; t: number; point: Point };
+  const splits: Split[] = [];
+
+  const consider = (other: MapFeature, self: boolean) => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a1 = pts[i];
+      const a2 = pts[i + 1];
+      for (let j = 0; j < other.points.length - 1; j++) {
+        if (self && Math.abs(i - j) <= 1) continue; // 相邻边不算自交
+        if (self && j <= i) continue; // 每对只算一次，后面镜像
+        const hit = segmentIntersection(a1, a2, other.points[j], other.points[j + 1]);
+        if (!hit) continue;
+        splits.push({ segIndex: i, t: hit.t, point: hit.point });
+        if (self) {
+          splits.push({ segIndex: j, t: hit.u, point: hit.point });
+        }
+      }
+    }
+  };
+
+  for (const other of peers) {
+    if (!isRampRoadFeature(other)) continue;
+    if (other.id === feature.id) {
+      consider(other, true);
+    } else {
+      consider(other, false);
+    }
+  }
+
+  if (splits.length === 0) {
+    const g0 = featureGrade(feature);
+    const g1 = featureGradeEnd(feature);
+    return [
+      {
+        feature,
+        grade: (g0 + g1) / 2,
+        order,
+      },
+    ];
+  }
+
+  splits.sort((a, b) => a.segIndex - b.segIndex || a.t - b.t);
+
+  // 沿原折线插入交点，得到带交叉节点的折线
+  const built: Point[] = [{ ...pts[0] }];
+  let si = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    while (si < splits.length && splits[si].segIndex === i) {
+      const s = splits[si++];
+      const prev = built[built.length - 1];
+      if (Math.hypot(s.point.x - prev.x, s.point.y - prev.y) > 0.4) {
+        built.push({ ...s.point });
+      }
+    }
+    const end = pts[i + 1];
+    const prev = built[built.length - 1];
+    if (Math.hypot(end.x - prev.x, end.y - prev.y) > 0.4) {
+      built.push({ ...end });
+    }
+  }
+
+  // 在交点处切开：交点既是上一段终点也是下一段起点（共享）
+  const crossKeys = new Set(
+    splits.map(
+      (s) => `${Math.round(s.point.x * 10) / 10},${Math.round(s.point.y * 10) / 10}`,
+    ),
+  );
+  const isCross = (p: Point) =>
+    crossKeys.has(`${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`);
+
+  const ranges: Point[][] = [];
+  let cur: Point[] = [built[0]];
+  for (let i = 1; i < built.length; i++) {
+    cur.push(built[i]);
+    if (i < built.length - 1 && isCross(built[i]) && cur.length >= 2) {
+      ranges.push(cur);
+      cur = [built[i]];
+    }
+  }
+  if (cur.length >= 2) ranges.push(cur);
+
+  const { cum, total } = polylineCumLen(pts);
+  const pathTAt = (p: Point): number => {
+    let bestT = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy || 1;
+      const u = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+      const q = { x: a.x + u * dx, y: a.y + u * dy };
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      if (d < bestD) {
+        bestD = d;
+        const along = cum[i] + u * (cum[i + 1] - cum[i]);
+        bestT = along / total;
+      }
+    }
+    return bestT;
+  };
+
+  return ranges.map((sub) => {
+    const mid = sub[Math.floor(sub.length / 2)];
+    return {
+      feature,
+      grade: gradeAtPathT(feature, pathTAt(mid)),
+      order,
+      subPoints: sub,
+    };
+  });
+}
+
+/** 同层先画完所有路缘，再画路面；匝道交叉按插值标高拆段压盖 */
+function drawRoadsMerged(
+  ctx: CanvasRenderingContext2D,
+  roads: MapFeature[],
+  viewport: Viewport,
+  style: MapStyle,
+  terrain: TerrainGrid | null,
+  rivers: MapFeature[],
+) {
+  const joinedCaps = collectJoinedCaps(roads);
+  const pieces: RoadDrawPiece[] = [];
+  const orderOf = new Map(roads.map((f, i) => [f.id, i]));
+
+  for (const feature of roads) {
+    const order = orderOf.get(feature.id) ?? 0;
+    if (isRampRoadFeature(feature)) {
+      pieces.push(...buildRampDrawPieces(feature, roads, order));
+    } else {
+      pieces.push({
+        feature,
+        grade: featureGrade(feature),
+        order,
+      });
+    }
+  }
+
+  // 标高升序；同标高：匝道先于主路（端点同级汇入）；再道路等级；再创建顺序（后创建在上）
+  pieces.sort((a, b) => {
+    if (Math.abs(a.grade - b.grade) > 1e-5) return a.grade - b.grade;
+    const rampFirst = (f: MapFeature) => (isRampRoadFeature(f) ? 0 : 1);
+    const ra0 = rampFirst(a.feature);
+    const rb0 = rampFirst(b.feature);
+    if (ra0 !== rb0) return ra0 - rb0;
+    const classOf = (f: MapFeature) => {
+      if (f.roadLevel === 'ramp') return rampSolidClass(f) ?? 'local';
+      return normalizeRoadClass(f.roadLevel);
+    };
+    const ra = ROAD_CLASS_RANK[classOf(a.feature)];
+    const rb = ROAD_CLASS_RANK[classOf(b.feature)];
+    if (ra !== rb) return ra - rb;
+    if (a.order !== b.order) return a.order - b.order;
+    return a.feature.id.localeCompare(b.feature.id);
+  });
+
+  // 连续标高：不再整层 band 切块，按排序逐条路缘→路面交错会破坏同层路口；
+  // 仍按整数层 band：同层内先全部 casing 再全部 fill；跨层（含小数跨层）按 grade 顺序
+  const gradeBand = (g: number) => Math.floor(g + 1e-9);
+  let i = 0;
+  while (i < pieces.length) {
+    const band = gradeBand(pieces[i].grade);
+    let j = i + 1;
+    while (j < pieces.length && gradeBand(pieces[j].grade) === band) j++;
+    const batch = pieces.slice(i, j);
+
+    // 同层主路：先全部路缘再路面（路口干净）。
+    // 匝道子段：按标高逐条「路缘+路面」，保证交叉处高的完整压住低的。
+    let k = 0;
+    while (k < batch.length) {
+      if (isRampRoadFeature(batch[k].feature)) {
+        drawRoadCasing(
+          ctx,
+          batch[k].feature,
+          viewport,
+          style,
+          joinedCaps,
+          batch[k].subPoints,
+        );
+        drawRoadFill(
+          ctx,
+          batch[k].feature,
+          viewport,
+          style,
+          joinedCaps,
+          batch[k].subPoints,
+        );
+        k++;
+      } else {
+        let m = k;
+        while (m < batch.length && !isRampRoadFeature(batch[m].feature)) m++;
+        const mains = batch.slice(k, m);
+        for (const piece of mains) {
+          drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+        }
+        for (const piece of mains) {
+          drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+        }
+        k = m;
+      }
+    }
+    i = j;
+  }
+
+  // 穿水段：桥梁 / 隧道覆写样式 + 端口标记
+  if (terrain || rivers.length > 0) {
+    const spansByGrade: { feature: MapFeature; span: WaterSpan }[] = [];
+    for (const feature of roads) {
+      for (const span of findWaterSpans(feature, terrain, rivers)) {
+        spansByGrade.push({ feature, span });
+      }
+    }
+    spansByGrade.sort((a, b) => a.span.grade - b.span.grade);
+    for (const { feature, span } of spansByGrade) {
+      drawWaterCrossing(ctx, feature, span, viewport, style);
+    }
+  }
+}
 
 function lerpColor(a: string, b: string, t: number): string {
   const pa = parseColor(a);
@@ -75,99 +335,6 @@ function parseColor(c: string): { r: number; g: number; b: number } | null {
   const m = c.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
   if (!m) return null;
   return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
-}
-
-/** 同层先画完所有路缘，再画路面；跨层匝道按连续标高拆段插入，两端接平无分层缝 */
-function drawRoadsMerged(
-  ctx: CanvasRenderingContext2D,
-  roads: MapFeature[],
-  viewport: Viewport,
-  style: MapStyle,
-  terrain: TerrainGrid | null,
-  rivers: MapFeature[],
-) {
-  const joinedCaps = collectJoinedCaps(roads);
-  const pieces: RoadDrawPiece[] = [];
-
-  for (const feature of roads) {
-    // 仅跨层匝道按段拆开做 z-order；同层渐变/普通匝道整段连续描边，避免「拼接断点」
-    if (isRampFeature(feature) && feature.points.length >= 2) {
-      const n = feature.points.length - 1;
-      for (let i = 0; i < n; i++) {
-        const t = (i + 0.5) / n;
-        pieces.push({
-          feature,
-          grade: gradeAtPathT(feature, t),
-          segIndex: i,
-        });
-      }
-    } else if (isLevelBlendRoad(feature) && feature.points.length >= 2) {
-      // 同层异色：分段变色，但用 round 重叠接缝（见 drawRoad*）
-      const n = feature.points.length - 1;
-      for (let i = 0; i < n; i++) {
-        pieces.push({
-          feature,
-          grade: featureGrade(feature),
-          segIndex: i,
-        });
-      }
-    } else {
-      pieces.push({
-        feature,
-        grade: featureGrade(feature),
-        segIndex: null,
-      });
-    }
-  }
-
-  // 同层：匝道先画（压在主路下 → 挂接处呈同级汇入）；再按道路等级；高层整层在上
-  pieces.sort((a, b) => {
-    if (a.grade !== b.grade) return a.grade - b.grade;
-    const rampFirst = (f: typeof a.feature) => (f.roadLevel === 'ramp' ? 0 : 1);
-    const ra0 = rampFirst(a.feature);
-    const rb0 = rampFirst(b.feature);
-    if (ra0 !== rb0) return ra0 - rb0;
-    const classOf = (f: typeof a.feature) => {
-      if (f.roadLevel === 'ramp') {
-        return rampSolidClass(f) ?? 'local';
-      }
-      return normalizeRoadClass(f.roadLevel);
-    };
-    const ra = ROAD_CLASS_RANK[classOf(a.feature)];
-    const rb = ROAD_CLASS_RANK[classOf(b.feature)];
-    if (ra !== rb) return ra - rb;
-    return a.feature.id.localeCompare(b.feature.id);
-  });
-
-  const gradeBand = (g: number) => Math.floor(g + 1e-9);
-  let i = 0;
-  while (i < pieces.length) {
-    const band = gradeBand(pieces[i].grade);
-    let j = i + 1;
-    while (j < pieces.length && gradeBand(pieces[j].grade) === band) j++;
-    const batch = pieces.slice(i, j);
-    for (const piece of batch) {
-      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
-    }
-    for (const piece of batch) {
-      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
-    }
-    i = j;
-  }
-
-  // 穿水段：桥梁 / 隧道覆写样式 + 端口标记
-  if (terrain || rivers.length > 0) {
-    const spansByGrade: { feature: MapFeature; span: WaterSpan }[] = [];
-    for (const feature of roads) {
-      for (const span of findWaterSpans(feature, terrain, rivers)) {
-        spansByGrade.push({ feature, span });
-      }
-    }
-    spansByGrade.sort((a, b) => a.span.grade - b.span.grade);
-    for (const { feature, span } of spansByGrade) {
-      drawWaterCrossing(ctx, feature, span, viewport, style);
-    }
-  }
 }
 
 /** 过河标记：浅细边线 + 岸口括号；桥=实线，隧=虚线。不加重描边/阴影 */
@@ -587,34 +754,14 @@ function sketchRoadFill(color: string): string {
   return `rgb(${Math.round(p.r * 0.15 + 240)},${Math.round(p.g * 0.15 + 240)},${Math.round(p.b * 0.15 + 240)})`;
 }
 
-/** 分段描边时略延长，避免 round cap 叠成毛毛虫 */
-function extendedSegEnds(
-  points: Point[],
-  i: number,
-  extendPx: number,
-): { a: Point; b: Point } {
-  const a = points[i];
-  const b = points[i + 1];
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len;
-  const uy = dy / len;
-  const back = i > 0 ? extendPx : 0;
-  const fwd = i < points.length - 2 ? extendPx : 0;
-  return {
-    a: { x: a.x - ux * back, y: a.y - uy * back },
-    b: { x: b.x + ux * fwd, y: b.y + uy * fwd },
-  };
-}
-
+/** 分段描边时略延长，避免 round cap 叠成毛毛虫 —— 已改为连续子路径，保留注释占位 */
 function drawRoadCasing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
   viewport: Viewport,
   style: MapStyle,
   joinedCaps: Set<string>,
-  segIndex: number | null = null,
+  subPoints?: Point[],
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
   const isRamp = level === 'ramp';
@@ -622,12 +769,13 @@ function drawRoadCasing(
   const blend = isLevelBlendRoad(feature);
   const fromLevel = (feature.roadLevelFrom ?? solid ?? 'local') as RoadLevel;
   const levelEnd = (feature.roadLevelEnd ?? fromLevel) as RoadLevel;
-  // 匝道线宽固定；未锚定用灰色，锚定后用对应等级色
   const bodyStyle = ROAD_STYLES[isRamp ? 'ramp' : (solid ?? 'local')];
   const colorStyle = ROAD_STYLES[solid ?? 'ramp'];
   const fromStyle = ROAD_STYLES[normalizeRoadClass(fromLevel)];
   const endStyle = ROAD_STYLES[normalizeRoadClass(levelEnd)];
-  const points = feature.points.map((p) => toScreen(p, viewport));
+
+  const world = subPoints && subPoints.length >= 2 ? subPoints : feature.points;
+  const points = world.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
   const width = bodyStyle.width * viewport.zoom;
@@ -644,39 +792,50 @@ function drawRoadCasing(
       ? sketchRoadInk(colorStyle.casing)
       : colorStyle.casing;
 
-  if (segIndex != null) {
-    const n = points.length - 1;
-    const t = (segIndex + 0.5) / n;
-    // 圆帽 + 半宽重叠，消除分段拼接缝
-    const { a, b } = extendedSegEnds(points, segIndex, Math.max(1.5, casingW * 0.55));
-    ctx.strokeStyle = blend ? lerpColor(casing0, casing1, t) : casingMid;
-    ctx.lineWidth = casingW;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-    const tipEnds: Point[] = [];
-    if (segIndex === 0 && freeEnds.includes(feature.points[0])) {
-      tipEnds.push(feature.points[0]);
-    }
-    if (segIndex === n - 1 && freeEnds.includes(feature.points[n])) {
-      tipEnds.push(feature.points[n]);
-    }
-    if (tipEnds.length) {
-      drawFreeEndCaps(ctx, tipEnds, viewport, casingW, casingMid);
-    }
-    return;
-  }
+  // 子路径两端：只有真正接到整条路端点才画自由端帽；交叉切开处用 butt，避免毛边
+  const tipEps = 0.75;
+  const startsAtTip =
+    Math.hypot(world[0].x - feature.points[0].x, world[0].y - feature.points[0].y) < tipEps;
+  const endsAtTip =
+    Math.hypot(
+      world[world.length - 1].x - feature.points[feature.points.length - 1].x,
+      world[world.length - 1].y - feature.points[feature.points.length - 1].y,
+    ) < tipEps;
+  const splitInterior = Boolean(subPoints) && !(startsAtTip && endsAtTip);
+  const cap: CanvasLineCap = splitInterior
+    ? startsAtTip || endsAtTip
+      ? strokeCap
+      : 'butt'
+    : strokeCap;
 
+  if (blend) {
+    const g = ctx.createLinearGradient(
+      points[0].x,
+      points[0].y,
+      points[points.length - 1].x,
+      points[points.length - 1].y,
+    );
+    g.addColorStop(0, casing0);
+    g.addColorStop(1, casing1);
+    ctx.strokeStyle = g;
+  } else {
+    ctx.strokeStyle = casingMid;
+  }
   tracePath(ctx, points, false);
-  ctx.strokeStyle = casingMid;
   ctx.lineWidth = casingW;
   ctx.lineJoin = 'round';
-  ctx.lineCap = strokeCap;
+  ctx.lineCap = cap;
   ctx.stroke();
-  drawFreeEndCaps(ctx, freeEnds, viewport, casingW, casingMid);
+
+  const tips: Point[] = [];
+  if (startsAtTip && freeEnds.includes(feature.points[0])) tips.push(feature.points[0]);
+  if (
+    endsAtTip &&
+    freeEnds.includes(feature.points[feature.points.length - 1])
+  ) {
+    tips.push(feature.points[feature.points.length - 1]);
+  }
+  if (tips.length) drawFreeEndCaps(ctx, tips, viewport, casingW, casingMid);
 }
 
 function drawRoadFill(
@@ -685,7 +844,7 @@ function drawRoadFill(
   viewport: Viewport,
   style: MapStyle,
   joinedCaps: Set<string>,
-  segIndex: number | null = null,
+  subPoints?: Point[],
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
   const isRamp = level === 'ramp';
@@ -697,7 +856,9 @@ function drawRoadFill(
   const colorStyle = ROAD_STYLES[solid ?? 'ramp'];
   const fromStyle = ROAD_STYLES[normalizeRoadClass(fromLevel)];
   const endStyle = ROAD_STYLES[normalizeRoadClass(levelEnd)];
-  const points = feature.points.map((p) => toScreen(p, viewport));
+
+  const world = subPoints && subPoints.length >= 2 ? subPoints : feature.points;
+  const points = world.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
   const width = bodyStyle.width * viewport.zoom;
@@ -710,7 +871,6 @@ function drawRoadFill(
     endColor = sketchRoadFill(endStyle.color);
   }
   if (isRamp && !blend) {
-    // 未接路 → 灰色；单端/同级 → 对应等级色
     fillColor = style === 'blueprint' ? '#e8f4ff' : colorStyle.color;
     if (style === 'sketch') fillColor = sketchRoadFill(colorStyle.color);
     endColor = fillColor;
@@ -721,43 +881,49 @@ function drawRoadFill(
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   const midFill = blend ? lerpColor(fillColor, endColor, 0.5) : fillColor;
 
-  if (segIndex != null) {
-    const n = points.length - 1;
-    const t = (segIndex + 0.5) / n;
-    const { a, b } = extendedSegEnds(points, segIndex, Math.max(1.5, baseFillW * 0.55));
-    ctx.strokeStyle =
-      style === 'blueprint'
-        ? '#e8f4ff'
-        : blend
-          ? lerpColor(fillColor, endColor, t)
-          : midFill;
-    ctx.lineWidth = baseFillW;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-    const tipEnds: Point[] = [];
-    if (segIndex === 0 && freeEnds.includes(feature.points[0])) {
-      tipEnds.push(feature.points[0]);
-    }
-    if (segIndex === n - 1 && freeEnds.includes(feature.points[n])) {
-      tipEnds.push(feature.points[n]);
-    }
-    if (tipEnds.length) {
-      drawFreeEndCaps(ctx, tipEnds, viewport, baseFillW, midFill);
-    }
-    return;
-  }
+  const tipEps = 0.75;
+  const startsAtTip =
+    Math.hypot(world[0].x - feature.points[0].x, world[0].y - feature.points[0].y) < tipEps;
+  const endsAtTip =
+    Math.hypot(
+      world[world.length - 1].x - feature.points[feature.points.length - 1].x,
+      world[world.length - 1].y - feature.points[feature.points.length - 1].y,
+    ) < tipEps;
+  const splitInterior = Boolean(subPoints) && !(startsAtTip && endsAtTip);
+  const cap: CanvasLineCap = splitInterior
+    ? startsAtTip || endsAtTip
+      ? strokeCap
+      : 'butt'
+    : strokeCap;
 
+  if (blend && style !== 'blueprint') {
+    const g = ctx.createLinearGradient(
+      points[0].x,
+      points[0].y,
+      points[points.length - 1].x,
+      points[points.length - 1].y,
+    );
+    g.addColorStop(0, fillColor);
+    g.addColorStop(1, endColor);
+    ctx.strokeStyle = g;
+  } else {
+    ctx.strokeStyle = style === 'blueprint' ? '#e8f4ff' : midFill;
+  }
   tracePath(ctx, points, false);
-  ctx.strokeStyle = midFill;
   ctx.lineWidth = baseFillW;
   ctx.lineJoin = 'round';
-  ctx.lineCap = strokeCap;
+  ctx.lineCap = cap;
   ctx.stroke();
-  drawFreeEndCaps(ctx, freeEnds, viewport, baseFillW, midFill);
+
+  const tips: Point[] = [];
+  if (startsAtTip && freeEnds.includes(feature.points[0])) tips.push(feature.points[0]);
+  if (
+    endsAtTip &&
+    freeEnds.includes(feature.points[feature.points.length - 1])
+  ) {
+    tips.push(feature.points[feature.points.length - 1]);
+  }
+  if (tips.length) drawFreeEndCaps(ctx, tips, viewport, baseFillW, midFill);
 }
 
 function drawJunctionNodes(
@@ -793,7 +959,9 @@ function drawRailway(
   const kind = feature.railKind ?? 'railway';
   const style = RAIL_STYLES[kind];
   const color =
-    kind === 'metro' && feature.metroColor ? feature.metroColor : style.color;
+    (kind === 'metro' || kind === 'tram') && feature.metroColor
+      ? feature.metroColor
+      : style.color;
   const w = Math.max(2, style.width * viewport.zoom);
 
   tracePath(ctx, points, false);
@@ -813,6 +981,96 @@ function drawRailway(
     ctx.stroke();
     ctx.setLineDash([]);
   }
+
+  // 有线路名时在中点旁画小标签（缩放过小则跳过）
+  const name = feature.lineName?.trim();
+  if (name && (kind === 'metro' || kind === 'tram') && viewport.zoom >= 0.35) {
+    const mid = points[Math.floor(points.length / 2)];
+    const fontSize = Math.max(9, Math.min(14, 11 * Math.sqrt(viewport.zoom)));
+    ctx.font = `600 ${fontSize}px "PingFang SC", "Helvetica Neue", sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const pad = 3;
+    const tw = ctx.measureText(name).width;
+    const bx = mid.x + w * 0.7;
+    const by = mid.y - fontSize * 0.9;
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillRect(bx - pad, by - fontSize * 0.55, tw + pad * 2, fontSize * 1.15);
+    ctx.fillStyle = color;
+    ctx.fillText(name, bx, by);
+  }
+}
+
+function drawStation(
+  ctx: CanvasRenderingContext2D,
+  feature: MapFeature,
+  viewport: Viewport,
+) {
+  if (!feature.points[0]) return;
+  const p = toScreen(feature.points[0], viewport);
+  const style = feature.stationStyle ?? 'pill';
+  const color = featureLineColor(feature) ?? DEFAULT_METRO_COLOR;
+  const z = viewport.zoom;
+  const heading = feature.stationHeading ?? 0;
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(heading);
+
+  if (style === 'dot') {
+    const r = Math.max(3.5, 4.2 * z);
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.2, 1.5 * z);
+    ctx.strokeStyle = '#fff';
+    ctx.stroke();
+  } else {
+    // 药丸：白底 + 线路色描边（地铁示意图常见样式）
+    const len = Math.max(11, 13 * z);
+    const h = Math.max(6, 7 * z);
+    const rx = h / 2;
+    roundRectPath(ctx, -len / 2, -h / 2, len, h, rx);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.6, 2 * z);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  const name = feature.labelText?.trim();
+  if (name && viewport.zoom >= 0.4) {
+    const fontSize = Math.max(9, Math.min(13, 10 * Math.sqrt(z)));
+    ctx.font = `500 ${fontSize}px "PingFang SC", "Helvetica Neue", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.strokeText(name, p.x, p.y + Math.max(8, 9 * z));
+    ctx.fillStyle = '#222';
+    ctx.fillText(name, p.x, p.y + Math.max(8, 9 * z));
+  }
+}
+
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
 }
 
 function drawLabel(
@@ -1039,10 +1297,10 @@ function drawSelection(
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length === 0) return;
 
-  if (feature.kind === 'label') {
+  if (feature.kind === 'label' || feature.kind === 'station') {
     const p = points[0];
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, feature.kind === 'station' ? 12 : 10, 0, Math.PI * 2);
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 2;
     ctx.setLineDash([4, 3]);
@@ -1350,6 +1608,9 @@ export function renderMap(
     const rails = features.filter((f) => f.kind === 'railway').sort(sortByGradeAsc);
     for (const feature of rails) {
       drawRailway(ctx, feature, viewport, palette);
+    }
+    for (const feature of features) {
+      if (feature.kind === 'station') drawStation(ctx, feature, viewport);
     }
   }
 

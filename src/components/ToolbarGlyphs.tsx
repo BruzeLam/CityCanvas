@@ -250,12 +250,29 @@ export function GlyphStationRect({ active }: GlyphProps) {
   );
 }
 
-export function GlyphStationRound({ active }: GlyphProps) {
+export function GlyphStationRound({ active, color = '#0f0f96' }: GlyphProps & { color?: string }) {
   return (
     <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
-      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#5a201c' : '#fce8e6'} />
-      <rect x="5" y="8" width="14" height="7" rx="3.5" fill="#e85d4c" stroke={active ? '#fff' : '#b83d32'} strokeWidth="1.2" />
-      <circle cx="12" cy="11.5" r="1.4" fill="#fff" />
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#1a1a2e' : '#f0f0f6'} />
+      <rect
+        x="5"
+        y="8"
+        width="14"
+        height="7"
+        rx="3.5"
+        fill="#fff"
+        stroke={color}
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+export function GlyphStationDot({ active, color = '#5b8c5a' }: GlyphProps & { color?: string }) {
+  return (
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#1e2a1c' : '#eef4ec'} />
+      <circle cx="12" cy="12" r="5" fill={color} stroke="#fff" strokeWidth="1.6" />
     </svg>
   );
 }

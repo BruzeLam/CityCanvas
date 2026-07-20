@@ -1,11 +1,12 @@
 import { formatDistance } from '../constants/mapPresets';
 import { detectBlocks } from '../engine/blockDetect';
-import type { CityProject, FeatureGrade, LayerKey, MapStyle } from '../types';
+import type { CityProject, FeatureGrade, LayerKey, MapFeature, MapStyle } from '../types';
 import {
   DEFAULT_LAYERS,
   FEATURE_GRADES,
   LAYER_LABELS,
   LAYER_TOGGLE_LABELS,
+  RAIL_KINDS,
   ROAD_STYLES,
   featureGrade,
   formatGrade,
@@ -19,6 +20,7 @@ type Props = {
   cloudSaved: boolean;
   localMode?: boolean;
   onDeleteSelected: () => void;
+  onUpdateSelected?: (patch: Partial<MapFeature>) => void;
   onSelectedGradeChange?: (grade: FeatureGrade) => void;
   onMapStyleChange: (style: MapStyle) => void;
   onLayerToggle: (key: LayerKey) => void;
@@ -46,6 +48,7 @@ export function SidePanel({
   cloudSaved,
   localMode = false,
   onDeleteSelected,
+  onUpdateSelected,
   onSelectedGradeChange,
   onMapStyleChange,
   onLayerToggle,
@@ -97,15 +100,39 @@ export function SidePanel({
               ? `道路 · ${ROAD_STYLES[selected.roadLevel ?? 'local'].label}`
               : selected.kind === 'label'
                 ? `标注 · ${selected.labelText || '未命名'}`
-                : LAYER_LABELS[selected.kind]}
+                : selected.kind === 'railway'
+                  ? `轨道 · ${RAIL_KINDS.find((r) => r.id === (selected.railKind ?? 'railway'))?.label ?? '铁路'}${
+                      selected.lineName ? ` · ${selected.lineName}` : ''
+                    }`
+                  : selected.kind === 'station'
+                    ? `站点 · ${selected.stationStyle === 'dot' ? '有轨圆点' : '地铁药丸'}${
+                        selected.lineName ? ` · ${selected.lineName}` : ''
+                      }`
+                    : LAYER_LABELS[selected.kind]}
           </p>
           <p className="selection-meta">
-            {selected.kind === 'label'
+            {selected.kind === 'label' || selected.kind === 'station'
               ? '点击位置'
               : selected.kind === 'road' || selected.kind === 'railway'
                 ? `${selected.points.length} 个顶点 · ${formatGrade(featureGrade(selected))}`
                 : `${selected.points.length} 个顶点`}
           </p>
+          {(selected.kind === 'railway' || selected.kind === 'station') &&
+            onUpdateSelected &&
+            (selected.railKind === 'metro' ||
+              selected.railKind === 'tram' ||
+              selected.kind === 'station') && (
+              <label className="selection-field">
+                <span>线路名</span>
+                <input
+                  type="text"
+                  value={selected.lineName ?? ''}
+                  placeholder="可自定义"
+                  maxLength={24}
+                  onChange={(e) => onUpdateSelected({ lineName: e.target.value || undefined })}
+                />
+              </label>
+            )}
           {(selected.kind === 'road' || selected.kind === 'railway') && onSelectedGradeChange && (
             <div className="chip-row grade-chips selection-grades">
               {FEATURE_GRADES.map((g) => (

@@ -9,6 +9,7 @@ import type {
   RailKind,
   Point,
   RoadLevel,
+  StationStyle,
   Tool,
 } from '../types';
 import {
@@ -16,6 +17,7 @@ import {
   POLYLINE_TOOLS,
   BRUSH_TOOLS,
   DEFAULT_METRO_COLOR,
+  DEFAULT_TRAM_COLOR,
   clampGrade,
   clampToMap,
   createId,
@@ -73,6 +75,7 @@ import {
   guideFromDraft,
   type ParallelSide,
 } from '../engine/parallelOffset';
+import { snapStationToRail } from '../engine/stationSnap';
 
 type Props = {
   project: CityProject;
@@ -80,6 +83,8 @@ type Props = {
   roadLevel: RoadLevel;
   railKind: RailKind;
   metroColor: string;
+  lineName: string;
+  stationStyle: StationStyle;
   drawGrade: FeatureGrade;
   brushSizeM: number;
   brushThickness: number;
@@ -134,6 +139,8 @@ export function MapCanvas({
   roadLevel,
   railKind,
   metroColor,
+  lineName,
+  stationStyle,
   drawGrade,
   brushSizeM,
   brushThickness,
@@ -642,8 +649,15 @@ export function MapCanvas({
         roadLevelEnd: kind === 'road' ? meta?.roadLevelEnd : undefined,
         railKind: kind === 'railway' ? railKind : undefined,
         metroColor:
-          kind === 'railway' && railKind === 'metro'
-            ? metroColor || DEFAULT_METRO_COLOR
+          kind === 'railway' && (railKind === 'metro' || railKind === 'tram')
+            ? metroColor ||
+              (railKind === 'tram' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR)
+            : undefined,
+        lineName:
+          kind === 'railway' &&
+          (railKind === 'metro' || railKind === 'tram') &&
+          lineName.trim()
+            ? lineName.trim()
             : undefined,
         grade: meta?.grade,
         gradeEnd: meta?.gradeEnd,
@@ -652,6 +666,7 @@ export function MapCanvas({
     resetDrafts();
   }, [
     commitPathFeatures,
+    lineName,
     metroColor,
     parallelEnabled,
     parallelSide,
@@ -865,6 +880,33 @@ export function MapCanvas({
         points: [world],
         closed: false,
         labelText: text,
+      });
+      return;
+    }
+
+    if (activeTool === 'station') {
+      const prefer: RailKind[] =
+        stationStyle === 'dot' ? ['tram'] : ['metro'];
+      const snap = snapStationToRail(
+        projectRef.current.features,
+        world,
+        prefer,
+        36,
+      );
+      const fallbackColor =
+        metroColor ||
+        (stationStyle === 'dot' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR);
+      const color = snap?.color ?? fallbackColor;
+      addFeature({
+        id: createId(),
+        kind: 'station',
+        points: [snap?.point ?? world],
+        closed: false,
+        stationStyle,
+        stationHeading: snap?.heading,
+        metroColor: color,
+        lineName: snap?.lineName ?? (lineName.trim() || undefined),
+        grade: snap?.grade ?? drawGrade,
       });
       return;
     }
@@ -1286,7 +1328,11 @@ export function MapCanvas({
       } · 右键撤销本笔`;
     }
     if (tool === 'label') return '点击地图放置标注 · 空格临时拖图';
-    if (isBrushTool) {
+    if (tool === 'station') {
+      return stationStyle === 'dot'
+        ? '点击放置有轨站（小圆点）· 靠近线路自动吸附 · 空格拖图'
+        : '点击放置地铁站（药丸）· 靠近线路自动吸附 · 空格拖图';
+    }    if (isBrushTool) {
       return '按住拖拽绘制地貌 · 调节大小/厚度 · 右键撤销本笔 · 空格拖图';
     }
     if (isPathGuided) {

@@ -1,5 +1,13 @@
 import type { CityProject, MapFeature, Point } from '../types';
-import { ROAD_STYLES, featureGrade, getLayers } from '../types';
+import {
+  DEFAULT_METRO_COLOR,
+  DEFAULT_TRAM_COLOR,
+  RAIL_STYLES,
+  ROAD_STYLES,
+  featureGrade,
+  featureLineColor,
+  getLayers,
+} from '../types';
 import { detectBlocks } from './blockDetect';
 import { collectJunctionNodes } from './junctions';
 import { TERRAIN_GREEN, TERRAIN_WATER, ensureTerrain } from './terrain';
@@ -108,12 +116,38 @@ export function exportToSvg(project: CityProject): string {
 
   if (layers.railways) {
     for (const f of features.filter((x) => x.kind === 'railway').sort(byGradeAsc)) {
+      const kind = f.railKind ?? 'railway';
+      const style = RAIL_STYLES[kind];
+      const color =
+        (kind === 'metro' || kind === 'tram') && f.metroColor
+          ? f.metroColor
+          : style.color;
+      const w = style.width * 3.2;
       parts.push(
-        `<path d="${pathD(f.points, false)}" fill="none" stroke="#2a2a2a" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>`,
+        `<path d="${pathD(f.points, false)}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`,
       );
-      parts.push(
-        `<path d="${pathD(f.points, false)}" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="24 20"/>`,
-      );
+      if (style.stripe && style.dash) {
+        parts.push(
+          `<path d="${pathD(f.points, false)}" fill="none" stroke="${style.stripe}" stroke-width="${w * 0.45}" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="24 20"/>`,
+        );
+      }
+    }
+    for (const f of features.filter((x) => x.kind === 'station')) {
+      const p = f.points[0];
+      if (!p) continue;
+      const color =
+        featureLineColor(f) ??
+        (f.stationStyle === 'dot' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR);
+      const heading = ((f.stationHeading ?? 0) * 180) / Math.PI;
+      if (f.stationStyle === 'dot') {
+        parts.push(
+          `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="14" fill="${color}" stroke="#ffffff" stroke-width="4"/>`,
+        );
+      } else {
+        parts.push(
+          `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)}) rotate(${heading.toFixed(1)})"><rect x="-22" y="-10" width="44" height="20" rx="10" fill="#ffffff" stroke="${color}" stroke-width="5"/></g>`,
+        );
+      }
     }
   }
 

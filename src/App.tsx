@@ -21,6 +21,10 @@ import {
   type ParallelSide,
 } from './engine/parallelOffset';
 import { setFeaturesGrade } from './engine/junctions';
+import {
+  CHENGDU_METRO_PRESETS,
+  CHENGDU_TRAM_PRESETS,
+} from './constants/metroPresets';
 import type {
   CityProject,
   EraserTarget,
@@ -30,6 +34,7 @@ import type {
   PathDrawMode,
   RailKind,
   RoadLevel,
+  StationStyle,
   Tool,
 } from './types';
 import {
@@ -39,6 +44,8 @@ import {
   DEFAULT_GRADE,
   DEFAULT_METRO_COLOR,
   DEFAULT_RAIL_KIND,
+  DEFAULT_STATION_STYLE,
+  DEFAULT_TRAM_COLOR,
   ERASER_TARGETS,
   RAIL_KINDS,
   ROAD_STYLES,
@@ -64,6 +71,8 @@ function App() {
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
   const [railKind, setRailKind] = useState<RailKind>(DEFAULT_RAIL_KIND);
   const [metroColor, setMetroColor] = useState(DEFAULT_METRO_COLOR);
+  const [lineName, setLineName] = useState('1号线');
+  const [stationStyle, setStationStyle] = useState<StationStyle>(DEFAULT_STATION_STYLE);
   const [drawGrade, setDrawGrade] = useState<FeatureGrade>(DEFAULT_GRADE);
   const [history, setHistory] = useState<CityProject[]>([]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -537,6 +546,8 @@ function App() {
           roadLevel={roadLevel}
           railKind={railKind}
           metroColor={metroColor}
+          lineName={lineName}
+          stationStyle={stationStyle}
           drawGrade={drawGrade}
           pathDrawMode={pathDrawMode}
           parallelEnabled={parallelEnabled}
@@ -552,8 +563,29 @@ function App() {
             if (t !== 'select') setSelectedFeatureId(null);
           }}
           onRoadLevelChange={setRoadLevel}
-          onRailKindChange={setRailKind}
+          onRailKindChange={(k) => {
+            setRailKind(k);
+            if (k === 'tram') {
+              const isMetroPreset = CHENGDU_METRO_PRESETS.some((p) => p.color === metroColor);
+              if (isMetroPreset || metroColor === DEFAULT_METRO_COLOR) {
+                setMetroColor(DEFAULT_TRAM_COLOR);
+              }
+              if (!lineName.trim() || CHENGDU_METRO_PRESETS.some((p) => p.label === lineName)) {
+                setLineName('蓉2号线');
+              }
+            } else if (k === 'metro') {
+              const isTramPreset = CHENGDU_TRAM_PRESETS.some((p) => p.color === metroColor);
+              if (isTramPreset || metroColor === DEFAULT_TRAM_COLOR) {
+                setMetroColor(DEFAULT_METRO_COLOR);
+              }
+              if (!lineName.trim() || CHENGDU_TRAM_PRESETS.some((p) => p.label === lineName)) {
+                setLineName('1号线');
+              }
+            }
+          }}
           onMetroColorChange={setMetroColor}
+          onLineNameChange={setLineName}
+          onStationStyleChange={setStationStyle}
           onDrawGradeChange={setDrawGrade}
           onPathDrawModeChange={setPathDrawMode}
           onParallelEnabledChange={setParallelEnabled}
@@ -577,6 +609,8 @@ function App() {
           roadLevel={roadLevel}
           railKind={railKind}
           metroColor={metroColor}
+          lineName={lineName}
+          stationStyle={stationStyle}
           drawGrade={drawGrade}
           pathDrawMode={pathDrawMode}
           parallelEnabled={parallelEnabled}
@@ -606,6 +640,18 @@ function App() {
               { undoSnapshot: project },
             );
             setSelectedFeatureId(null);
+          }}
+          onUpdateSelected={(patch) => {
+            if (!selectedFeatureId) return;
+            updateProject(
+              {
+                ...project,
+                features: project.features.map((f) =>
+                  f.id === selectedFeatureId ? { ...f, ...patch } : f,
+                ),
+              },
+              { undoSnapshot: project },
+            );
           }}
           onSelectedGradeChange={(grade: FeatureGrade) => {
             if (!selectedFeatureId) return;

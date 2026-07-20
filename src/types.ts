@@ -9,7 +9,15 @@ export type RoadLevel = 'expressway' | 'arterial' | 'collector' | 'local' | 'ram
 export type RailKind = 'railway' | 'hsr' | 'metro' | 'tram';
 
 export const DEFAULT_RAIL_KIND: RailKind = 'railway';
-export const DEFAULT_METRO_COLOR = '#e85d4c';
+/** 默认地铁色：成都 1 号线蓝 */
+export const DEFAULT_METRO_COLOR = '#0f0f96';
+/** 默认有轨色 */
+export const DEFAULT_TRAM_COLOR = '#5b8c5a';
+
+/** 站点符号（后续可扩自定义形状） */
+export type StationStyle = 'pill' | 'dot';
+
+export const DEFAULT_STATION_STYLE: StationStyle = 'pill';
 
 export const RAIL_KINDS: {
   id: RailKind;
@@ -43,6 +51,7 @@ export type FeatureKind =
   | 'river'
   | 'road'
   | 'railway'
+  | 'station'
   | 'label';
 
 /** 路网标高：同层交叉成路口，不同层上跨/下穿。陆地默认 0，范围 -3…+3 */
@@ -66,15 +75,38 @@ export type MapFeature = {
   roadLevelEnd?: RoadLevel;
   /** 轨道细分；缺省视为普通铁路 */
   railKind?: RailKind;
-  /** 地铁线路色（可选） */
+  /**
+   * 地铁 / 有轨线路色（可选）。
+   * 字段名保留 metroColor 以兼容旧档；有轨也写入此字段。
+   */
   metroColor?: string;
+  /** 线路名（地铁 / 有轨，可自定义） */
+  lineName?: string;
+  /** 站点形状：地铁药丸 / 有轨圆点 */
+  stationStyle?: StationStyle;
+  /** 站点沿线路朝向（弧度）；缺省水平 */
+  stationHeading?: number;
   /** 路网标高（道路/铁路）；缺省视为 0。匝道时表示起点层 */
   grade?: FeatureGrade;
   /** 匝道终点层；与 grade 不同时表示跨层坡道 */
   gradeEnd?: FeatureGrade;
-  /** 标注文字（kind === 'label'） */
+  /** 标注文字（kind === 'label'）；站点名也可复用 */
   labelText?: string;
 };
+
+/** 地铁 / 有轨线路色（含站点继承） */
+export function featureLineColor(
+  f: Pick<MapFeature, 'kind' | 'railKind' | 'metroColor' | 'stationStyle'>,
+): string | undefined {
+  if (f.metroColor) return f.metroColor;
+  if (f.kind === 'station') {
+    return f.stationStyle === 'dot' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR;
+  }
+  if (f.railKind === 'metro') return DEFAULT_METRO_COLOR;
+  if (f.railKind === 'tram') return DEFAULT_TRAM_COLOR;
+  return undefined;
+}
+
 
 export function featureGrade(f: Pick<MapFeature, 'grade'>): FeatureGrade {
   const g = f.grade ?? DEFAULT_GRADE;
@@ -206,6 +238,7 @@ export type Tool =
   | 'river'
   | 'road'
   | 'railway'
+  | 'station'
   | 'label';
 
 export type MapStyle = 'navigation' | 'blueprint' | 'sketch';
@@ -312,6 +345,7 @@ export const LAYER_LABELS: Record<FeatureKind, string> = {
   river: '河流',
   road: '道路',
   railway: '铁路',
+  station: '站点',
   label: '标注',
 };
 
@@ -322,7 +356,7 @@ export const TERRAIN_BRUSH_TOOLS: Tool[] = ['land', 'ocean', 'mountain'];
 export const BRUSH_TOOLS: Tool[] = [...TERRAIN_BRUSH_TOOLS, 'eraser'];
 
 /** 橡皮单选目标：一次只擦一类，避免地貌和路网一起没 */
-export type EraserTarget = 'terrain' | 'road' | 'railway' | 'river' | 'label';
+export type EraserTarget = 'terrain' | 'road' | 'railway' | 'station' | 'river' | 'label';
 
 export const DEFAULT_ERASER_TARGET: EraserTarget = 'terrain';
 
@@ -333,7 +367,8 @@ export const ERASER_TARGETS: {
 }[] = [
   { id: 'terrain', label: '地貌', hint: '只把水域/绿地刷回陆地' },
   { id: 'road', label: '道路', hint: '只删除刷区内道路' },
-  { id: 'railway', label: '铁路', hint: '只删除刷区内铁路' },
+  { id: 'railway', label: '轨道', hint: '只删除刷区内铁路/地铁/有轨' },
+  { id: 'station', label: '站点', hint: '只删除刷区内站点' },
   { id: 'river', label: '河道线', hint: '只删除刷区内河道中心线' },
   { id: 'label', label: '标注', hint: '只删除刷区内标注' },
 ];
@@ -403,6 +438,7 @@ export function normalizeFeatureKind(kind: string): FeatureKind {
     kind === 'river' ||
     kind === 'road' ||
     kind === 'railway' ||
+    kind === 'station' ||
     kind === 'label'
   ) {
     return kind;

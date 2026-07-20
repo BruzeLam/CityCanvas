@@ -32,6 +32,10 @@ export function hitTestFeature(feature: MapFeature, p: Point, zoom: number): boo
     return dist(p, feature.points[0]) < snapThreshold(zoom) * 2.5;
   }
 
+  if (feature.kind === 'station' && feature.points[0]) {
+    return dist(p, feature.points[0]) < snapThreshold(zoom) * 2.8;
+  }
+
   if (feature.closed && feature.points.length >= 3) {
     return pointInPolygon(p, feature.points);
   }
@@ -46,6 +50,7 @@ export function hitTestFeature(feature: MapFeature, p: Point, zoom: number): boo
 
 const HIT_ORDER: FeatureKind[] = [
   'label',
+  'station',
   'railway',
   'road',
   'river',
