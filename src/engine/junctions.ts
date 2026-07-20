@@ -1607,15 +1607,19 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
 }
 
 /**
- * 已接合端点应对宿主半宽 + 路缘厚度截断路缘：key = `${featureId}|start|end` → 截断米数。
+ * 已接合端点截断 tip 路缘：须停在宿主路面内侧，避免 butt 封口线落在路缘带上。
+ * key = `${featureId}|start|end` → 截断米数。
  */
 export function collectCasingTrimM(features: MapFeature[]): Map<string, number> {
   const trim = new Map<string, number>();
   const joined = collectJoinedCaps(features);
-  /** 路缘比路面大约外扩 1m（屏幕 2px/zoom 的世界近似） */
-  const CASING_PAD_M = 1.25;
+  /**
+   * tip 路缘终点相对宿主半宽再往中心收：落在路面下，由宿主 fill 盖住。
+   * 旧逻辑 +pad 会把截断点推到路缘环上，留下横切封口线。
+   */
+  const CASING_UNDER_FILL_M = 1.2;
 
-  const hostHalfAt = (tip: Point, selfId: string): number => {
+  const hostTrimAt = (tip: Point, selfId: string): number => {
     let best = 0;
     for (const host of features) {
       if (!isPathKind(host) || host.id === selfId || host.kind !== 'road') continue;
@@ -1639,7 +1643,8 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
         }
       }
       if (!hit) continue;
-      best = Math.max(best, roadBodyWidthM(host) * 0.5 + CASING_PAD_M);
+      const half = roadBodyWidthM(host) * 0.5;
+      best = Math.max(best, Math.max(1.25, half - CASING_UNDER_FILL_M));
     }
     return best;
   };
@@ -1647,12 +1652,12 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
     if (joined.has(`${f.id}|start`)) {
-      const half = hostHalfAt(f.points[0], f.id);
-      if (half > 0.5) trim.set(`${f.id}|start`, half);
+      const t = hostTrimAt(f.points[0], f.id);
+      if (t > 0.5) trim.set(`${f.id}|start`, t);
     }
     if (joined.has(`${f.id}|end`)) {
-      const half = hostHalfAt(f.points[f.points.length - 1], f.id);
-      if (half > 0.5) trim.set(`${f.id}|end`, half);
+      const t = hostTrimAt(f.points[f.points.length - 1], f.id);
+      if (t > 0.5) trim.set(`${f.id}|end`, t);
     }
   }
   return trim;

@@ -29,6 +29,7 @@ import {
   curveFromBestTangent,
 } from './curveMath';
 import type { GuideSnap, Segment } from './geometry';
+import { closestOnSegment, dist } from './geometry';
 import {
   collectJoinedCaps,
   collectJunctionNodes,
@@ -127,9 +128,42 @@ function trimPolylineEnds(
 /** 匝道端点短截：与宿主同层绘制，避免中段抬升后整条压在主路上 */
 const RAMP_TIP_STUB_M = 14;
 
+/** 端点若挂在主路上，用宿主标高画 tip stub（可压在宿主下，避免 +2 tip 叠在 0 层上） */
+function hostGradeAtAttachment(
+  tip: Point,
+  selfId: string,
+  peers: MapFeature[],
+): number | null {
+  let bestD = Infinity;
+  let bestG: number | null = null;
+  for (const host of peers) {
+    if (host.id === selfId || host.kind !== 'road' || host.points.length < 2) continue;
+    // 匝道互挂不算宿主层
+    if (isRampRoadFeature(host)) continue;
+    for (const p of host.points) {
+      const d = dist(tip, p);
+      if (d <= ENDPOINT_MERGE_M && d < bestD) {
+        bestD = d;
+        bestG = featureGrade(host);
+      }
+    }
+    for (let i = 0; i < host.points.length - 1; i++) {
+      const on = closestOnSegment(tip, {
+        a: host.points[i],
+        b: host.points[i + 1],
+      });
+      if (on.dist <= ENDPOINT_MERGE_M && on.dist < bestD) {
+        bestD = on.dist;
+        bestG = featureGrade(host);
+      }
+    }
+  }
+  return bestG;
+}
+
 /**
  * 匝道拆段：
- * 1) 两端 tip stub（端点标高，先于同层主路）
+ * 1) 两端 tip stub（宿主标高优先，先于同层主路）
  * 2) 中段按匝道交叉切开（插值标高）
  */
 function buildRampDrawPieces(
@@ -144,7 +178,12 @@ function buildRampDrawPieces(
   const g0 = featureGrade(feature);
   const g1 = featureGradeEnd(feature);
   const tipM = Math.min(RAMP_TIP_STUB_M, total * 0.28);
-  const canStub = total > tipM * 2.4 && Math.abs(g0 - g1) > 1e-6;
+  // 跨层必拆；同层若两端都挂主路也拆，保证 tip 压在宿主下再开口
+  const attachedBoth =
+    hostGradeAtAttachment(pts[0], feature.id, peers) != null &&
+    hostGradeAtAttachment(pts[pts.length - 1], feature.id, peers) != null;
+  const canStub =
+    total > tipM * 2.4 && (Math.abs(g0 - g1) > 1e-6 || attachedBoth);
 
   type Split = { segIndex: number; t: number; point: Point };
   const splits: Split[] = [];
@@ -195,11 +234,25 @@ function buildRampDrawPieces(
   if (canStub) {
     const startStub = slicePolylineByArc(pts, cum, 0, tipM);
     const endStub = slicePolylineByArc(pts, cum, total - tipM, total);
+    const startHostG = hostGradeAtAttachment(pts[0], feature.id, peers);
+    const endHostG = hostGradeAtAttachment(pts[pts.length - 1], feature.id, peers);
     if (startStub.length >= 2) {
-      pieces.push({ feature, grade: g0, order, subPoints: startStub, isTip: true });
+      pieces.push({
+        feature,
+        grade: startHostG ?? g0,
+        order,
+        subPoints: startStub,
+        isTip: true,
+      });
     }
     if (endStub.length >= 2) {
-      pieces.push({ feature, grade: g1, order, subPoints: endStub, isTip: true });
+      pieces.push({
+        feature,
+        grade: endHostG ?? g1,
+        order,
+        subPoints: endStub,
+        isTip: true,
+      });
     }
   }
 
@@ -293,8 +346,9 @@ function buildRampDrawPieces(
 
 /**
  * 汇入口开口（无圆环 / 无 round 鼓包）：
- * 1) 沿宿主中心线 butt 补一段路面色（宽度=路缘全宽）→ 撕开宿主侧边线
- * 2) 沿汇入臂 butt 画 tip→host 渐变 → 颜色过渡
+ * 1) 沿宿主中心线 butt 全路缘宽补路面色 → 撕开宿主侧边线（浅角加长）
+ * 1b) 沿汇入臂再清一道宿主色 → 抹掉 tip 路缘 butt 封口
+ * 2) 异级时沿汇入臂 tip→host 渐变（butt only）
  */
 function drawJoinOpenings(
   ctx: CanvasRenderingContext2D,
@@ -317,15 +371,28 @@ function drawJoinOpenings(
       tipFill = sketchRoadFill(m.tipColor);
     }
 
+    const hostBodyW = Math.max(2, m.hostWidth * z);
     const hostFillW = Math.max(2, m.hostWidth * z * fillScale);
-    // 必须盖到路缘外沿，否则侧边线还在
-    const hostOpenW = Math.max(hostFillW, m.hostWidth * z) + 2 * casingExtra;
+    // drawRoadCasing 用 body + casingExtra；开口必须盖到两侧外沿并留余量
+    const hostCasingW = hostBodyW + casingExtra;
+    const hostOpenW = Math.max(hostFillW, hostCasingW) + casingExtra + 2;
     const tipFillW = Math.max(2, m.tipWidth * z * fillScale);
-    const openLen = Math.max(tipFillW * 1.05, 4 * z);
+    const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
     const halfHost = (m.hostWidth * 0.5) * z;
 
     const hx = m.hostDirX;
     const hy = m.hostDirY;
+    const ix = -m.approachX;
+    const iy = -m.approachY;
+    // |sin|：汇入臂与宿主切向夹角；浅角汇入嘴沿主路更长
+    const sinA = Math.abs(hx * m.approachY - hy * m.approachX);
+    const openLen = Math.max(
+      tipCasingW / Math.max(sinA, 0.18),
+      tipFillW * 1.75,
+      hostOpenW * 0.55,
+      8 * z,
+    );
+
     // 1) 沿主路撕开侧边线（butt，绝不用 round）
     ctx.beginPath();
     ctx.moveTo(p.x - hx * openLen * 0.5, p.y - hy * openLen * 0.5);
@@ -336,17 +403,26 @@ function drawJoinOpenings(
     ctx.lineJoin = 'miter';
     ctx.stroke();
 
+    // 1b) 沿汇入方向清封口：从路缘外沿扫到中心外侧
+    const outer = hostOpenW * 0.5 + tipFillW * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(p.x + ix * outer, p.y + iy * outer);
+    ctx.lineTo(p.x - ix * tipFillW * 0.3, p.y - iy * tipFillW * 0.3);
+    ctx.strokeStyle = hostFill;
+    ctx.lineWidth = Math.max(tipFillW, tipCasingW * 0.95);
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.stroke();
+
     const useBlend =
       style !== 'blueprint' &&
       (m.tipColor !== m.hostColor || m.tipWidth + 0.05 < m.hostWidth);
     if (!useBlend) continue;
 
     // 2) 沿汇入臂：从臂内到中心，tip 色 → 宿主色（butt）
-    const ix = -m.approachX;
-    const iy = -m.approachY;
     const a = {
-      x: p.x + ix * (halfHost + tipFillW * 0.4),
-      y: p.y + iy * (halfHost + tipFillW * 0.4),
+      x: p.x + ix * (halfHost + tipFillW * 0.55),
+      y: p.y + iy * (halfHost + tipFillW * 0.55),
     };
     const b = { x: p.x, y: p.y };
     const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
