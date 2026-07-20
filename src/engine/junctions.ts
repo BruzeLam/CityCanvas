@@ -1,5 +1,5 @@
 import type { FeatureGrade, MapFeature, Point } from '../types';
-import { featureGrade, featureGradeEnd, isRampFeature } from '../types';
+import { featureGrade, featureGradeEnd, isLevelBlendRoad, isRampFeature } from '../types';
 import { closestOnSegment, dist } from './geometry';
 
 const EPS = 1e-6;
@@ -169,7 +169,7 @@ export function tryMergeHeadToTail(
   draft: MapFeature,
 ): MapFeature[] | null {
   if (!isPathKind(draft) || draft.points.length < 2) return null;
-  if (isRampFeature(draft)) return null;
+  if (isRampFeature(draft) || isLevelBlendRoad(draft)) return null;
 
   const grade = featureGrade(draft);
   const tip = findPathTipAt(features, draft.points[0], ENDPOINT_MERGE_M, (f) => {
@@ -309,14 +309,13 @@ function insertAttachmentOnPeer(
   t: number,
   point: Point,
 ): MapFeature {
-  // 已在端点附近则不插点
+  // 靠近该线段端点：只合并对应顶点（绝不能当成整条路的首/尾，否则会把远端点拽过来）
   if (t < 0.02 || t > 0.98) {
-    const tip = t < 0.5 ? peer.points[0] : peer.points[peer.points.length - 1];
+    const vi = t < 0.5 ? segIndex : segIndex + 1;
+    if (vi < 0 || vi >= peer.points.length) return peer;
     return {
       ...peer,
-      points: peer.points.map((p) =>
-        dist(p, tip) < ENDPOINT_MERGE_M ? { ...point } : p,
-      ),
+      points: peer.points.map((p, i) => (i === vi ? { ...point } : p)),
     };
   }
   return {
@@ -368,8 +367,8 @@ export function attachCrossGradeTips(
 
   const attached: MapFeature = { ...incoming, points };
 
-  // 同层路仍织交叉；匝道只挂端点
-  if (isRampFeature(attached) || startG !== endG) {
+  // 跨层 / 异级匝道：只挂端点，不与主路织交叉（避免再插点、挤坏主路）
+  if (isRampFeature(attached) || startG !== endG || isLevelBlendRoad(attached)) {
     return [...nextFeatures, attached];
   }
 
@@ -388,7 +387,7 @@ export function weaveSameGradeCrossings(
     return [...features, incoming];
   }
 
-  if (isRampFeature(incoming)) {
+  if (isRampFeature(incoming) || isLevelBlendRoad(incoming)) {
     return attachCrossGradeTips(features, incoming);
   }
 

@@ -7,7 +7,7 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, isLevelBlendRoad, isRampFeature } from '../types';
+import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, isLevelBlendRoad } from '../types';
 import type { RoadLevel } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
@@ -60,27 +60,6 @@ function parseColor(c: string): { r: number; g: number; b: number } | null {
   const m = c.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
   if (!m) return null;
   return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
-}
-
-function strokePolylineSegments(
-  ctx: CanvasRenderingContext2D,
-  points: Point[],
-  width: number,
-  colorAt: (t: number) => string,
-  lineCap: CanvasLineCap,
-) {
-  if (points.length < 2) return;
-  ctx.lineWidth = width;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = lineCap;
-  for (let i = 0; i < points.length - 1; i++) {
-    const t = (i + 0.5) / (points.length - 1);
-    ctx.strokeStyle = colorAt(t);
-    ctx.beginPath();
-    ctx.moveTo(points[i].x, points[i].y);
-    ctx.lineTo(points[i + 1].x, points[i + 1].y);
-    ctx.stroke();
-  }
 }
 
 /** 同层先画完所有路缘，再画路面，避免后画的路「盖住」路口 */
@@ -409,24 +388,19 @@ function drawRoadCasing(
     style === 'sketch' ? sketchRoadInk(roadStyle.casing) : roadStyle.casing;
   const casing1 =
     style === 'sketch' ? sketchRoadInk(endStyle.casing) : endStyle.casing;
+  // 渐变路也用一整条连续路缘，避免分段描边在弯道上显出「假轮廓」
+  const casingColor = isLevelBlendRoad(feature)
+    ? lerpColor(casing0, casing1, 0.5)
+    : casing0;
+  const casingW = Math.max(width, endWidth) + casingExtra;
 
-  if (isLevelBlendRoad(feature)) {
-    strokePolylineSegments(
-      ctx,
-      points,
-      Math.max(width, endWidth) + casingExtra,
-      (t) => lerpColor(casing0, casing1, t),
-      strokeCap,
-    );
-  } else {
-    tracePath(ctx, points, false);
-    ctx.strokeStyle = casing0;
-    ctx.lineWidth = width + casingExtra;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = strokeCap;
-    ctx.stroke();
-  }
-  drawFreeEndCaps(ctx, freeEnds, viewport, width + casingExtra, casing0);
+  tracePath(ctx, points, false);
+  ctx.strokeStyle = casingColor;
+  ctx.lineWidth = casingW;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = strokeCap;
+  ctx.stroke();
+  drawFreeEndCaps(ctx, freeEnds, viewport, casingW, casingColor);
 }
 
 function drawRoadFill(
@@ -445,7 +419,8 @@ function drawRoadFill(
 
   const width = roadStyle.width * viewport.zoom;
   const endWidth = endStyle.width * viewport.zoom;
-  const fillW = style === 'sketch' ? Math.max(1.5, width * 0.72) : width;
+  const fillW0 = style === 'sketch' ? Math.max(1.5, width * 0.72) : width;
+  const fillW1 = style === 'sketch' ? Math.max(1.5, endWidth * 0.72) : endWidth;
   let fillColor = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
   let endColor = style === 'blueprint' ? '#e8f4ff' : endStyle.color;
   if (style === 'sketch') {
@@ -455,39 +430,27 @@ function drawRoadFill(
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
 
   if (isLevelBlendRoad(feature) && style !== 'blueprint') {
-    strokePolylineSegments(
-      ctx,
-      points,
-      fillW,
-      (t) => {
-        void endWidth;
-        return lerpColor(fillColor, endColor, t);
-      },
-      strokeCap,
-    );
+    // 仅路面色沿路径渐变；圆角线帽互相覆盖接缝，不画分段路缘
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (let i = 0; i < points.length - 1; i++) {
+      const t = (i + 0.5) / (points.length - 1);
+      ctx.strokeStyle = lerpColor(fillColor, endColor, t);
+      ctx.lineWidth = fillW0 + (fillW1 - fillW0) * t;
+      ctx.beginPath();
+      ctx.moveTo(points[i].x, points[i].y);
+      ctx.lineTo(points[i + 1].x, points[i + 1].y);
+      ctx.stroke();
+    }
   } else {
     tracePath(ctx, points, false);
     ctx.strokeStyle = fillColor;
-    ctx.lineWidth = fillW;
+    ctx.lineWidth = fillW0;
     ctx.lineJoin = 'round';
     ctx.lineCap = strokeCap;
     ctx.stroke();
   }
-  drawFreeEndCaps(ctx, freeEnds, viewport, fillW, fillColor);
-
-  // 跨层挂接端：小接合点（不再用大圆抢戏）
-  if (isRampFeature(feature) || isLevelBlendRoad(feature)) {
-    const tips = [feature.points[0], feature.points[feature.points.length - 1]];
-    const tipColors = [fillColor, endColor];
-    tips.forEach((tip, i) => {
-      const s = toScreen(tip, viewport);
-      const r = Math.max(1.2, fillW * 0.28);
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = tipColors[i];
-      ctx.fill();
-    });
-  }
+  drawFreeEndCaps(ctx, freeEnds, viewport, fillW0, fillColor);
 }
 
 function drawJunctionNodes(
