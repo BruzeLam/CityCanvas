@@ -1644,7 +1644,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
 export function collectCasingTrimM(features: MapFeature[]): Map<string, number> {
   const trim = new Map<string, number>();
   const joined = collectJoinedCaps(features);
-  const CASING_CLEAR_M = 3.5;
+  const CASING_UNDER_FILL_M = 1.5;
 
   const hostTrimAt = (tip: Point, selfId: string, approach: Point): number => {
     let best = 0;
@@ -1672,14 +1672,10 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
       }
       if (!hit) continue;
       const half = roadBodyWidthM(host) * 0.5;
-      const tipHalf = roadBodyWidthM(
-        features.find((f) => f.id === selfId) ?? host,
-      ) * 0.5;
       const ht = hostTangentAt(host, tip);
       const sinA = Math.abs(ht.x * approach.y - ht.y * approach.x);
-      // 路缘停在宿主外缘之外，避免 butt 封口线
-      const along = (half + tipHalf) / Math.max(sinA, 0.18);
-      best = Math.max(best, along + CASING_CLEAR_M);
+      const along = half / Math.max(sinA, 0.22);
+      best = Math.max(best, along + CASING_UNDER_FILL_M);
     }
     return best;
   };
