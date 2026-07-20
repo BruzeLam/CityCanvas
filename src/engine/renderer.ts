@@ -36,7 +36,6 @@ import {
   collectCasingTrimM,
   ENDPOINT_MERGE_M,
   segmentIntersection,
-  type JoinMouth,
 } from './junctions';
 import {
   ensureTerrain,
@@ -291,79 +290,7 @@ function buildRampDrawPieces(
   return pieces.length ? pieces : [{ feature, grade: (g0 + g1) / 2, order }];
 }
 
-/**
- * 汇入口开口（无圆环 / 无 round 鼓包）：
- * 1) 沿宿主中心线 butt 补一段路面色（宽度=路缘全宽）→ 撕开宿主侧边线
- * 2) 沿汇入臂 butt 画 tip→host 渐变 → 颜色过渡
- */
-function drawJoinOpenings(
-  ctx: CanvasRenderingContext2D,
-  mouths: JoinMouth[],
-  band: number,
-  viewport: Viewport,
-  style: MapStyle,
-) {
-  const z = viewport.zoom;
-  const fillScale = style === 'sketch' ? 0.72 : 1;
-  const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * z) : 2 * z;
-  for (const m of mouths) {
-    if (Math.floor(m.grade + 1e-9) !== band) continue;
-    const p = toScreen(m.point, viewport);
-
-    let hostFill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
-    let tipFill = style === 'blueprint' ? '#e8f4ff' : m.tipColor;
-    if (style === 'sketch') {
-      hostFill = sketchRoadFill(m.hostColor);
-      tipFill = sketchRoadFill(m.tipColor);
-    }
-
-    const hostFillW = Math.max(2, m.hostWidth * z * fillScale);
-    // 必须盖到路缘外沿，否则侧边线还在
-    const hostOpenW = Math.max(hostFillW, m.hostWidth * z) + 2 * casingExtra;
-    const tipFillW = Math.max(2, m.tipWidth * z * fillScale);
-    const openLen = Math.max(tipFillW * 1.05, 4 * z);
-    const halfHost = (m.hostWidth * 0.5) * z;
-
-    const hx = m.hostDirX;
-    const hy = m.hostDirY;
-    // 1) 沿主路撕开侧边线（butt，绝不用 round）
-    ctx.beginPath();
-    ctx.moveTo(p.x - hx * openLen * 0.5, p.y - hy * openLen * 0.5);
-    ctx.lineTo(p.x + hx * openLen * 0.5, p.y + hy * openLen * 0.5);
-    ctx.strokeStyle = hostFill;
-    ctx.lineWidth = hostOpenW;
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    ctx.stroke();
-
-    const useBlend =
-      style !== 'blueprint' &&
-      (m.tipColor !== m.hostColor || m.tipWidth + 0.05 < m.hostWidth);
-    if (!useBlend) continue;
-
-    // 2) 沿汇入臂：从臂内到中心，tip 色 → 宿主色（butt）
-    const ix = -m.approachX;
-    const iy = -m.approachY;
-    const a = {
-      x: p.x + ix * (halfHost + tipFillW * 0.4),
-      y: p.y + iy * (halfHost + tipFillW * 0.4),
-    };
-    const b = { x: p.x, y: p.y };
-    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-    g.addColorStop(0, tipFill);
-    g.addColorStop(0.55, lerpColor(tipFill, hostFill, 0.55));
-    g.addColorStop(1, hostFill);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = g;
-    ctx.lineWidth = tipFillW;
-    ctx.lineCap = 'butt';
-    ctx.stroke();
-  }
-}
-
-/** 同层：tip stub → 匝道 → 主路；只截路缘；汇入处沿主路开口 + 颜色渐变 */
+/** 同层：tip stub → 匝道 → 主路；tip 只截路缘，不再沿主路涂开口补丁 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -374,7 +301,6 @@ function drawRoadsMerged(
 ) {
   const joinedCaps = collectJoinedCaps(roads);
   const casingTrim = collectCasingTrimM(roads);
-  const mouths = collectJoinMouths(roads);
   const pieces: RoadDrawPiece[] = [];
   const orderOf = new Map(roads.map((f, i) => [f.id, i]));
 
@@ -491,8 +417,6 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 沿主路 butt 开口 + 汇入臂渐变（无 round 鼓包）
-    drawJoinOpenings(ctx, mouths, band, viewport, style);
     i = j;
   }
 
