@@ -73,10 +73,16 @@ export function findFeaturesInRadius(
   features: MapFeature[],
   center: Point,
   radiusM: number,
+  kinds?: FeatureKind | FeatureKind[],
 ): MapFeature[] {
   const r = Math.max(1, radiusM);
+  const allow =
+    kinds == null
+      ? null
+      : new Set(Array.isArray(kinds) ? kinds : [kinds]);
   const hit: MapFeature[] = [];
   for (const f of features) {
+    if (allow && !allow.has(f.kind)) continue;
     if (featureNearPoint(f, center, r)) hit.push(f);
   }
   return hit;

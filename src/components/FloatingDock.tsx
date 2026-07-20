@@ -1,5 +1,6 @@
-import type { FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
+import type { EraserTarget, FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
 import {
+  ERASER_TARGETS,
   PATH_DRAW_MODES,
   ROAD_STYLES,
   clampGrade,
@@ -22,6 +23,7 @@ type Props = {
   parallelEnabled: boolean;
   parallelSpacingM: number;
   parallelSide: ParallelSide;
+  eraserTarget: EraserTarget;
   canUndo: boolean;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
@@ -30,6 +32,7 @@ type Props = {
   onParallelEnabledChange: (on: boolean) => void;
   onParallelSpacingChange: (m: number) => void;
   onParallelSideChange: (side: ParallelSide) => void;
+  onEraserTargetChange: (target: EraserTarget) => void;
   onUndo: () => void;
 };
 
@@ -56,6 +59,7 @@ export function FloatingDock({
   parallelEnabled,
   parallelSpacingM,
   parallelSide,
+  eraserTarget,
   canUndo,
   onToolChange,
   onRoadLevelChange,
@@ -64,9 +68,11 @@ export function FloatingDock({
   onParallelEnabledChange,
   onParallelSpacingChange,
   onParallelSideChange,
+  onEraserTargetChange,
   onUndo,
 }: Props) {
   const showPath = tool === 'road' || tool === 'railway';
+  const showEraser = tool === 'eraser';
 
   return (
     <div
@@ -98,6 +104,24 @@ export function FloatingDock({
           撤销
         </button>
       </div>
+
+      {showEraser && (
+        <div className="floating-dock-row floating-dock-sub" role="radiogroup" aria-label="橡皮目标">
+          {ERASER_TARGETS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="radio"
+              aria-checked={eraserTarget === t.id}
+              className={eraserTarget === t.id ? 'dock-btn active' : 'dock-btn'}
+              onClick={() => onEraserTargetChange(t.id)}
+              title={t.hint}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {showPath && (
         <>

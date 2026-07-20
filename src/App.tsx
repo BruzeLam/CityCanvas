@@ -22,6 +22,7 @@ import {
 } from './engine/parallelOffset';
 import type {
   CityProject,
+  EraserTarget,
   FeatureGrade,
   LayerKey,
   MapStyle,
@@ -32,6 +33,7 @@ import type {
 import {
   DEFAULT_BRUSH_SIZE_M,
   DEFAULT_BRUSH_THICKNESS,
+  DEFAULT_ERASER_TARGET,
   DEFAULT_GRADE,
   getLayers,
 } from './types';
@@ -51,6 +53,7 @@ function App() {
   const [parallelSide, setParallelSide] = useState<ParallelSide>('both');
   const [brushSizeM, setBrushSizeM] = useState(DEFAULT_BRUSH_SIZE_M);
   const [brushThickness, setBrushThickness] = useState(DEFAULT_BRUSH_THICKNESS);
+  const [eraserTarget, setEraserTarget] = useState<EraserTarget>(DEFAULT_ERASER_TARGET);
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
   const [drawGrade, setDrawGrade] = useState<FeatureGrade>(DEFAULT_GRADE);
   const [history, setHistory] = useState<CityProject[]>([]);
@@ -486,6 +489,7 @@ function App() {
           parallelSide={parallelSide}
           brushSizeM={brushSizeM}
           brushThickness={brushThickness}
+          eraserTarget={eraserTarget}
           showJunctions={getLayers(project).junctions !== false}
           canUndo={history.length > 0}
           onToolChange={(t) => {
@@ -500,6 +504,7 @@ function App() {
           onParallelSideChange={setParallelSide}
           onBrushSizeChange={setBrushSizeM}
           onBrushThicknessChange={setBrushThickness}
+          onEraserTargetChange={setEraserTarget}
           onShowJunctionsChange={(show) => {
             updateProject({
               ...project,
@@ -520,6 +525,7 @@ function App() {
           parallelSide={parallelSide}
           brushSizeM={brushSizeM}
           brushThickness={brushThickness}
+          eraserTarget={eraserTarget}
           selectedFeatureId={selectedFeatureId}
           canUndo={history.length > 0}
           onSelectFeature={setSelectedFeatureId}
@@ -533,6 +539,7 @@ function App() {
           onParallelEnabledChange={setParallelEnabled}
           onParallelSpacingChange={setParallelSpacingM}
           onParallelSideChange={setParallelSide}
+          onEraserTargetChange={setEraserTarget}
           onUndo={handleUndo}
           onProjectChange={updateProject}
         />

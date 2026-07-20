@@ -641,7 +641,7 @@ export type PreviewState =
       guide?: PreviewGuide | null;
       parallelPaths?: Point[][];
     }
-  | { mode: 'brush'; center: Point; radiusM: number; thickness: number; kind: 'land' | 'water' | 'green' }
+  | { mode: 'brush'; center: Point; radiusM: number; thickness: number; kind: 'land' | 'water' | 'green' | 'erase' }
   | { mode: 'label'; point: Point; text: string };
 
 export type SelectionState = {
@@ -851,7 +851,7 @@ function drawPreviewBrush(
   center: Point,
   radiusM: number,
   thickness: number,
-  kind: 'land' | 'water' | 'green',
+  kind: 'land' | 'water' | 'green' | 'erase',
   viewport: Viewport,
 ) {
   const c = toScreen(center, viewport);
@@ -869,15 +869,21 @@ function drawPreviewBrush(
     else ctx.lineTo(x, y);
   }
   ctx.closePath();
-  ctx.fillStyle =
-    kind === 'water'
-      ? 'rgba(170, 211, 223, 0.35)'
-      : kind === 'green'
-        ? 'rgba(173, 209, 158, 0.35)'
-        : 'rgba(242, 239, 233, 0.45)';
-  ctx.fill();
-  ctx.strokeStyle =
-    kind === 'water' ? '#7eb8c9' : kind === 'green' ? '#8fbc7a' : '#a8a29e';
+  if (kind === 'erase') {
+    ctx.fillStyle = 'rgba(180, 80, 70, 0.12)';
+    ctx.fill();
+    ctx.strokeStyle = '#c45c4a';
+  } else {
+    ctx.fillStyle =
+      kind === 'water'
+        ? 'rgba(170, 211, 223, 0.35)'
+        : kind === 'green'
+          ? 'rgba(173, 209, 158, 0.35)'
+          : 'rgba(242, 239, 233, 0.45)';
+    ctx.fill();
+    ctx.strokeStyle =
+      kind === 'water' ? '#7eb8c9' : kind === 'green' ? '#8fbc7a' : '#a8a29e';
+  }
   ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 3]);
   ctx.stroke();

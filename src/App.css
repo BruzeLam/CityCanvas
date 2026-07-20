@@ -360,6 +360,10 @@ input {
   gap: 5px;
 }
 
+.tool-grid-compact {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .tool-cell {
   display: flex !important;
   align-items: center;

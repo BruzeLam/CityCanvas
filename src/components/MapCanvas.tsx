@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   CityProject,
+  EraserTarget,
   FeatureGrade,
   FeatureKind,
   MapFeature,
@@ -16,6 +17,7 @@ import {
   clampGrade,
   clampToMap,
   createId,
+  eraserTargetLabel,
   featureGrade,
   formatGrade,
 } from '../types';
@@ -71,6 +73,7 @@ type Props = {
   drawGrade: FeatureGrade;
   brushSizeM: number;
   brushThickness: number;
+  eraserTarget: EraserTarget;
   pathDrawMode: PathDrawMode;
   parallelEnabled: boolean;
   parallelSpacingM: number;
@@ -85,8 +88,12 @@ type Props = {
   onParallelEnabledChange: (on: boolean) => void;
   onParallelSpacingChange: (m: number) => void;
   onParallelSideChange: (side: ParallelSide) => void;
+  onEraserTargetChange: (target: EraserTarget) => void;
   onUndo: () => void;
-  onProjectChange: (project: CityProject, options?: { undoSnapshot?: CityProject }) => void;
+  onProjectChange: (
+    project: CityProject,
+    opts?: { undoSnapshot?: CityProject },
+  ) => void;
 };
 
 function toolKind(tool: Tool): FeatureKind | null {
@@ -98,17 +105,22 @@ function toolKind(tool: Tool): FeatureKind | null {
 }
 
 function brushCellForTool(tool: Tool): TerrainCell | null {
-  if (tool === 'land' || tool === 'eraser') return TERRAIN_LAND;
+  if (tool === 'land') return TERRAIN_LAND;
   if (tool === 'ocean') return TERRAIN_WATER;
   if (tool === 'mountain') return TERRAIN_GREEN;
   return null;
 }
 
 function brushPreviewKind(tool: Tool): 'land' | 'water' | 'green' | null {
-  if (tool === 'land' || tool === 'eraser') return 'land';
+  if (tool === 'land') return 'land';
   if (tool === 'ocean') return 'water';
   if (tool === 'mountain') return 'green';
   return null;
+}
+
+function eraserFeatureKind(target: EraserTarget): FeatureKind | null {
+  if (target === 'terrain') return null;
+  return target;
 }
 
 function lerpPoint(a: Point, b: Point, t: number): Point {
@@ -122,6 +134,7 @@ export function MapCanvas({
   drawGrade,
   brushSizeM,
   brushThickness,
+  eraserTarget,
   pathDrawMode,
   parallelEnabled,
   parallelSpacingM,
@@ -136,6 +149,7 @@ export function MapCanvas({
   onParallelEnabledChange,
   onParallelSpacingChange,
   onParallelSideChange,
+  onEraserTargetChange,
   onUndo,
   onProjectChange,
 }: Props) {
@@ -218,13 +232,18 @@ export function MapCanvas({
 
   const preview: PreviewState = (() => {
     if (isBrushTool && brushCursor) {
-      const kind = brushPreviewKind(tool);
+      const kind =
+        tool === 'eraser'
+          ? eraserTarget === 'terrain'
+            ? 'land'
+            : 'erase'
+          : brushPreviewKind(tool);
       if (kind) {
         return {
           mode: 'brush',
           center: brushCursor,
           radiusM: brushSizeM,
-          thickness: brushThickness,
+          thickness: tool === 'eraser' && eraserTarget !== 'terrain' ? 0 : brushThickness,
           kind,
         };
       }
@@ -400,39 +419,62 @@ export function MapCanvas({
   }, []);
 
   const stampBrushPoints = useCallback(
-    (points: Point[], cell: TerrainCell, eraseFeatures = false) => {
+    (points: Point[], cell: TerrainCell) => {
       if (points.length === 0) return;
       const current = projectRef.current;
-      // clone：刷子改地形时换新 cells，渲染缓存才能失效
       const terrain = cloneTerrain(ensureTerrain(current.settings, current.terrain));
       for (const p of points) {
         stampBrush(terrain, p, brushSizeM, brushThickness, cell);
       }
-      let features = current.features;
-      if (eraseFeatures) {
-        const removeIds = new Set<string>();
-        for (const p of points) {
-          for (const f of findFeaturesInRadius(features, p, brushSizeM)) {
-            removeIds.add(f.id);
-          }
-        }
-        if (removeIds.size > 0) {
-          features = features.filter((f) => !removeIds.has(f.id));
-        }
-      }
-      const next = { ...current, terrain, features };
+      const next = { ...current, terrain };
       projectRef.current = next;
       onProjectChange(next);
     },
     [brushSizeM, brushThickness, onProjectChange],
   );
 
+  const eraseFeaturePoints = useCallback(
+    (points: Point[], kind: FeatureKind) => {
+      if (points.length === 0) return;
+      const current = projectRef.current;
+      const removeIds = new Set<string>();
+      for (const p of points) {
+        for (const f of findFeaturesInRadius(current.features, p, brushSizeM, kind)) {
+          removeIds.add(f.id);
+        }
+      }
+      if (removeIds.size === 0) return;
+      let features = current.features.filter((f) => !removeIds.has(f.id));
+      if (kind === 'road' || kind === 'railway') {
+        features = reweaveAllCrossings(features);
+      }
+      const next = { ...current, features };
+      projectRef.current = next;
+      onProjectChange(next);
+    },
+    [brushSizeM, onProjectChange],
+  );
+
+  const applyBrushPoints = useCallback(
+    (points: Point[]) => {
+      if (tool === 'eraser') {
+        const kind = eraserFeatureKind(eraserTarget);
+        if (kind) eraseFeaturePoints(points, kind);
+        else stampBrushPoints(points, TERRAIN_LAND);
+        return;
+      }
+      const cell = brushCellForTool(tool);
+      if (cell != null) stampBrushPoints(points, cell);
+    },
+    [tool, eraserTarget, eraseFeaturePoints, stampBrushPoints],
+  );
+
   const stampBrushStroke = useCallback(
-    (from: Point, to: Point, cell: TerrainCell, eraseFeatures = false) => {
+    (from: Point, to: Point) => {
       const spacing = Math.max(1, brushSizeM * 0.35);
       const d = dist(from, to);
       if (d < spacing) {
-        stampBrushPoints([to], cell, eraseFeatures);
+        applyBrushPoints([to]);
         return;
       }
       const steps = Math.ceil(d / spacing);
@@ -440,9 +482,9 @@ export function MapCanvas({
       for (let i = 1; i <= steps; i++) {
         points.push(lerpPoint(from, to, i / steps));
       }
-      stampBrushPoints(points, cell, eraseFeatures);
+      applyBrushPoints(points);
     },
-    [brushSizeM, stampBrushPoints],
+    [brushSizeM, applyBrushPoints],
   );
 
   const resolvePathGrades = useCallback(
@@ -691,29 +733,16 @@ export function MapCanvas({
       return;
     }
 
+    const isEraser = activeTool === 'eraser';
     const brushCell = brushCellForTool(activeTool);
-    if (brushCell != null) {
+    if (brushCell != null || isEraser) {
       const current = projectRef.current;
-      const base = ensureTerrain(current.settings, current.terrain);
       undoSnapshot.current = {
         ...current,
-        terrain: cloneTerrain(base),
+        terrain: cloneTerrain(ensureTerrain(current.settings, current.terrain)),
         features: current.features.slice(),
       };
-      const terrain = cloneTerrain(base);
-      const eraseFeatures = activeTool === 'eraser';
-      stampBrush(terrain, world, brushSizeM, brushThickness, brushCell);
-      let features = current.features;
-      if (eraseFeatures) {
-        const hit = findFeaturesInRadius(features, world, brushSizeM);
-        if (hit.length > 0) {
-          const ids = new Set(hit.map((f) => f.id));
-          features = features.filter((f) => !ids.has(f.id));
-        }
-      }
-      const next = { ...current, terrain, features };
-      projectRef.current = next;
-      onProjectChange(next);
+      applyBrushPoints([world]);
       brushPainting.current = true;
       lastBrushPoint.current = world;
       setBrushCursor(world);
@@ -909,18 +938,14 @@ export function MapCanvas({
     }
 
     if (brushPainting.current) {
-      const cell = brushCellForTool(tool);
-      if (cell != null) {
-        const last = lastBrushPoint.current;
-        const spacing = Math.max(1, brushSizeM * 0.35);
-        const eraseFeatures = tool === 'eraser';
-        if (!last || dist(last, world) >= spacing) {
-          if (last) stampBrushStroke(last, world, cell, eraseFeatures);
-          else stampBrushPoints([world], cell, eraseFeatures);
-          lastBrushPoint.current = world;
-        }
-        setBrushCursor(world);
+      const last = lastBrushPoint.current;
+      const spacing = Math.max(1, brushSizeM * 0.35);
+      if (!last || dist(last, world) >= spacing) {
+        if (last) stampBrushStroke(last, world);
+        else applyBrushPoints([world]);
+        lastBrushPoint.current = world;
       }
+      setBrushCursor(world);
       return;
     }
 
@@ -1112,7 +1137,9 @@ export function MapCanvas({
       return '编辑模式 · 点击选中 · 拖顶点 · -/= 换标高 · Delete 删除 · 右键取消';
     }
     if (tool === 'eraser') {
-      return '橡皮刷：擦回陆地并删除刷区内道路/河流等 · 调大小/厚度 · 右键撤销本笔';
+      return `橡皮 · 只擦「${eraserTargetLabel(eraserTarget)}」· 调大小${
+        eraserTarget === 'terrain' ? '/厚度' : ''
+      } · 右键撤销本笔`;
     }
     if (tool === 'label') return '点击地图放置标注 · 空格临时拖图';
     if (isBrushTool) {
@@ -1290,6 +1317,7 @@ export function MapCanvas({
         parallelEnabled={parallelEnabled}
         parallelSpacingM={parallelSpacingM}
         parallelSide={parallelSide}
+        eraserTarget={eraserTarget}
         canUndo={canUndo}
         onToolChange={onToolChange}
         onRoadLevelChange={onRoadLevelChange}
@@ -1298,6 +1326,7 @@ export function MapCanvas({
         onParallelEnabledChange={onParallelEnabledChange}
         onParallelSpacingChange={onParallelSpacingChange}
         onParallelSideChange={onParallelSideChange}
+        onEraserTargetChange={onEraserTargetChange}
         onUndo={onUndo}
       />
     </div>

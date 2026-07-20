@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
+import type { EraserTarget, FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
 import {
+  ERASER_TARGETS,
   FEATURE_GRADES,
   PATH_DRAW_MODES,
   PATH_GUIDED_TOOLS,
@@ -28,6 +29,7 @@ type Props = {
   parallelSide: ParallelSide;
   brushSizeM: number;
   brushThickness: number;
+  eraserTarget: EraserTarget;
   showJunctions: boolean;
   canUndo: boolean;
   onToolChange: (tool: Tool) => void;
@@ -39,6 +41,7 @@ type Props = {
   onParallelSideChange: (side: ParallelSide) => void;
   onBrushSizeChange: (m: number) => void;
   onBrushThicknessChange: (t: number) => void;
+  onEraserTargetChange: (target: EraserTarget) => void;
   onShowJunctionsChange: (show: boolean) => void;
   onUndo: () => void;
 };
@@ -47,7 +50,7 @@ const TERRAIN_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] =
   { id: 'land', label: '陆地', icon: '🏝️', hint: '陆地刷 · 擦回米白底图' },
   { id: 'ocean', label: '水域', icon: '🌊', hint: '水域刷 · 海/湖/河同色，形状自辨' },
   { id: 'mountain', label: '绿地', icon: '🌲', hint: '绿地/山地刷 · 平面绿色，无等高线' },
-  { id: 'eraser', label: '橡皮', icon: '🧹', hint: '橡皮刷 · 擦回陆地并删除刷区内要素' },
+  { id: 'eraser', label: '橡皮', icon: '🧹', hint: '橡皮刷 · 单选目标，按类型擦除' },
   { id: 'river', label: '河道线', icon: '💧', hint: '可选中心线标注；面状水域请用水域刷' },
 ];
 
@@ -83,6 +86,7 @@ export function Toolbar({
   parallelSide,
   brushSizeM,
   brushThickness,
+  eraserTarget,
   showJunctions,
   canUndo,
   onToolChange,
@@ -94,6 +98,7 @@ export function Toolbar({
   onParallelSideChange,
   onBrushSizeChange,
   onBrushThicknessChange,
+  onEraserTargetChange,
   onShowJunctionsChange,
   onUndo,
 }: Props) {
@@ -212,6 +217,28 @@ export function Toolbar({
             </div>
             {isTerrainBrush(tool) && (
               <div className="option-block">
+                {tool === 'eraser' && (
+                  <>
+                    <p className="option-label">擦除目标</p>
+                    <div className="tool-grid tool-grid-compact" role="radiogroup" aria-label="擦除目标">
+                      {ERASER_TARGETS.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={eraserTarget === t.id}
+                          className={
+                            eraserTarget === t.id ? 'tool-cell active' : 'tool-cell'
+                          }
+                          onClick={() => onEraserTargetChange(t.id)}
+                          title={t.hint}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
                 <p className="option-label">毛边刷</p>
                 <label className="brush-slider">
                   <span>大小 {Math.round(brushSizeM)} m</span>
@@ -224,20 +251,23 @@ export function Toolbar({
                     onChange={(e) => onBrushSizeChange(Number(e.target.value))}
                   />
                 </label>
-                <label className="brush-slider">
-                  <span>厚度 {brushThickness.toFixed(2)}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={brushThickness}
-                    onChange={(e) => onBrushThicknessChange(Number(e.target.value))}
-                  />
-                </label>
+                {(tool !== 'eraser' || eraserTarget === 'terrain') && (
+                  <label className="brush-slider">
+                    <span>厚度 {brushThickness.toFixed(2)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={brushThickness}
+                      onChange={(e) => onBrushThicknessChange(Number(e.target.value))}
+                    />
+                  </label>
+                )}
                 <p className="tool-note">
                   {tool === 'eraser'
-                    ? '橡皮刷擦回陆地，并删除刷过的道路/河流/标注'
+                    ? ERASER_TARGETS.find((t) => t.id === eraserTarget)?.hint ??
+                      '单选一类擦除，不会误伤其他图层'
                     : '底图默认全陆地 · 绿地为平面色块，无等高线'}
                 </p>
               </div>

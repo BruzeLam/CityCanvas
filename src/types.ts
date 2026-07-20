@@ -195,8 +195,29 @@ export const LAYER_LABELS: Record<FeatureKind, string> = {
 /** 地貌刷子工具：陆地 / 水域 / 绿地（山地平面色，非等高线） */
 export const TERRAIN_BRUSH_TOOLS: Tool[] = ['land', 'ocean', 'mountain'];
 
-/** 含橡皮：与地貌刷同样按住拖拽（橡皮额外擦除刷区内要素） */
+/** 含橡皮：与地貌刷同样按住拖拽（橡皮按目标只擦一类） */
 export const BRUSH_TOOLS: Tool[] = [...TERRAIN_BRUSH_TOOLS, 'eraser'];
+
+/** 橡皮单选目标：一次只擦一类，避免地貌和路网一起没 */
+export type EraserTarget = 'terrain' | 'road' | 'railway' | 'river' | 'label';
+
+export const DEFAULT_ERASER_TARGET: EraserTarget = 'terrain';
+
+export const ERASER_TARGETS: {
+  id: EraserTarget;
+  label: string;
+  hint: string;
+}[] = [
+  { id: 'terrain', label: '地貌', hint: '只把水域/绿地刷回陆地' },
+  { id: 'road', label: '道路', hint: '只删除刷区内道路' },
+  { id: 'railway', label: '铁路', hint: '只删除刷区内铁路' },
+  { id: 'river', label: '河道线', hint: '只删除刷区内河道中心线' },
+  { id: 'label', label: '标注', hint: '只删除刷区内标注' },
+];
+
+export function eraserTargetLabel(target: EraserTarget): string {
+  return ERASER_TARGETS.find((t) => t.id === target)?.label ?? target;
+}
 
 /** @deprecated 旧矢量面工具名，等同 TERRAIN_BRUSH_TOOLS */
 export const LANDFORM_TOOLS: Tool[] = TERRAIN_BRUSH_TOOLS;
