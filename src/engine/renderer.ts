@@ -438,21 +438,6 @@ function splitHostCasingAtMouths(
     else merged.push({ ...c });
   }
 
-  const at = (s: number): Point => {
-    const u = Math.max(0, Math.min(total, s));
-    for (let i = 0; i < points.length - 1; i++) {
-      if (u <= cum[i + 1] + 1e-9 || i === points.length - 2) {
-        const span = cum[i + 1] - cum[i] || 1;
-        const t = (u - cum[i]) / span;
-        return {
-          x: points[i].x + (points[i + 1].x - points[i].x) * t,
-          y: points[i].y + (points[i + 1].y - points[i].y) * t,
-        };
-      }
-    }
-    return { ...points[points.length - 1] };
-  };
-
   const segs: Point[][] = [];
   let cursor = 0;
   for (const c of merged) {
