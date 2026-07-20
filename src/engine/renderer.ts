@@ -371,6 +371,22 @@ function drawFreeEndCaps(
   }
 }
 
+function sketchRoadInk(casing: string): string {
+  // 线稿统一用深色轮廓，避免白/浅黄路缘在浅底上消失
+  const p = parseColor(casing);
+  if (!p) return '#3a3a3a';
+  const lum = (p.r * 299 + p.g * 587 + p.b * 114) / 1000;
+  if (lum > 140) return '#3a3a3a';
+  return casing;
+}
+
+function sketchRoadFill(color: string): string {
+  const p = parseColor(color);
+  if (!p) return '#fafaf8';
+  // 保留一点等级色相，但压亮，主要靠深色轮廓认路
+  return `rgb(${Math.round(p.r * 0.15 + 240)},${Math.round(p.g * 0.15 + 240)},${Math.round(p.b * 0.15 + 240)})`;
+}
+
 function drawRoadCasing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
@@ -378,7 +394,6 @@ function drawRoadCasing(
   style: MapStyle,
   joinedCaps: Set<string>,
 ) {
-  if (style === 'sketch') return;
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
   const levelEnd = (feature.roadLevelEnd ?? level) as RoadLevel;
   const roadStyle = ROAD_STYLES[level];
@@ -388,26 +403,30 @@ function drawRoadCasing(
 
   const width = roadStyle.width * viewport.zoom;
   const endWidth = endStyle.width * viewport.zoom;
-  const casingExtra = 2 * viewport.zoom;
+  const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * viewport.zoom) : 2 * viewport.zoom;
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
+  const casing0 =
+    style === 'sketch' ? sketchRoadInk(roadStyle.casing) : roadStyle.casing;
+  const casing1 =
+    style === 'sketch' ? sketchRoadInk(endStyle.casing) : endStyle.casing;
 
   if (isLevelBlendRoad(feature)) {
     strokePolylineSegments(
       ctx,
       points,
       Math.max(width, endWidth) + casingExtra,
-      (t) => lerpColor(roadStyle.casing, endStyle.casing, t),
+      (t) => lerpColor(casing0, casing1, t),
       strokeCap,
     );
   } else {
     tracePath(ctx, points, false);
-    ctx.strokeStyle = roadStyle.casing;
+    ctx.strokeStyle = casing0;
     ctx.lineWidth = width + casingExtra;
     ctx.lineJoin = 'round';
     ctx.lineCap = strokeCap;
     ctx.stroke();
   }
-  drawFreeEndCaps(ctx, freeEnds, viewport, width + casingExtra, roadStyle.casing);
+  drawFreeEndCaps(ctx, freeEnds, viewport, width + casingExtra, casing0);
 }
 
 function drawRoadFill(
@@ -426,9 +445,13 @@ function drawRoadFill(
 
   const width = roadStyle.width * viewport.zoom;
   const endWidth = endStyle.width * viewport.zoom;
-  const fillW = style === 'sketch' ? Math.max(1, width * 0.5) : width;
-  const fillColor = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
-  const endColor = style === 'blueprint' ? '#e8f4ff' : endStyle.color;
+  const fillW = style === 'sketch' ? Math.max(1.5, width * 0.72) : width;
+  let fillColor = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
+  let endColor = style === 'blueprint' ? '#e8f4ff' : endStyle.color;
+  if (style === 'sketch') {
+    fillColor = sketchRoadFill(roadStyle.color);
+    endColor = sketchRoadFill(endStyle.color);
+  }
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
 
   if (isLevelBlendRoad(feature) && style !== 'blueprint') {
@@ -437,7 +460,6 @@ function drawRoadFill(
       points,
       fillW,
       (t) => {
-        // 宽度也略作插值：分段线宽用平均
         void endWidth;
         return lerpColor(fillColor, endColor, t);
       },
