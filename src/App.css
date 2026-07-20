@@ -286,77 +286,101 @@ input {
 }
 
 .tb-tile-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 4px;
 }
 
 .tb-tile {
   position: relative;
   display: flex !important;
   flex-direction: column;
-  align-items: stretch;
-  gap: 3px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 40px;
   margin: 0 !important;
-  padding: 4px !important;
-  border: 1px solid var(--line) !important;
-  border-radius: 2px !important;
-  background: #fff !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
   color: var(--ink) !important;
   cursor: pointer;
   min-height: 0;
 }
 
-.tb-tile:hover:not(:disabled) {
-  border-color: var(--line-strong) !important;
-  background: var(--paper-deep) !important;
+.tb-tile:hover:not(:disabled) .tb-tile-glyph {
+  border-color: var(--line-strong);
+  background: var(--paper-deep);
 }
 
 .tb-tile.active {
-  border-color: var(--ink) !important;
-  background: var(--ink) !important;
-  color: #fff !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+}
+
+.tb-tile.active .tb-tile-glyph {
+  background: var(--ink);
+  border-color: var(--ink);
 }
 
 .tb-tile.soon,
 .tb-tile:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .tb-tile-glyph {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #fff;
   line-height: 0;
+  box-sizing: border-box;
 }
 
 .tb-glyph {
-  width: 100%;
-  height: auto;
+  width: 16px;
+  height: 10px;
   display: block;
 }
 
 .tb-tile-label {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 650;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   text-align: center;
+  line-height: 1.15;
+  max-width: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tb-tile-soon {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  font-size: 8px;
+  top: -2px;
+  right: 2px;
+  font-size: 7px;
   font-weight: 700;
-  padding: 0 3px;
-  border-radius: 1px;
+  line-height: 1;
+  padding: 1px 2px;
+  border-radius: 6px;
   background: rgba(0, 0, 0, 0.08);
   color: var(--muted);
 }
 
 .tb-tile.active .tb-tile-soon {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.2);
   color: #fff;
+}
+
+.tb-tile.active .tb-tile-label {
+  color: var(--ink);
 }
 
 .tb-subtabs {
