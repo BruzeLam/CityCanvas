@@ -15,7 +15,7 @@ const EPS = 1e-6;
 export const ENDPOINT_MERGE_M = 6;
 const JUNCTION_SNAP_M = 10;
 /** 匝道端点挂接到目标路（含中段）的搜索半径 */
-export const RAMP_ATTACH_M = 36;
+export const RAMP_ATTACH_M = 52;
 /** 超过此顶点数的折线在重织时做 RDP 简化（保留路口）；匝道更保守 */
 const DENSE_PATH_SIMPLIFY_AT = 48;
 const DENSE_PATH_SIMPLIFY_EPS_M = 0.35;
@@ -645,6 +645,7 @@ function findNearestMainAttachment(
   point: Point,
   maxDist: number,
   excludeId?: string,
+  preferClass?: Exclude<RoadLevel, 'ramp'> | null,
 ): {
   feature: MapFeature;
   point: Point;
@@ -659,16 +660,24 @@ function findNearestMainAttachment(
     t: number;
     grade: FeatureGrade;
     dist: number;
+    classScore: number;
   } | null = null;
 
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2) continue;
     if (excludeId && f.id === excludeId) continue;
+    if (f.kind !== 'road') continue;
     if (f.roadLevel === 'ramp' || isRampFeature(f)) continue;
+    const cls = normalizeRoadClass(f.roadLevel);
     for (let i = 0; i < f.points.length - 1; i++) {
       const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
       if (hit.dist > maxDist) continue;
-      if (!best || hit.dist < best.dist) {
+      // 距离优先；近距离内（8m）才用道路等级微调，避免吸到远端同级路
+      const classScore =
+        preferClass && hit.dist <= 8 && cls === preferClass ? -1.5 : 0;
+      const score = hit.dist + classScore;
+      const bestScore = best ? best.dist + best.classScore : Infinity;
+      if (!best || score < bestScore) {
         best = {
           feature: f,
           point: hit.point,
@@ -676,6 +685,7 @@ function findNearestMainAttachment(
           t: hit.t,
           grade: gradeAlongPath(f, hit.point),
           dist: hit.dist,
+          classScore,
         };
       }
     }
@@ -692,11 +702,8 @@ function findNearestMainAttachment(
 }
 
 /**
- * 匝道端点：就近吸到非匝道主路中心线（不强制预匹配标高），
- * 并按挂接处主路标高回写 grade / gradeEnd，保证同级平面汇入。
- *
- * 注意：端点拉通 + 连续标高后，tip 的「预设 grade」常与目标主路不一致，
- * 必须允许跨标高吸附到最近主路，再回写真实 grade。
+ * 匝道端点：始终吸到最近非匝道主路中心线（不先按预设标高，避免吸错），
+ * 并按挂接处主路标高回写 grade / gradeEnd。
  */
 function snapRampTipsToMains(
   features: MapFeature[],
@@ -707,34 +714,51 @@ function snapRampTipsToMains(
   let startG = featureGrade(incoming);
   let endG = featureGradeEnd(incoming);
 
+  const preferStart = incoming.roadLevelFrom
+    ? normalizeRoadClass(incoming.roadLevelFrom)
+    : null;
+  const preferEnd = incoming.roadLevelEnd
+    ? normalizeRoadClass(incoming.roadLevelEnd)
+    : null;
+
   const snapOne = (tipIndex: 0 | -1) => {
     const tip = tipIndex === 0 ? points[0] : points[points.length - 1];
-    const preferredGrade = tipIndex === 0 ? startG : endG;
+    const preferClass = tipIndex === 0 ? preferStart : preferEnd;
 
-    // 1) 标高匹配的主路  2) 任意标高最近主路（跳过其它匝道）
-    const hit:
-      | { feature: MapFeature; point: Point; segIndex: number; t: number; grade?: FeatureGrade }
-      | null =
-      findGradeAttachment(
-        nextFeatures,
-        tip,
-        preferredGrade,
-        RAMP_ATTACH_M,
-        incoming.id,
-        true,
-      ) ?? findNearestMainAttachment(nextFeatures, tip, RAMP_ATTACH_M, incoming.id);
-
+    // 只按距离找最近主路（预设标高常与目标不一致，先匹配标高会吸飞）
+    const hit = findNearestMainAttachment(
+      nextFeatures,
+      tip,
+      RAMP_ATTACH_M,
+      incoming.id,
+      preferClass,
+    );
     if (!hit) return;
 
-    const g = hit.grade ?? gradeAlongPath(hit.feature, hit.point);
-    if (tipIndex === 0) startG = g;
-    else endG = g;
+    if (tipIndex === 0) startG = hit.grade;
+    else endG = hit.grade;
 
+    // 端点落到中心线；若邻点过近则丢掉，避免尖角鼓包
     if (tipIndex === 0) {
-      points = [{ ...hit.point }, ...points.slice(1)];
+      const rest = points.slice(1);
+      while (
+        rest.length > 1 &&
+        dist(hit.point, rest[0]) < Math.max(4, ENDPOINT_MERGE_M * 0.6)
+      ) {
+        rest.shift();
+      }
+      points = [{ ...hit.point }, ...rest];
     } else {
-      points = [...points.slice(0, -1), { ...hit.point }];
+      const rest = points.slice(0, -1);
+      while (
+        rest.length > 1 &&
+        dist(hit.point, rest[rest.length - 1]) < Math.max(4, ENDPOINT_MERGE_M * 0.6)
+      ) {
+        rest.pop();
+      }
+      points = [...rest, { ...hit.point }];
     }
+
     nextFeatures = nextFeatures.map((f) =>
       f.id === hit.feature.id
         ? insertAttachmentOnPeer(f, hit.segIndex, hit.t, hit.point)

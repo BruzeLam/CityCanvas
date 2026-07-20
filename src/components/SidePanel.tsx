@@ -105,7 +105,7 @@ export function SidePanel({
                       selected.lineName ? ` · ${selected.lineName}` : ''
                     }`
                   : selected.kind === 'station'
-                    ? `站点 · ${selected.stationStyle === 'dot' ? '有轨圆点' : '地铁药丸'}${
+                    ? `站点 · ${selected.stationStyle === 'dot' ? '有轨圆点' : '地铁圆点'}${
                         selected.lineName ? ` · ${selected.lineName}` : ''
                       }`
                     : LAYER_LABELS[selected.kind]}

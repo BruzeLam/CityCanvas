@@ -138,14 +138,13 @@ export function exportToSvg(project: CityProject): string {
       const color =
         featureLineColor(f) ??
         (f.stationStyle === 'dot' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR);
-      const heading = ((f.stationHeading ?? 0) * 180) / Math.PI;
       if (f.stationStyle === 'dot') {
         parts.push(
           `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="14" fill="${color}" stroke="#ffffff" stroke-width="4"/>`,
         );
       } else {
         parts.push(
-          `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)}) rotate(${heading.toFixed(1)})"><rect x="-22" y="-10" width="44" height="20" rx="10" fill="#ffffff" stroke="${color}" stroke-width="5"/></g>`,
+          `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="16" fill="#ffffff" stroke="#111111" stroke-width="5"/>`,
         );
       }
     }

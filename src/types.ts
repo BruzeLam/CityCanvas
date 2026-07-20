@@ -82,7 +82,7 @@ export type MapFeature = {
   metroColor?: string;
   /** 线路名（地铁 / 有轨，可自定义） */
   lineName?: string;
-  /** 站点形状：地铁药丸 / 有轨圆点 */
+  /** 站点形状：地铁白底黑边圆 / 有轨色点 */
   stationStyle?: StationStyle;
   /** 站点沿线路朝向（弧度）；缺省水平 */
   stationHeading?: number;

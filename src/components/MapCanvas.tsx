@@ -1331,7 +1331,7 @@ export function MapCanvas({
     if (tool === 'station') {
       return stationStyle === 'dot'
         ? '点击放置有轨站（小圆点）· 靠近线路自动吸附 · 空格拖图'
-        : '点击放置地铁站（药丸）· 靠近线路自动吸附 · 空格拖图';
+        : '点击放置地铁站（白底黑边）· 靠近线路自动吸附 · 空格拖图';
     }    if (isBrushTool) {
       return '按住拖拽绘制地貌 · 调节大小/厚度 · 右键撤销本笔 · 空格拖图';
     }

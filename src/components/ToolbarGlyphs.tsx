@@ -250,19 +250,17 @@ export function GlyphStationRect({ active }: GlyphProps) {
   );
 }
 
-export function GlyphStationRound({ active, color = '#0f0f96' }: GlyphProps & { color?: string }) {
+export function GlyphStationRound({ active }: GlyphProps) {
   return (
     <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
-      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#1a1a2e' : '#f0f0f6'} />
-      <rect
-        x="5"
-        y="8"
-        width="14"
-        height="7"
-        rx="3.5"
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#1a1a1a' : '#f0f0f0'} />
+      <circle
+        cx="12"
+        cy="12"
+        r="5.2"
         fill="#fff"
-        stroke={color}
-        strokeWidth="1.8"
+        stroke={active ? '#111' : '#222'}
+        strokeWidth="2"
       />
     </svg>
   );

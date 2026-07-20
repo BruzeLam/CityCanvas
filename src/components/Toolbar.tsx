@@ -22,7 +22,6 @@ import {
 import {
   CHENGDU_METRO_PRESETS,
   CHENGDU_TRAM_PRESETS,
-  presetLabelsOf,
 } from '../constants/metroPresets';
 import {
   PARALLEL_SIDES,
@@ -92,9 +91,6 @@ const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   RoadLevel,
   (typeof ROAD_STYLES)[RoadLevel],
 ][];
-
-const METRO_PRESET_LABELS = presetLabelsOf(CHENGDU_METRO_PRESETS);
-const TRAM_PRESET_LABELS = presetLabelsOf(CHENGDU_TRAM_PRESETS);
 
 const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t) || t === 'eraser';
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
@@ -467,12 +463,6 @@ export function Toolbar({
                   maxLength={24}
                   onChange={(e) => onLineNameChange(e.target.value)}
                 />
-                <p className="option-label">
-                  {railKind === 'metro' ? '成都地铁色' : '有轨配色'}
-                  <span className="option-hint">
-                    {railKind === 'metro' ? '已开通 + 大红' : '蓉1/蓉2 + 常用色'}
-                  </span>
-                </p>
                 <div className="chip-row metro-swatches">
                   {(railKind === 'metro' ? CHENGDU_METRO_PRESETS : CHENGDU_TRAM_PRESETS).map(
                     (p) => (
@@ -482,14 +472,7 @@ export function Toolbar({
                         className={metroColor === p.color ? 'swatch active' : 'swatch'}
                         style={{ background: p.color }}
                         title={p.label}
-                        onClick={() => {
-                          onMetroColorChange(p.color);
-                          const labels =
-                            railKind === 'metro' ? METRO_PRESET_LABELS : TRAM_PRESET_LABELS;
-                          if (!lineName.trim() || labels.has(lineName.trim())) {
-                            onLineNameChange(p.label);
-                          }
-                        }}
+                        onClick={() => onMetroColorChange(p.color)}
                       />
                     ),
                   )}
@@ -510,10 +493,9 @@ export function Toolbar({
                 glyph={
                   <GlyphStationRound
                     active={tool === 'station' && stationStyle === 'pill'}
-                    color={metroColor}
                   />
                 }
-                title="药丸站台 · 吸附地铁线"
+                title="白底黑边圆点 · 吸附地铁线"
                 onClick={() => {
                   selectTransit('rail');
                   onRailKindChange('metro');

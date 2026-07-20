@@ -570,16 +570,10 @@ function App() {
               if (isMetroPreset || metroColor === DEFAULT_METRO_COLOR) {
                 setMetroColor(DEFAULT_TRAM_COLOR);
               }
-              if (!lineName.trim() || CHENGDU_METRO_PRESETS.some((p) => p.label === lineName)) {
-                setLineName('蓉2号线');
-              }
             } else if (k === 'metro') {
               const isTramPreset = CHENGDU_TRAM_PRESETS.some((p) => p.color === metroColor);
               if (isTramPreset || metroColor === DEFAULT_TRAM_COLOR) {
                 setMetroColor(DEFAULT_METRO_COLOR);
-              }
-              if (!lineName.trim() || CHENGDU_TRAM_PRESETS.some((p) => p.label === lineName)) {
-                setLineName('1号线');
               }
             }
           }}
