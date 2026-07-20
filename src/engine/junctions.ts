@@ -6,6 +6,7 @@ import {
   isLevelBlendRoad,
   isRampFeature,
   normalizeRoadClass,
+  rampSolidClass,
   ROAD_CLASS_RANK,
   ROAD_STYLES,
 } from '../types';
@@ -1369,11 +1370,57 @@ export type JoinMouth = {
   hostWidth: number;
   hostColor: string;
   hostCasing: string;
+  /** 汇入方（较窄 tip 路）配色；与宿主不同时画渐变 */
+  tipColor: string;
+  tipCasing: string;
+  tipWidth: number;
+  /** 汇入方向：从路内指向 junction（单位向量，屏幕绘制渐变用） */
+  approachX: number;
+  approachY: number;
 };
+
+function roadPaintStyle(
+  f: MapFeature,
+  end: 'start' | 'end',
+): { color: string; casing: string; width: number } {
+  const width = roadBodyWidthM(f);
+  if (f.roadLevel === 'ramp') {
+    if (isLevelBlendRoad(f)) {
+      const from = ROAD_STYLES[normalizeRoadClass(f.roadLevelFrom ?? 'local')];
+      const to = ROAD_STYLES[normalizeRoadClass(f.roadLevelEnd ?? 'local')];
+      const pick = end === 'start' ? from : to;
+      return { color: pick.color, casing: pick.casing, width };
+    }
+    const solid = rampSolidClass(f);
+    const style = ROAD_STYLES[solid ?? 'ramp'];
+    return { color: style.color, casing: style.casing, width };
+  }
+  const cls = normalizeRoadClass(f.roadLevel);
+  const style = ROAD_STYLES[cls];
+  return { color: style.color, casing: style.casing, width };
+}
+
+/** 从路内指向 tip/junction 的单位方向 */
+function approachDirAtTip(f: MapFeature, end: 'start' | 'end'): Point {
+  const pts = f.points;
+  if (pts.length < 2) return { x: 1, y: 0 };
+  let dx: number;
+  let dy: number;
+  if (end === 'start') {
+    dx = pts[0].x - pts[1].x;
+    dy = pts[0].y - pts[1].y;
+  } else {
+    const n = pts.length - 1;
+    dx = pts[n].x - pts[n - 1].x;
+    dy = pts[n].y - pts[n - 1].y;
+  }
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: dx / len, y: dy / len };
+}
 
 /**
  * 汇入口：端点挂在他路中心线/顶点，或 degree≥2 的路口节点。
- * 取接触道路中最宽的一条作为宿主配色与开口半径。
+ * 取最宽路为宿主；最窄 tip 方为汇入色，异级时渲染渐变过渡。
  */
 export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
   type Acc = {
@@ -1383,8 +1430,57 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     hostRank: number;
     hostColor: string;
     hostCasing: string;
+    tipWidth: number;
+    tipColor: string;
+    tipCasing: string;
+    approachX: number;
+    approachY: number;
   };
   const byKey = new Map<string, Acc>();
+
+  const upsert = (key: string, patch: Partial<Acc> & { point: Point; grade: FeatureGrade }) => {
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, {
+        point: { ...patch.point },
+        grade: patch.grade,
+        hostWidth: patch.hostWidth ?? 0,
+        hostRank: patch.hostRank ?? 0,
+        hostColor: patch.hostColor ?? ROAD_STYLES.local.color,
+        hostCasing: patch.hostCasing ?? ROAD_STYLES.local.casing,
+        tipWidth: patch.tipWidth ?? 0,
+        tipColor: patch.tipColor ?? patch.hostColor ?? ROAD_STYLES.local.color,
+        tipCasing: patch.tipCasing ?? patch.hostCasing ?? ROAD_STYLES.local.casing,
+        approachX: patch.approachX ?? 1,
+        approachY: patch.approachY ?? 0,
+      });
+      return;
+    }
+    if (patch.hostWidth != null && patch.hostWidth > prev.hostWidth + 0.05) {
+      prev.hostWidth = patch.hostWidth;
+      prev.hostRank = patch.hostRank ?? prev.hostRank;
+      prev.hostColor = patch.hostColor ?? prev.hostColor;
+      prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
+    } else if (
+      patch.hostWidth != null &&
+      Math.abs(patch.hostWidth - prev.hostWidth) < 0.05 &&
+      (patch.hostRank ?? 0) > prev.hostRank
+    ) {
+      prev.hostRank = patch.hostRank ?? prev.hostRank;
+      prev.hostColor = patch.hostColor ?? prev.hostColor;
+      prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
+    }
+    if (
+      patch.tipWidth != null &&
+      (prev.tipWidth < 0.5 || patch.tipWidth < prev.tipWidth - 0.05)
+    ) {
+      prev.tipWidth = patch.tipWidth;
+      prev.tipColor = patch.tipColor ?? prev.tipColor;
+      prev.tipCasing = patch.tipCasing ?? prev.tipCasing;
+      if (patch.approachX != null) prev.approachX = patch.approachX;
+      if (patch.approachY != null) prev.approachY = patch.approachY;
+    }
+  };
 
   const considerHost = (
     point: Point,
@@ -1397,32 +1493,53 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     const rank = ROAD_CLASS_RANK[cls];
     const style = ROAD_STYLES[cls];
     const key = `${grade}|${quantizeKey(point)}`;
-    const prev = byKey.get(key);
-    if (
-      !prev ||
-      width > prev.hostWidth + 0.05 ||
-      (Math.abs(width - prev.hostWidth) < 0.05 && rank > prev.hostRank)
-    ) {
-      byKey.set(key, {
-        point: prev?.point ?? { ...point },
-        grade,
-        hostWidth: width,
-        hostRank: rank,
-        hostColor: style.color,
-        hostCasing: style.casing,
-      });
-    }
+    upsert(key, {
+      point,
+      grade,
+      hostWidth: width,
+      hostRank: rank,
+      hostColor: style.color,
+      hostCasing: style.casing,
+    });
+  };
+
+  const considerJoin = (
+    joiner: MapFeature,
+    end: 'start' | 'end',
+    tipPoint: Point,
+    host: MapFeature,
+  ) => {
+    if (host.kind !== 'road' || host.points.length < 2) return;
+    const hostGrade = isRampFeature(host)
+      ? gradeAlongPath(host, tipPoint)
+      : featureGrade(host);
+    const hostCls = roadVisualClass(host);
+    const hostWidth = roadBodyWidthM(host);
+    const hostStyle = ROAD_STYLES[hostCls];
+    const joinStyle = roadPaintStyle(joiner, end);
+    const dir = approachDirAtTip(joiner, end);
+    const key = `${hostGrade}|${quantizeKey(tipPoint)}`;
+    upsert(key, {
+      point: tipPoint,
+      grade: hostGrade,
+      hostWidth,
+      hostRank: ROAD_CLASS_RANK[hostCls],
+      hostColor: hostStyle.color,
+      hostCasing: hostStyle.casing,
+      tipWidth: joinStyle.width,
+      tipColor: joinStyle.color,
+      tipCasing: joinStyle.casing,
+      approachX: dir.x,
+      approachY: dir.y,
+    });
   };
 
   // 端点挂接：tip 落在他路 → 记一口
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
-    const tips: { point: Point; grade: FeatureGrade }[] = [
-      { point: f.points[0], grade: featureGrade(f) },
-      {
-        point: f.points[f.points.length - 1],
-        grade: featureGradeEnd(f),
-      },
+    const tips: { point: Point; end: 'start' | 'end' }[] = [
+      { point: f.points[0], end: 'start' },
+      { point: f.points[f.points.length - 1], end: 'end' },
     ];
     for (const tip of tips) {
       for (const host of features) {
@@ -1446,7 +1563,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
             }
           }
         }
-        if (hit) considerHost(tip.point, tip.grade, host);
+        if (hit) considerJoin(f, tip.end, tip.point, host);
       }
     }
   }
@@ -1471,6 +1588,11 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     hostWidth: a.hostWidth,
     hostColor: a.hostColor,
     hostCasing: a.hostCasing,
+    tipColor: a.tipColor,
+    tipCasing: a.tipCasing,
+    tipWidth: a.tipWidth,
+    approachX: a.approachX,
+    approachY: a.approachY,
   }));
 }
 

@@ -297,15 +297,72 @@ function drawJunctionMouths(
   viewport: Viewport,
   style: MapStyle,
 ) {
+  const casingExtra =
+    style === 'sketch' ? Math.max(1.5, 1.8 * viewport.zoom) : 2 * viewport.zoom;
+  const fillScale = style === 'sketch' ? 0.72 : 1;
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
     const p = toScreen(m.point, viewport);
-    const r = Math.max(2, (m.hostWidth * 0.5) * viewport.zoom);
-    let fill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
-    if (style === 'sketch') fill = sketchRoadFill(m.hostColor);
+    const halfW = (m.hostWidth * 0.5) * viewport.zoom;
+    const fillR = Math.max(2, halfW * fillScale);
+    const casingR = Math.max(fillR + 1.5, halfW + casingExtra + 0.5);
+
+    let hostFill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
+    let tipFill = style === 'blueprint' ? '#e8f4ff' : m.tipColor;
+    let hostCasing =
+      style === 'sketch' ? sketchRoadInk(m.hostCasing) : m.hostCasing;
+    let tipCasing =
+      style === 'sketch' ? sketchRoadInk(m.tipCasing) : m.tipCasing;
+    if (style === 'sketch') {
+      hostFill = sketchRoadFill(m.hostColor);
+      tipFill = sketchRoadFill(m.tipColor);
+    }
+
+    const useBlend =
+      style !== 'blueprint' &&
+      (m.tipColor !== m.hostColor ||
+        m.tipCasing !== m.hostCasing ||
+        m.tipWidth + 0.05 < m.hostWidth);
+
+    // 路内方向（与 approach 相反）：渐变从汇入路色 → 宿主路色
+    const inwardX = -m.approachX;
+    const inwardY = -m.approachY;
+
+    const fillPaint = (): string | CanvasGradient => {
+      if (!useBlend) return hostFill;
+      const g = ctx.createLinearGradient(
+        p.x + inwardX * fillR,
+        p.y + inwardY * fillR,
+        p.x - inwardX * fillR * 0.15,
+        p.y - inwardY * fillR * 0.15,
+      );
+      g.addColorStop(0, tipFill);
+      g.addColorStop(0.42, lerpColor(tipFill, hostFill, 0.55));
+      g.addColorStop(1, hostFill);
+      return g;
+    };
+
+    const casingPaint = (): string | CanvasGradient => {
+      if (!useBlend) return hostCasing;
+      const g = ctx.createLinearGradient(
+        p.x + inwardX * casingR,
+        p.y + inwardY * casingR,
+        p.x - inwardX * casingR * 0.12,
+        p.y - inwardY * casingR * 0.12,
+      );
+      g.addColorStop(0, tipCasing);
+      g.addColorStop(0.38, lerpColor(tipCasing, hostCasing, 0.5));
+      g.addColorStop(1, hostCasing);
+      return g;
+    };
+
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = fill;
+    ctx.arc(p.x, p.y, casingR, 0, Math.PI * 2);
+    ctx.fillStyle = casingPaint();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, fillR, 0, Math.PI * 2);
+    ctx.fillStyle = fillPaint();
     ctx.fill();
   }
 }
@@ -392,6 +449,7 @@ function drawRoadsMerged(
         viewport,
         style,
         joinedCaps,
+        casingTrim,
         piece.subPoints,
       );
     }
@@ -411,6 +469,7 @@ function drawRoadsMerged(
         viewport,
         style,
         joinedCaps,
+        casingTrim,
         piece.subPoints,
       );
     }
@@ -432,10 +491,11 @@ function drawRoadsMerged(
         viewport,
         style,
         joinedCaps,
+        casingTrim,
         piece.subPoints,
       );
     }
-    // 宿主色圆盘撕开汇入口，盖住异级路缘横杠
+    // 宿主渐变圆盘：撕开汇入口，异级时汇入色→宿主色过渡
     drawJunctionMouths(ctx, mouths, band, viewport, style);
     i = j;
   }
@@ -1019,6 +1079,7 @@ function drawRoadFill(
   viewport: Viewport,
   style: MapStyle,
   joinedCaps: Set<string>,
+  casingTrim: Map<string, number>,
   subPoints?: Point[],
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
@@ -1032,7 +1093,27 @@ function drawRoadFill(
   const fromStyle = ROAD_STYLES[normalizeRoadClass(fromLevel)];
   const endStyle = ROAD_STYLES[normalizeRoadClass(levelEnd)];
 
-  const world = subPoints && subPoints.length >= 2 ? subPoints : feature.points;
+  let world = subPoints && subPoints.length >= 2 ? subPoints : feature.points;
+  if (world.length < 2) return;
+
+  const tipEps = 0.75;
+  const startsAtTip =
+    Math.hypot(world[0].x - feature.points[0].x, world[0].y - feature.points[0].y) <
+    tipEps;
+  const endsAtTip =
+    Math.hypot(
+      world[world.length - 1].x - feature.points[feature.points.length - 1].x,
+      world[world.length - 1].y - feature.points[feature.points.length - 1].y,
+    ) < tipEps;
+  let trimStart = 0;
+  let trimEnd = 0;
+  if (startsAtTip) trimStart = casingTrim.get(`${feature.id}|start`) ?? 0;
+  if (endsAtTip) trimEnd = casingTrim.get(`${feature.id}|end`) ?? 0;
+  if (trimStart > 0 || trimEnd > 0) {
+    const trimmed = trimPolylineEnds(world, trimStart, trimEnd);
+    if (trimmed) world = trimmed;
+  }
+
   const points = world.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
@@ -1056,20 +1137,15 @@ function drawRoadFill(
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   const midFill = blend ? lerpColor(fillColor, endColor, 0.5) : fillColor;
 
-  const tipEps = 0.75;
-  const startsAtTip =
-    Math.hypot(world[0].x - feature.points[0].x, world[0].y - feature.points[0].y) < tipEps;
-  const endsAtTip =
-    Math.hypot(
-      world[world.length - 1].x - feature.points[feature.points.length - 1].x,
-      world[world.length - 1].y - feature.points[feature.points.length - 1].y,
-    ) < tipEps;
   const splitInterior = Boolean(subPoints) && !(startsAtTip && endsAtTip);
-  const cap: CanvasLineCap = splitInterior
-    ? startsAtTip || endsAtTip
-      ? strokeCap
-      : 'butt'
-    : strokeCap;
+  const opened = trimStart > 0 || trimEnd > 0;
+  const cap: CanvasLineCap = opened
+    ? 'butt'
+    : splitInterior
+      ? startsAtTip || endsAtTip
+        ? strokeCap
+        : 'butt'
+      : strokeCap;
 
   if (blend && style !== 'blueprint') {
     const g = ctx.createLinearGradient(
