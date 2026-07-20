@@ -68,7 +68,6 @@ import {
   guideFromDraft,
   type ParallelSide,
 } from '../engine/parallelOffset';
-import { FloatingDock } from './FloatingDock';
 
 type Props = {
   project: CityProject;
@@ -85,17 +84,8 @@ type Props = {
   parallelSpacingM: number;
   parallelSide: ParallelSide;
   selectedFeatureId: string | null;
-  canUndo: boolean;
   onSelectFeature: (id: string | null) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
-  onToolChange: (tool: Tool) => void;
-  onRoadLevelChange: (level: RoadLevel) => void;
-  onPathDrawModeChange: (mode: PathDrawMode) => void;
-  onParallelEnabledChange: (on: boolean) => void;
-  onParallelSpacingChange: (m: number) => void;
-  onParallelSideChange: (side: ParallelSide) => void;
-  onEraserTargetChange: (target: EraserTarget) => void;
-  onUndo: () => void;
   onProjectChange: (
     project: CityProject,
     opts?: { undoSnapshot?: CityProject },
@@ -148,17 +138,8 @@ export function MapCanvas({
   parallelSpacingM,
   parallelSide,
   selectedFeatureId,
-  canUndo,
   onSelectFeature,
   onDrawGradeChange,
-  onToolChange,
-  onRoadLevelChange,
-  onPathDrawModeChange,
-  onParallelEnabledChange,
-  onParallelSpacingChange,
-  onParallelSideChange,
-  onEraserTargetChange,
-  onUndo,
   onProjectChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1394,26 +1375,6 @@ export function MapCanvas({
           ))}
         </div>
       )}
-      <FloatingDock
-        tool={tool}
-        roadLevel={roadLevel}
-        drawGrade={drawGrade}
-        pathDrawMode={pathDrawMode}
-        parallelEnabled={parallelEnabled}
-        parallelSpacingM={parallelSpacingM}
-        parallelSide={parallelSide}
-        eraserTarget={eraserTarget}
-        canUndo={canUndo}
-        onToolChange={onToolChange}
-        onRoadLevelChange={onRoadLevelChange}
-        onDrawGradeChange={onDrawGradeChange}
-        onPathDrawModeChange={onPathDrawModeChange}
-        onParallelEnabledChange={onParallelEnabledChange}
-        onParallelSpacingChange={onParallelSpacingChange}
-        onParallelSideChange={onParallelSideChange}
-        onEraserTargetChange={onEraserTargetChange}
-        onUndo={onUndo}
-      />
     </div>
   );
 }

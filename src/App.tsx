@@ -538,20 +538,8 @@ function App() {
           brushThickness={brushThickness}
           eraserTarget={eraserTarget}
           selectedFeatureId={selectedFeatureId}
-          canUndo={history.length > 0}
           onSelectFeature={setSelectedFeatureId}
           onDrawGradeChange={setDrawGrade}
-          onToolChange={(t) => {
-            setTool(t);
-            if (t !== 'select') setSelectedFeatureId(null);
-          }}
-          onRoadLevelChange={setRoadLevel}
-          onPathDrawModeChange={setPathDrawMode}
-          onParallelEnabledChange={setParallelEnabled}
-          onParallelSpacingChange={setParallelSpacingM}
-          onParallelSideChange={setParallelSide}
-          onEraserTargetChange={setEraserTarget}
-          onUndo={handleUndo}
           onProjectChange={updateProject}
         />
         <SidePanel
