@@ -1374,9 +1374,14 @@ export type JoinMouth = {
   tipColor: string;
   tipCasing: string;
   tipWidth: number;
-  /** 汇入方向：从路内指向 junction（单位向量，屏幕绘制渐变用） */
+  /** 汇入方向：从路内指向 junction（单位向量） */
   approachX: number;
   approachY: number;
+  /** 宿主中心线切向（单位向量），用于沿主路抹边线 */
+  hostDirX: number;
+  hostDirY: number;
+  joinerId: string;
+  joinerEnd: 'start' | 'end';
 };
 
 function roadPaintStyle(
@@ -1418,9 +1423,28 @@ function approachDirAtTip(f: MapFeature, end: 'start' | 'end'): Point {
   return { x: dx / len, y: dy / len };
 }
 
+/** 宿主在 tip 处的中心线切向 */
+function hostTangentAt(host: MapFeature, tip: Point): Point {
+  let bestD = Infinity;
+  let best = { x: 1, y: 0 };
+  for (let i = 0; i < host.points.length - 1; i++) {
+    const a = host.points[i];
+    const b = host.points[i + 1];
+    const on = closestOnSegment(tip, { a, b });
+    if (on.dist < bestD) {
+      bestD = on.dist;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      best = { x: dx / len, y: dy / len };
+    }
+  }
+  return best;
+}
+
 /**
- * 汇入口：端点挂在他路中心线/顶点，或 degree≥2 的路口节点。
- * 取最宽路为宿主；最窄 tip 方为汇入色，异级时渲染渐变过渡。
+ * 汇入口：端点挂在他路中心线/顶点。
+ * 取最宽路为宿主；记录汇入臂与宿主切向，供渲染抹边线 + tip 渐变。
  */
 export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
   type Acc = {
@@ -1435,6 +1459,10 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     tipCasing: string;
     approachX: number;
     approachY: number;
+    hostDirX: number;
+    hostDirY: number;
+    joinerId: string;
+    joinerEnd: 'start' | 'end';
   };
   const byKey = new Map<string, Acc>();
 
@@ -1453,6 +1481,10 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
         tipCasing: patch.tipCasing ?? patch.hostCasing ?? ROAD_STYLES.local.casing,
         approachX: patch.approachX ?? 1,
         approachY: patch.approachY ?? 0,
+        hostDirX: patch.hostDirX ?? 1,
+        hostDirY: patch.hostDirY ?? 0,
+        joinerId: patch.joinerId ?? '',
+        joinerEnd: patch.joinerEnd ?? 'end',
       });
       return;
     }
@@ -1461,6 +1493,8 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       prev.hostRank = patch.hostRank ?? prev.hostRank;
       prev.hostColor = patch.hostColor ?? prev.hostColor;
       prev.hostCasing = patch.hostCasing ?? prev.hostCasing;
+      if (patch.hostDirX != null) prev.hostDirX = patch.hostDirX;
+      if (patch.hostDirY != null) prev.hostDirY = patch.hostDirY;
     } else if (
       patch.hostWidth != null &&
       Math.abs(patch.hostWidth - prev.hostWidth) < 0.05 &&
@@ -1479,28 +1513,9 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       prev.tipCasing = patch.tipCasing ?? prev.tipCasing;
       if (patch.approachX != null) prev.approachX = patch.approachX;
       if (patch.approachY != null) prev.approachY = patch.approachY;
+      if (patch.joinerId) prev.joinerId = patch.joinerId;
+      if (patch.joinerEnd) prev.joinerEnd = patch.joinerEnd;
     }
-  };
-
-  const considerHost = (
-    point: Point,
-    grade: FeatureGrade,
-    host: MapFeature,
-  ) => {
-    if (host.kind !== 'road' || host.points.length < 2) return;
-    const cls = roadVisualClass(host);
-    const width = roadBodyWidthM(host);
-    const rank = ROAD_CLASS_RANK[cls];
-    const style = ROAD_STYLES[cls];
-    const key = `${grade}|${quantizeKey(point)}`;
-    upsert(key, {
-      point,
-      grade,
-      hostWidth: width,
-      hostRank: rank,
-      hostColor: style.color,
-      hostCasing: style.casing,
-    });
   };
 
   const considerJoin = (
@@ -1518,6 +1533,7 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     const hostStyle = ROAD_STYLES[hostCls];
     const joinStyle = roadPaintStyle(joiner, end);
     const dir = approachDirAtTip(joiner, end);
+    const ht = hostTangentAt(host, tipPoint);
     const key = `${hostGrade}|${quantizeKey(tipPoint)}`;
     upsert(key, {
       point: tipPoint,
@@ -1531,10 +1547,14 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
       tipCasing: joinStyle.casing,
       approachX: dir.x,
       approachY: dir.y,
+      hostDirX: ht.x,
+      hostDirY: ht.y,
+      joinerId: joiner.id,
+      joinerEnd: end,
     });
   };
 
-  // 端点挂接：tip 落在他路 → 记一口
+  // 端点挂接：tip 落在他路 → 记一口（不含纯十字交叉的「节点鼓包」）
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
     const tips: { point: Point; end: 'start' | 'end' }[] = [
@@ -1568,20 +1588,6 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     }
   }
 
-  // 多路共享路口节点
-  for (const node of collectJunctionNodes(features)) {
-    if (node.degree < 2) continue;
-    for (const f of features) {
-      if (!isPathKind(f) || f.kind !== 'road' || f.points.length < 2) continue;
-      for (const p of f.points) {
-        if (dist(p, node.point) <= ENDPOINT_MERGE_M) {
-          considerHost(node.point, node.grade, f);
-          break;
-        }
-      }
-    }
-  }
-
   return [...byKey.values()].map((a) => ({
     point: a.point,
     grade: a.grade,
@@ -1593,15 +1599,21 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     tipWidth: a.tipWidth,
     approachX: a.approachX,
     approachY: a.approachY,
+    hostDirX: a.hostDirX,
+    hostDirY: a.hostDirY,
+    joinerId: a.joinerId,
+    joinerEnd: a.joinerEnd,
   }));
 }
 
 /**
- * 已接合端点应对宿主半宽截断路缘：key = `${featureId}|start|end` → 截断米数。
+ * 已接合端点应对宿主半宽 + 路缘厚度截断路缘：key = `${featureId}|start|end` → 截断米数。
  */
 export function collectCasingTrimM(features: MapFeature[]): Map<string, number> {
   const trim = new Map<string, number>();
   const joined = collectJoinedCaps(features);
+  /** 路缘比路面大约外扩 1m（屏幕 2px/zoom 的世界近似） */
+  const CASING_PAD_M = 1.25;
 
   const hostHalfAt = (tip: Point, selfId: string): number => {
     let best = 0;
@@ -1627,7 +1639,7 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
         }
       }
       if (!hit) continue;
-      best = Math.max(best, roadBodyWidthM(host) * 0.5);
+      best = Math.max(best, roadBodyWidthM(host) * 0.5 + CASING_PAD_M);
     }
     return best;
   };
