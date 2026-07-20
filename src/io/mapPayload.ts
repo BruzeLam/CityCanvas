@@ -54,11 +54,27 @@ export function payloadToProject(payload: MapPayload, cloudId?: string): CityPro
           : undefined,
         gradeEnd:
           needsGrade && typeof f.gradeEnd === 'number' ? clampGrade(f.gradeEnd) : undefined,
+        roadLevel:
+          kind === 'road' &&
+          typeof f.roadLevel === 'string' &&
+          f.roadLevel in ROAD_STYLES
+            ? (f.roadLevel as RoadLevel)
+            : kind === 'road'
+              ? 'local'
+              : undefined,
         roadLevelEnd:
           kind === 'road' &&
           typeof f.roadLevelEnd === 'string' &&
-          f.roadLevelEnd in ROAD_STYLES
+          f.roadLevelEnd in ROAD_STYLES &&
+          f.roadLevelEnd !== 'ramp'
             ? (f.roadLevelEnd as RoadLevel)
+            : undefined,
+        roadLevelFrom:
+          kind === 'road' &&
+          typeof f.roadLevelFrom === 'string' &&
+          f.roadLevelFrom in ROAD_STYLES &&
+          f.roadLevelFrom !== 'ramp'
+            ? (f.roadLevelFrom as RoadLevel)
             : undefined,
       };
     })

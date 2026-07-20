@@ -3,7 +3,7 @@ import { createTerrain } from './engine/terrain';
 
 export type Point = { x: number; y: number };
 
-export type RoadLevel = 'expressway' | 'arterial' | 'collector' | 'local';
+export type RoadLevel = 'expressway' | 'arterial' | 'collector' | 'local' | 'ramp';
 
 /** 轨道线路细分（同属 kind=railway，用 railKind 区分画法） */
 export type RailKind = 'railway' | 'hsr' | 'metro' | 'tram';
@@ -60,7 +60,9 @@ export type MapFeature = {
   points: Point[];
   closed: boolean;
   roadLevel?: RoadLevel;
-  /** 匝道终点道路等级（与 roadLevel 不同时绘制配色渐变） */
+  /** 匝道渐变起点色所取等级（接到的出发道路） */
+  roadLevelFrom?: RoadLevel;
+  /** 匝道终点道路等级（与起点不同时绘制配色渐变） */
   roadLevelEnd?: RoadLevel;
   /** 轨道细分；缺省视为普通铁路 */
   railKind?: RailKind;
@@ -92,15 +94,24 @@ export function isRampFeature(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): boolea
   return f.gradeEnd != null && featureGradeEnd(f) !== featureGrade(f);
 }
 
-/** 异级道路渐变（白→黄等） */
+/** 异级 / 匝道配色渐变 */
 export function isLevelBlendRoad(
-  f: Pick<MapFeature, 'kind' | 'roadLevel' | 'roadLevelEnd'>,
+  f: Pick<MapFeature, 'kind' | 'roadLevel' | 'roadLevelFrom' | 'roadLevelEnd'>,
 ): boolean {
+  if (f.kind !== 'road') return false;
+  if (f.roadLevel === 'ramp' && (f.roadLevelFrom != null || f.roadLevelEnd != null)) {
+    const from = f.roadLevelFrom ?? 'local';
+    const to = f.roadLevelEnd ?? from;
+    return from !== to;
+  }
   return (
-    f.kind === 'road' &&
     f.roadLevelEnd != null &&
-    f.roadLevelEnd !== (f.roadLevel ?? 'local')
+    f.roadLevelEnd !== (f.roadLevelFrom ?? f.roadLevel ?? 'local')
   );
+}
+
+export function isRampRoad(f: Pick<MapFeature, 'roadLevel'>): boolean {
+  return f.roadLevel === 'ramp';
 }
 
 export function clampGrade(n: number): FeatureGrade {
@@ -224,6 +235,8 @@ export const ROAD_STYLES: Record<
   arterial: { label: '主干路', width: 10, color: '#ffd966', casing: '#b8960f' },
   collector: { label: '次干路', width: 7, color: '#ffffff', casing: '#888888' },
   local: { label: '支路', width: 4, color: '#e8e8e8', casing: '#aaaaaa' },
+  /** 细匝道：连接异级/异层；配色由 roadLevelFrom→End 渐变 */
+  ramp: { label: '匝道', width: 3.2, color: '#ececec', casing: '#9a9a9a' },
 };
 
 export const LAYER_LABELS: Record<FeatureKind, string> = {

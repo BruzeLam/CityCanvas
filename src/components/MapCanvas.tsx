@@ -534,6 +534,7 @@ export function MapCanvas({
       grade: FeatureGrade;
       gradeEnd?: FeatureGrade;
       roadLevel?: RoadLevel;
+      roadLevelFrom?: RoadLevel;
       roadLevelEnd?: RoadLevel;
     } => {
       const startTip = findPathTipAt(projectRef.current.features, points[0]);
@@ -543,6 +544,7 @@ export function MapCanvas({
         RAMP_ATTACH_M,
       );
       const startFeat = startTip?.feature ?? startNear?.feature;
+      // 接到节点/路上：本端标高与目标路同层
       const startG =
         draftStartGrade ??
         (startTip
@@ -562,7 +564,6 @@ export function MapCanvas({
       );
       const endFeat = endTip?.feature ?? endNear?.feature;
 
-      // 整段匝道留在分支起点所在层；gradeEnd 仅用于挂到异层目标
       let endG = startG;
       if (endTip) {
         endG = featureGrade(endTip.feature);
@@ -570,27 +571,39 @@ export function MapCanvas({
         endG = endNear.grade;
       }
 
-      const startLevel =
+      const startClass: RoadLevel =
         startFeat?.kind === 'road'
-          ? (startFeat.roadLevel ?? roadLevel)
+          ? ((startFeat.roadLevel === 'ramp'
+              ? startFeat.roadLevelFrom
+              : startFeat.roadLevel) ?? roadLevel)
           : roadLevel;
-      const endLevel =
-        endFeat?.kind === 'road' ? (endFeat.roadLevel ?? startLevel) : startLevel;
+      const endClass: RoadLevel =
+        endFeat?.kind === 'road'
+          ? ((endFeat.roadLevel === 'ramp'
+              ? endFeat.roadLevelEnd ?? endFeat.roadLevelFrom
+              : endFeat.roadLevel) ?? startClass)
+          : startClass;
 
+      const usingRamp = roadLevel === 'ramp';
       const result: {
         grade: FeatureGrade;
         gradeEnd?: FeatureGrade;
         roadLevel?: RoadLevel;
+        roadLevelFrom?: RoadLevel;
         roadLevelEnd?: RoadLevel;
       } = {
         grade: startG,
-        roadLevel: startLevel,
+        roadLevel: usingRamp ? 'ramp' : startClass,
       };
       if (endG !== startG) {
         result.gradeEnd = endG;
       }
-      if (endLevel !== startLevel) {
-        result.roadLevelEnd = endLevel;
+      if (usingRamp) {
+        result.roadLevelFrom = startClass === 'ramp' ? 'local' : startClass;
+        result.roadLevelEnd = endClass === 'ramp' ? result.roadLevelFrom : endClass;
+      } else if (endClass !== startClass) {
+        result.roadLevelFrom = startClass;
+        result.roadLevelEnd = endClass;
       }
       return result;
     },
@@ -619,6 +632,7 @@ export function MapCanvas({
         points,
         closed: false,
         roadLevel: kind === 'road' ? (meta?.roadLevel ?? roadLevel) : undefined,
+        roadLevelFrom: kind === 'road' ? meta?.roadLevelFrom : undefined,
         roadLevelEnd: kind === 'road' ? meta?.roadLevelEnd : undefined,
         railKind: kind === 'railway' ? railKind : undefined,
         metroColor:

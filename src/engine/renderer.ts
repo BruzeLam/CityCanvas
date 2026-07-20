@@ -374,25 +374,28 @@ function drawRoadCasing(
   joinedCaps: Set<string>,
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
-  const levelEnd = (feature.roadLevelEnd ?? level) as RoadLevel;
-  const roadStyle = ROAD_STYLES[level];
-  const endStyle = ROAD_STYLES[levelEnd];
+  const fromLevel = (feature.roadLevelFrom ?? level) as RoadLevel;
+  const levelEnd = (feature.roadLevelEnd ?? fromLevel) as RoadLevel;
+  const bodyStyle = ROAD_STYLES[level === 'ramp' ? 'ramp' : level];
+  const fromStyle = ROAD_STYLES[fromLevel === 'ramp' ? 'local' : fromLevel];
+  const endStyle = ROAD_STYLES[levelEnd === 'ramp' ? 'local' : levelEnd];
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
-  const width = roadStyle.width * viewport.zoom;
-  const endWidth = endStyle.width * viewport.zoom;
+  const width = bodyStyle.width * viewport.zoom;
   const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * viewport.zoom) : 2 * viewport.zoom;
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   const casing0 =
-    style === 'sketch' ? sketchRoadInk(roadStyle.casing) : roadStyle.casing;
+    style === 'sketch' ? sketchRoadInk(fromStyle.casing) : fromStyle.casing;
   const casing1 =
     style === 'sketch' ? sketchRoadInk(endStyle.casing) : endStyle.casing;
   // 渐变路也用一整条连续路缘，避免分段描边在弯道上显出「假轮廓」
   const casingColor = isLevelBlendRoad(feature)
     ? lerpColor(casing0, casing1, 0.5)
-    : casing0;
-  const casingW = Math.max(width, endWidth) + casingExtra;
+    : style === 'sketch'
+      ? sketchRoadInk(bodyStyle.casing)
+      : bodyStyle.casing;
+  const casingW = width + casingExtra;
 
   tracePath(ctx, points, false);
   ctx.strokeStyle = casingColor;
@@ -411,32 +414,36 @@ function drawRoadFill(
   joinedCaps: Set<string>,
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
-  const levelEnd = (feature.roadLevelEnd ?? level) as RoadLevel;
-  const roadStyle = ROAD_STYLES[level];
-  const endStyle = ROAD_STYLES[levelEnd];
+  const fromLevel = (feature.roadLevelFrom ?? level) as RoadLevel;
+  const levelEnd = (feature.roadLevelEnd ?? fromLevel) as RoadLevel;
+  const bodyStyle = ROAD_STYLES[level === 'ramp' ? 'ramp' : level];
+  const fromStyle = ROAD_STYLES[fromLevel === 'ramp' ? 'local' : fromLevel];
+  const endStyle = ROAD_STYLES[levelEnd === 'ramp' ? 'local' : levelEnd];
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
-  const width = roadStyle.width * viewport.zoom;
-  const endWidth = endStyle.width * viewport.zoom;
-  const fillW0 = style === 'sketch' ? Math.max(1.5, width * 0.72) : width;
-  const fillW1 = style === 'sketch' ? Math.max(1.5, endWidth * 0.72) : endWidth;
-  let fillColor = style === 'blueprint' ? '#e8f4ff' : roadStyle.color;
+  const width = bodyStyle.width * viewport.zoom;
+  const fillW = style === 'sketch' ? Math.max(1.2, width * 0.72) : width;
+  let fillColor = style === 'blueprint' ? '#e8f4ff' : fromStyle.color;
   let endColor = style === 'blueprint' ? '#e8f4ff' : endStyle.color;
   if (style === 'sketch') {
-    fillColor = sketchRoadFill(roadStyle.color);
+    fillColor = sketchRoadFill(fromStyle.color);
     endColor = sketchRoadFill(endStyle.color);
+  }
+  if (!isLevelBlendRoad(feature) && level !== 'ramp') {
+    fillColor = style === 'blueprint' ? '#e8f4ff' : bodyStyle.color;
+    if (style === 'sketch') fillColor = sketchRoadFill(bodyStyle.color);
   }
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
 
   if (isLevelBlendRoad(feature) && style !== 'blueprint') {
-    // 仅路面色沿路径渐变；圆角线帽互相覆盖接缝，不画分段路缘
+    // 仅路面色沿路径渐变；线宽固定为匝道/本体细宽
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     for (let i = 0; i < points.length - 1; i++) {
       const t = (i + 0.5) / (points.length - 1);
       ctx.strokeStyle = lerpColor(fillColor, endColor, t);
-      ctx.lineWidth = fillW0 + (fillW1 - fillW0) * t;
+      ctx.lineWidth = fillW;
       ctx.beginPath();
       ctx.moveTo(points[i].x, points[i].y);
       ctx.lineTo(points[i + 1].x, points[i + 1].y);
@@ -445,12 +452,12 @@ function drawRoadFill(
   } else {
     tracePath(ctx, points, false);
     ctx.strokeStyle = fillColor;
-    ctx.lineWidth = fillW0;
+    ctx.lineWidth = fillW;
     ctx.lineJoin = 'round';
     ctx.lineCap = strokeCap;
     ctx.stroke();
   }
-  drawFreeEndCaps(ctx, freeEnds, viewport, fillW0, fillColor);
+  drawFreeEndCaps(ctx, freeEnds, viewport, fillW, fillColor);
 }
 
 function drawJunctionNodes(

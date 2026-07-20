@@ -169,7 +169,7 @@ export function tryMergeHeadToTail(
   draft: MapFeature,
 ): MapFeature[] | null {
   if (!isPathKind(draft) || draft.points.length < 2) return null;
-  if (isRampFeature(draft) || isLevelBlendRoad(draft)) return null;
+  if (isRampFeature(draft) || isLevelBlendRoad(draft) || draft.roadLevel === 'ramp') return null;
 
   const grade = featureGrade(draft);
   const tip = findPathTipAt(features, draft.points[0], ENDPOINT_MERGE_M, (f) => {
@@ -367,8 +367,13 @@ export function attachCrossGradeTips(
 
   const attached: MapFeature = { ...incoming, points };
 
-  // 跨层 / 异级匝道：只挂端点，不与主路织交叉（避免再插点、挤坏主路）
-  if (isRampFeature(attached) || startG !== endG || isLevelBlendRoad(attached)) {
+  // 跨层 / 异级 / 匝道：只挂端点，不与主路织交叉
+  if (
+    isRampFeature(attached) ||
+    startG !== endG ||
+    isLevelBlendRoad(attached) ||
+    attached.roadLevel === 'ramp'
+  ) {
     return [...nextFeatures, attached];
   }
 
@@ -387,7 +392,7 @@ export function weaveSameGradeCrossings(
     return [...features, incoming];
   }
 
-  if (isRampFeature(incoming) || isLevelBlendRoad(incoming)) {
+  if (isRampFeature(incoming) || isLevelBlendRoad(incoming) || incoming.roadLevel === 'ramp') {
     return attachCrossGradeTips(features, incoming);
   }
 

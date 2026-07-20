@@ -391,7 +391,7 @@ export function Toolbar({
         {transitOpen === 'road' && (
           <div className="tb-panel">
             <p className="option-label">
-              等级 <span className="option-hint">1–4</span>
+              等级 <span className="option-hint">1–5</span>
             </p>
             <div className="tb-tile-grid">
               {ROAD_LEVELS.map(([id, style], i) => (

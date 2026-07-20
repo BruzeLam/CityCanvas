@@ -53,9 +53,9 @@ function sampleArcAngles(
   maxSegmentM: number,
 ): Point[] {
   const arcLen = Math.abs(sweep) * radius;
-  // 加密采样，避免弯道折线锯齿；长弧按弧长分段
-  const step = Math.min(Math.max(3, maxSegmentM), 10);
-  const n = Math.max(12, Math.ceil(arcLen / step));
+  // 更密采样：弧长步长约 2–4 m，最少 32 段，减轻折线感
+  const step = Math.min(Math.max(2, maxSegmentM), 4);
+  const n = Math.max(32, Math.ceil(arcLen / step));
   const points: Point[] = [];
   for (let i = 0; i <= n; i++) {
     const t = i / n;
@@ -77,7 +77,7 @@ export function curveFromTangent(
   start: Point,
   headingRad: number,
   end: Point,
-  maxSegmentM = 8,
+  maxSegmentM = 3,
 ): { points: Point[]; radius: number; sweepDeg: number; endHeading: number } | null {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -177,7 +177,7 @@ export function curveFromThreePoints(
   a: Point,
   b: Point,
   c: Point,
-  maxSegmentM = 8,
+  maxSegmentM = 3,
 ): CurveResult | null {
   const chordAC = dist(a, c);
   if (chordAC < 2 || dist(a, b) < 2 || dist(b, c) < 2) return null;
@@ -270,7 +270,7 @@ export function curveAdaptiveViaControl(
   c: Point,
   startHeading: number | null,
   endHeading: number | null,
-  maxSegmentM = 8,
+  maxSegmentM = 3,
 ): CurveResult | null {
   const h0 = startHeading ?? bearingRad(a, b);
   const arc1 = curveFromTangent(a, h0, b, maxSegmentM);

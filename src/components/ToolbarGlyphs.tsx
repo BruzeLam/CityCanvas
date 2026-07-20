@@ -11,7 +11,14 @@ export function GlyphRoadLevel({
   active,
 }: GlyphProps & { level: RoadLevel }) {
   const style = ROAD_STYLES[level];
-  const strokeW = { expressway: 6.2, arterial: 5, collector: 3.6, local: 2.4 }[level];
+  const strokeW =
+    {
+      expressway: 6.2,
+      arterial: 5,
+      collector: 3.6,
+      local: 2.4,
+      ramp: 2,
+    }[level] ?? 2.4;
   const dash = level === 'expressway' || level === 'arterial';
   const bg = active
     ? '#2f2c28'
@@ -21,7 +28,39 @@ export function GlyphRoadLevel({
         ? '#fff4cc'
         : level === 'collector'
           ? '#f0eeea'
-          : '#ebe8e3';
+          : level === 'ramp'
+            ? '#e8f0fa'
+            : '#ebe8e3';
+  if (level === 'ramp') {
+    return (
+      <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+        <rect x="2" y="3" width="20" height="18" rx="3" fill={bg} />
+        <path
+          d="M5 16 Q12 5 19 10"
+          fill="none"
+          stroke={active ? '#c4c4c4' : '#9a9a9a'}
+          strokeWidth="3.2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M5 16 Q12 5 19 10"
+          fill="none"
+          stroke={active ? '#ffe08a' : '#ffd966'}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeDasharray="0"
+          opacity="0.85"
+        />
+        <path
+          d="M5 16 Q8 10 12 8"
+          fill="none"
+          stroke={active ? '#fff' : '#ececec'}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
   return (
     <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
       <rect x="2" y="3" width="20" height="18" rx="3" fill={bg} />
