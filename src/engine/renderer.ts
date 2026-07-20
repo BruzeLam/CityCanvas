@@ -7,7 +7,7 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, gradeAtPathT, isLevelBlendRoad, isRampFeature, isRampRoad } from '../types';
+import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, gradeAtPathT, isLevelBlendRoad, isRampFeature } from '../types';
 import type { RoadLevel } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
@@ -100,33 +100,12 @@ function drawRoadsMerged(
 
   pieces.sort((a, b) => a.grade - b.grade || a.feature.id.localeCompare(b.feature.id));
 
-  const paintPiece = (
-    piece: RoadDrawPiece,
-    paint: (segIndex: number | null) => void,
-  ) => {
-    if (piece.grade > 0) {
-      ctx.save();
-      const elev = Math.min(3, piece.grade);
-      ctx.shadowColor = `rgba(40, 30, 20, ${0.14 + elev * 0.07})`;
-      ctx.shadowBlur = (2.5 + elev * 1.2) * viewport.zoom;
-      ctx.shadowOffsetX = 0.4 * viewport.zoom;
-      ctx.shadowOffsetY = (1.2 + elev * 0.6) * viewport.zoom;
-      paint(piece.segIndex);
-      ctx.restore();
-    } else {
-      paint(piece.segIndex);
-    }
-  };
-
+  // 仅靠绘制顺序表达上跨压盖，不加阴影
   for (const piece of pieces) {
-    paintPiece(piece, (seg) => {
-      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, seg);
-    });
+    drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
   }
   for (const piece of pieces) {
-    paintPiece(piece, (seg) => {
-      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, seg);
-    });
+    drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
   }
 
   // 穿水段：桥梁 / 隧道覆写样式 + 端口标记
@@ -167,12 +146,6 @@ function drawWaterCrossing(
         : '#4a4038';
 
   ctx.save();
-  if (span.grade > 0) {
-    const elev = Math.min(3, span.grade);
-    ctx.shadowColor = `rgba(40, 30, 20, ${0.16 + elev * 0.06})`;
-    ctx.shadowBlur = (2 + elev) * viewport.zoom;
-    ctx.shadowOffsetY = (1 + elev * 0.5) * viewport.zoom;
-  }
 
   if (isBridge) {
     // 加粗实线路缘（桥梁）
@@ -218,9 +191,6 @@ function drawWaterCrossing(
     ctx.lineWidth = Math.max(1.2, baseW * 0.85);
     ctx.stroke();
   }
-
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
 
   const halfW = (baseW + (isBridge ? 4 : 3) * viewport.zoom) / 2;
   drawCrossingPortal(
@@ -588,30 +558,25 @@ function sketchRoadFill(color: string): string {
   return `rgb(${Math.round(p.r * 0.15 + 240)},${Math.round(p.g * 0.15 + 240)},${Math.round(p.b * 0.15 + 240)})`;
 }
 
-/** 匝道两端加宽贴合主路，中段保持细宽 */
-function rampWidthAt(
-  t: number,
-  baseW: number,
-  fromRoadW: number,
-  endRoadW: number,
-): number {
-  const flare = 0.2;
-  const tipFrom = Math.max(baseW, Math.min(fromRoadW * 0.75, baseW * 2.6));
-  const tipEnd = Math.max(baseW, Math.min(endRoadW * 0.75, baseW * 2.6));
-  const smooth = (u: number) => u * u * (3 - 2 * u);
-  if (t < flare) {
-    const s = smooth(t / flare);
-    return tipFrom + (baseW - tipFrom) * s;
-  }
-  if (t > 1 - flare) {
-    const s = smooth((t - (1 - flare)) / flare);
-    return baseW + (tipEnd - baseW) * s;
-  }
-  return baseW;
-}
-
-function shouldTaperRoad(feature: MapFeature): boolean {
-  return isRampRoad(feature) || isLevelBlendRoad(feature);
+/** 分段描边时略延长，避免 round cap 叠成毛毛虫 */
+function extendedSegEnds(
+  points: Point[],
+  i: number,
+  extendPx: number,
+): { a: Point; b: Point } {
+  const a = points[i];
+  const b = points[i + 1];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const back = i > 0 ? extendPx : 0;
+  const fwd = i < points.length - 2 ? extendPx : 0;
+  return {
+    a: { x: a.x - ux * back, y: a.y - uy * back },
+    b: { x: b.x + ux * fwd, y: b.y + uy * fwd },
+  };
 }
 
 function drawRoadCasing(
@@ -632,9 +597,8 @@ function drawRoadCasing(
   if (points.length < 2) return;
 
   const width = bodyStyle.width * viewport.zoom;
-  const fromW = fromStyle.width * viewport.zoom;
-  const endW = endStyle.width * viewport.zoom;
   const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * viewport.zoom) : 2 * viewport.zoom;
+  const casingW = width + casingExtra;
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   const casing0 =
     style === 'sketch' ? sketchRoadInk(fromStyle.casing) : fromStyle.casing;
@@ -646,24 +610,18 @@ function drawRoadCasing(
       ? sketchRoadInk(bodyStyle.casing)
       : bodyStyle.casing;
 
-  const strokeSeg = (i: number) => {
-    const n = points.length - 1;
-    const t = (i + 0.5) / n;
-    ctx.strokeStyle = isLevelBlendRoad(feature) ? lerpColor(casing0, casing1, t) : casingMid;
-    ctx.lineWidth = shouldTaperRoad(feature)
-      ? rampWidthAt(t, width, fromW, endW) + casingExtra
-      : width + casingExtra;
-    ctx.beginPath();
-    ctx.moveTo(points[i].x, points[i].y);
-    ctx.lineTo(points[i + 1].x, points[i + 1].y);
-    ctx.stroke();
-  };
-
   if (segIndex != null) {
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    strokeSeg(segIndex);
     const n = points.length - 1;
+    const t = (segIndex + 0.5) / n;
+    const { a, b } = extendedSegEnds(points, segIndex, 1.25);
+    ctx.strokeStyle = isLevelBlendRoad(feature) ? lerpColor(casing0, casing1, t) : casingMid;
+    ctx.lineWidth = casingW;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
     const tipEnds: Point[] = [];
     if (segIndex === 0 && freeEnds.includes(feature.points[0])) {
       tipEnds.push(feature.points[0]);
@@ -672,24 +630,19 @@ function drawRoadCasing(
       tipEnds.push(feature.points[n]);
     }
     if (tipEnds.length) {
-      drawFreeEndCaps(ctx, tipEnds, viewport, width + casingExtra, casingMid);
+      drawFreeEndCaps(ctx, tipEnds, viewport, casingW, casingMid);
     }
     return;
   }
 
-  if (shouldTaperRoad(feature)) {
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    for (let i = 0; i < points.length - 1; i++) strokeSeg(i);
-  } else {
-    tracePath(ctx, points, false);
-    ctx.strokeStyle = casingMid;
-    ctx.lineWidth = width + casingExtra;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = strokeCap;
-    ctx.stroke();
-  }
-  drawFreeEndCaps(ctx, freeEnds, viewport, width + casingExtra, casingMid);
+  // 整条连续描边：匝道固定线宽，无路口加宽
+  tracePath(ctx, points, false);
+  ctx.strokeStyle = casingMid;
+  ctx.lineWidth = casingW;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = strokeCap;
+  ctx.stroke();
+  drawFreeEndCaps(ctx, freeEnds, viewport, casingW, casingMid);
 }
 
 function drawRoadFill(
@@ -710,9 +663,8 @@ function drawRoadFill(
   if (points.length < 2) return;
 
   const width = bodyStyle.width * viewport.zoom;
-  const fromW = fromStyle.width * viewport.zoom;
-  const endW = endStyle.width * viewport.zoom;
   const fillScale = style === 'sketch' ? 0.72 : 1;
+  const baseFillW = width * fillScale;
   let fillColor = style === 'blueprint' ? '#e8f4ff' : fromStyle.color;
   let endColor = style === 'blueprint' ? '#e8f4ff' : endStyle.color;
   if (style === 'sketch') {
@@ -722,40 +674,34 @@ function drawRoadFill(
   if (!isLevelBlendRoad(feature) && level !== 'ramp') {
     fillColor = style === 'blueprint' ? '#e8f4ff' : bodyStyle.color;
     if (style === 'sketch') fillColor = sketchRoadFill(bodyStyle.color);
+  } else if (level === 'ramp' && !isLevelBlendRoad(feature)) {
+    // 同色匝道：用本体浅灰，不做端点配色渐变
+    fillColor = style === 'blueprint' ? '#e8f4ff' : bodyStyle.color;
+    if (style === 'sketch') fillColor = sketchRoadFill(bodyStyle.color);
+    endColor = fillColor;
   }
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
-  const baseFillW = width * fillScale;
-
-  const strokeSeg = (i: number) => {
-    const n = points.length - 1;
-    const t = (i + 0.5) / n;
-    const blend = isLevelBlendRoad(feature) || level === 'ramp';
-    ctx.strokeStyle = blend ? lerpColor(fillColor, endColor, t) : fillColor;
-    ctx.lineWidth = shouldTaperRoad(feature)
-      ? rampWidthAt(t, baseFillW, fromW * fillScale, endW * fillScale)
-      : baseFillW;
-    ctx.beginPath();
-    ctx.moveTo(points[i].x, points[i].y);
-    ctx.lineTo(points[i + 1].x, points[i + 1].y);
-    ctx.stroke();
-  };
+  const midFill = isLevelBlendRoad(feature)
+    ? lerpColor(fillColor, endColor, 0.5)
+    : fillColor;
 
   if (segIndex != null) {
-    if (style === 'blueprint') {
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = '#e8f4ff';
-      ctx.lineWidth = baseFillW;
-      ctx.beginPath();
-      ctx.moveTo(points[segIndex].x, points[segIndex].y);
-      ctx.lineTo(points[segIndex + 1].x, points[segIndex + 1].y);
-      ctx.stroke();
-    } else {
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      strokeSeg(segIndex);
-    }
     const n = points.length - 1;
+    const t = (segIndex + 0.5) / n;
+    const { a, b } = extendedSegEnds(points, segIndex, 1.25);
+    ctx.strokeStyle =
+      style === 'blueprint'
+        ? '#e8f4ff'
+        : isLevelBlendRoad(feature)
+          ? lerpColor(fillColor, endColor, t)
+          : midFill;
+    ctx.lineWidth = baseFillW;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
     const tipEnds: Point[] = [];
     if (segIndex === 0 && freeEnds.includes(feature.points[0])) {
       tipEnds.push(feature.points[0]);
@@ -764,28 +710,19 @@ function drawRoadFill(
       tipEnds.push(feature.points[n]);
     }
     if (tipEnds.length) {
-      drawFreeEndCaps(ctx, tipEnds, viewport, baseFillW, fillColor);
+      drawFreeEndCaps(ctx, tipEnds, viewport, baseFillW, midFill);
     }
     return;
   }
 
-  if (shouldTaperRoad(feature) && style !== 'blueprint') {
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    for (let i = 0; i < points.length - 1; i++) strokeSeg(i);
-  } else if (isLevelBlendRoad(feature) && style !== 'blueprint') {
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    for (let i = 0; i < points.length - 1; i++) strokeSeg(i);
-  } else {
-    tracePath(ctx, points, false);
-    ctx.strokeStyle = fillColor;
-    ctx.lineWidth = baseFillW;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = strokeCap;
-    ctx.stroke();
-  }
-  drawFreeEndCaps(ctx, freeEnds, viewport, baseFillW, fillColor);
+  // 连续路面；异级仅取中点色，避免分段圆帽毛刺
+  tracePath(ctx, points, false);
+  ctx.strokeStyle = midFill;
+  ctx.lineWidth = baseFillW;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = strokeCap;
+  ctx.stroke();
+  drawFreeEndCaps(ctx, freeEnds, viewport, baseFillW, midFill);
 }
 
 function drawJunctionNodes(
