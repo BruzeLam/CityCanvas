@@ -345,12 +345,10 @@ function buildRampDrawPieces(
 }
 
 /**
- * 汇入口开口（无圆环 / 无 round 鼓包）：
- * 1) 沿宿主中心线 butt 全路缘宽补路面色 → 撕开宿主侧边线（浅角加长）
- * 1b) 沿汇入臂再清一道宿主色 → 抹掉 tip 路缘 butt 封口
- * 2) 异级时沿汇入臂 tip→host 渐变（butt only）
+ * 擦掉主路路缘在匝道挂接处的侧墙（destination-out），不重涂宿主色 → 无补丁。
+ * 须在主路 casing 之后、fill 之前调用。
  */
-function drawJoinOpenings(
+function eraseHostCasingAtJoins(
   ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
   band: number,
@@ -358,71 +356,67 @@ function drawJoinOpenings(
   style: MapStyle,
 ) {
   const z = viewport.zoom;
-  const fillScale = style === 'sketch' ? 0.72 : 1;
   const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * z) : 2 * z;
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
     const p = toScreen(m.point, viewport);
+    const hostBodyW = Math.max(2, m.hostWidth * z);
+    const hostCasingW = hostBodyW + casingExtra;
+    const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
+    const tipFillW = Math.max(2, m.tipWidth * z);
+    const hx = m.hostDirX;
+    const hy = m.hostDirY;
+    const sinA = Math.abs(hx * m.approachY - hy * m.approachX);
+    // 开口长度 ≈ tip 路缘投影到主路切向；不要拉成一段长矩形
+    const openLen = Math.max(
+      tipCasingW / Math.max(sinA, 0.22),
+      tipFillW * 1.1,
+      3 * z,
+    );
 
-    let hostFill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
-    let tipFill = style === 'blueprint' ? '#e8f4ff' : m.tipColor;
+    ctx.beginPath();
+    ctx.moveTo(p.x - hx * openLen * 0.5, p.y - hy * openLen * 0.5);
+    ctx.lineTo(p.x + hx * openLen * 0.5, p.y + hy * openLen * 0.5);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = hostCasingW + 1;
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** tip→宿主色软过渡（仅 tip 路宽，无加宽涂抹） */
+function drawJoinBlends(
+  ctx: CanvasRenderingContext2D,
+  mouths: JoinMouth[],
+  band: number,
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  if (style === 'blueprint') return;
+  const z = viewport.zoom;
+  const fillScale = style === 'sketch' ? 0.72 : 1;
+  for (const m of mouths) {
+    if (Math.floor(m.grade + 1e-9) !== band) continue;
+    if (m.tipColor === m.hostColor && m.tipWidth + 0.05 >= m.hostWidth) continue;
+
+    const p = toScreen(m.point, viewport);
+    let hostFill = m.hostColor;
+    let tipFill = m.tipColor;
     if (style === 'sketch') {
       hostFill = sketchRoadFill(m.hostColor);
       tipFill = sketchRoadFill(m.tipColor);
     }
-
-    const hostBodyW = Math.max(2, m.hostWidth * z);
-    const hostFillW = Math.max(2, m.hostWidth * z * fillScale);
-    // drawRoadCasing 用 body + casingExtra；开口必须盖到两侧外沿并留余量
-    const hostCasingW = hostBodyW + casingExtra;
-    const hostOpenW = Math.max(hostFillW, hostCasingW) + casingExtra + 2;
     const tipFillW = Math.max(2, m.tipWidth * z * fillScale);
-    const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
     const halfHost = (m.hostWidth * 0.5) * z;
-
-    const hx = m.hostDirX;
-    const hy = m.hostDirY;
     const ix = -m.approachX;
     const iy = -m.approachY;
-    // |sin|：汇入臂与宿主切向夹角；浅角汇入嘴沿主路更长
-    const sinA = Math.abs(hx * m.approachY - hy * m.approachX);
-    const openLen = Math.max(
-      tipCasingW / Math.max(sinA, 0.18),
-      tipFillW * 1.75,
-      hostOpenW * 0.55,
-      8 * z,
-    );
-
-    // 1) 沿主路撕开侧边线（butt，绝不用 round）
-    ctx.beginPath();
-    ctx.moveTo(p.x - hx * openLen * 0.5, p.y - hy * openLen * 0.5);
-    ctx.lineTo(p.x + hx * openLen * 0.5, p.y + hy * openLen * 0.5);
-    ctx.strokeStyle = hostFill;
-    ctx.lineWidth = hostOpenW;
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    ctx.stroke();
-
-    // 1b) 沿汇入方向清封口：从路缘外沿扫到中心外侧
-    const outer = hostOpenW * 0.5 + tipFillW * 0.2;
-    ctx.beginPath();
-    ctx.moveTo(p.x + ix * outer, p.y + iy * outer);
-    ctx.lineTo(p.x - ix * tipFillW * 0.3, p.y - iy * tipFillW * 0.3);
-    ctx.strokeStyle = hostFill;
-    ctx.lineWidth = Math.max(tipFillW, tipCasingW * 0.95);
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    ctx.stroke();
-
-    const useBlend =
-      style !== 'blueprint' &&
-      (m.tipColor !== m.hostColor || m.tipWidth + 0.05 < m.hostWidth);
-    if (!useBlend) continue;
-
-    // 2) 沿汇入臂：从臂内到中心，tip 色 → 宿主色（butt）
     const a = {
-      x: p.x + ix * (halfHost + tipFillW * 0.55),
-      y: p.y + iy * (halfHost + tipFillW * 0.55),
+      x: p.x + ix * (halfHost + tipFillW * 0.45),
+      y: p.y + iy * (halfHost + tipFillW * 0.45),
     };
     const b = { x: p.x, y: p.y };
     const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
@@ -556,6 +550,8 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
+    // 擦掉挂接处主路路缘侧墙（不涂宿主色补丁）
+    eraseHostCasingAtJoins(ctx, mouths, band, viewport, style);
     for (const piece of mains) {
       drawRoadFill(
         ctx,
@@ -567,8 +563,7 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 沿主路 butt 开口 + 汇入臂渐变（无 round 鼓包）
-    drawJoinOpenings(ctx, mouths, band, viewport, style);
+    drawJoinBlends(ctx, mouths, band, viewport, style);
     i = j;
   }
 

@@ -1525,6 +1525,9 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     host: MapFeature,
   ) => {
     if (host.kind !== 'road' || host.points.length < 2) return;
+    // 只处理匝道 tip 挂接；普通 T/十字路口不要画汇入口（会变成补丁）
+    if (joiner.roadLevel !== 'ramp' && !isRampFeature(joiner)) return;
+    if (host.roadLevel === 'ramp' || isRampFeature(host)) return;
     const hostGrade = isRampFeature(host)
       ? gradeAlongPath(host, tipPoint)
       : featureGrade(host);
