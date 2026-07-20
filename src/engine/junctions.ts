@@ -6,6 +6,8 @@ import {
   isLevelBlendRoad,
   isRampFeature,
   normalizeRoadClass,
+  ROAD_CLASS_RANK,
+  ROAD_STYLES,
 } from '../types';
 import { simplifyPolylineRdp, curveFromBestTangent } from './curveMath';
 import { closestOnSegment, dist } from './geometry';
@@ -75,20 +77,30 @@ function otherFeatureTouchesPoint(
   return false;
 }
 
+function pointInKeepSet(p: Point, keep: Point[] | undefined, maxDist = ENDPOINT_MERGE_M): boolean {
+  if (!keep || keep.length === 0) return false;
+  for (const k of keep) {
+    if (dist(p, k) <= maxDist) return true;
+  }
+  return false;
+}
+
 /**
  * 去掉「非交叉口」的共线中间点：延伸合并后原端点可消失，只留弯折与真正路口。
+ * keepExtra：标高转换点等必须保留的顶点（即使共线）。
  */
 export function simplifyPathKeepingJunctions(
   points: Point[],
   selfId: string,
   features: MapFeature[],
   grade: FeatureGrade,
+  keepExtra?: Point[],
 ): Point[] {
   if (points.length <= 2) return points.map((p) => ({ ...p }));
   const out: Point[] = [{ ...points[0] }];
   for (let i = 1; i < points.length - 1; i++) {
     const p = points[i];
-    if (otherFeatureTouchesPoint(features, selfId, p, grade)) {
+    if (pointInKeepSet(p, keepExtra) || otherFeatureTouchesPoint(features, selfId, p, grade)) {
       out.push({ ...p });
       continue;
     }
@@ -100,6 +112,86 @@ export function simplifyPathKeepingJunctions(
   }
   out.push({ ...points[points.length - 1] });
   return out;
+}
+
+/**
+ * 跨层路径：保证有一个中间「标高转换」顶点，避免共线合并后只剩两端、转换点消失。
+ * prefer：绘制时用户换层所在顶点；缺省取弧长中点附近已有点，或插入几何中点。
+ */
+export function ensureGradeTransitionVertex(
+  points: Point[],
+  startG: FeatureGrade,
+  endG: FeatureGrade,
+  prefer?: Point | null,
+): Point[] {
+  if (startG === endG || points.length < 2) {
+    return points.map((p) => ({ ...p }));
+  }
+  if (prefer) {
+    for (let i = 1; i < points.length - 1; i++) {
+      if (dist(points[i], prefer) <= ENDPOINT_MERGE_M) {
+        return points.map((p) => ({ ...p }));
+      }
+    }
+    // prefer 落在端点上：若仅两端，在中点插入转换点
+    if (points.length === 2) {
+      const a = points[0];
+      const b = points[1];
+      return [a, { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }, b];
+    }
+    return points.map((p) => ({ ...p }));
+  }
+  if (points.length >= 3) return points.map((p) => ({ ...p }));
+  const a = points[0];
+  const b = points[1];
+  return [a, { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }, b];
+}
+
+/** 从折线一端裁掉给定弧长（米），用于汇入口截断路缘 */
+export function trimPolylineStart(points: Point[], trimM: number): Point[] {
+  if (points.length < 2 || trimM <= EPS) return points.map((p) => ({ ...p }));
+  let remain = trimM;
+  let i = 0;
+  while (i < points.length - 1) {
+    const d = dist(points[i], points[i + 1]);
+    if (d <= remain + EPS) {
+      remain -= d;
+      i++;
+      continue;
+    }
+    const t = remain / d;
+    const cut: Point = {
+      x: points[i].x + (points[i + 1].x - points[i].x) * t,
+      y: points[i].y + (points[i + 1].y - points[i].y) * t,
+    };
+    return [{ ...cut }, ...points.slice(i + 1).map((p) => ({ ...p }))];
+  }
+  // 整段被裁光：保留末端短 stub，避免退化
+  const last = points[points.length - 1];
+  const prev = points[Math.max(0, points.length - 2)];
+  const stub = Math.min(1, dist(prev, last) * 0.15);
+  if (stub < EPS) return [{ ...last }, { ...last }];
+  const len = dist(prev, last) || 1;
+  return [
+    {
+      x: last.x - ((last.x - prev.x) / len) * stub,
+      y: last.y - ((last.y - prev.y) / len) * stub,
+    },
+    { ...last },
+  ];
+}
+
+export function trimPolylineEnds(
+  points: Point[],
+  trimStartM: number,
+  trimEndM: number,
+): Point[] {
+  let pts = points.map((p) => ({ ...p }));
+  if (trimStartM > EPS) pts = trimPolylineStart(pts, trimStartM);
+  if (trimEndM > EPS) {
+    pts = trimPolylineStart(pts.slice().reverse(), trimEndM).reverse();
+  }
+  return pts.length >= 2 ? pts : points.map((p) => ({ ...p }));
 }
 
 function canMergeInto(
@@ -465,15 +557,26 @@ export function tryMergeHeadToTail(
   if (!best) return null;
 
   const without = features.filter((f) => f.id !== best!.host.id);
+  // 延伸接合处：跨层时必须保留原宿主端点，作为标高转换节点
+  const jointKeep: Point[] = [];
+  if (best.endG !== best.startG) {
+    const host = best.host;
+    jointKeep.push(host.points[0], host.points[host.points.length - 1]);
+  }
   const simplified = simplifyPathKeepingJunctions(
     best.points,
     best.host.id,
     without,
     draftIsRamp ? featureGrade(best.host) : grade,
+    jointKeep,
   );
+  const points =
+    best.endG !== best.startG
+      ? ensureGradeTransitionVertex(simplified, best.startG, best.endG)
+      : simplified;
   let merged: MapFeature = {
     ...best.host,
-    points: simplified,
+    points,
     grade: best.startG,
     gradeEnd: best.endG !== best.startG ? best.endG : undefined,
   };
@@ -783,7 +886,8 @@ function snapRampTipsToMains(
 
   const ramp: MapFeature = {
     ...incoming,
-    points,
+    points:
+      startG !== endG ? ensureGradeTransitionVertex(points, startG, endG) : points,
     grade: startG,
     gradeEnd: endG !== startG ? endG : undefined,
   };
@@ -847,7 +951,11 @@ export function attachCrossGradeTips(
   attachEnd(0, startG);
   attachEnd(-1, endG);
 
-  const attached: MapFeature = { ...incoming, points };
+  const withTransition =
+    startG !== endG
+      ? ensureGradeTransitionVertex(points, startG, endG)
+      : points;
+  const attached: MapFeature = { ...incoming, points: withTransition };
 
   if (isRampFeature(attached) || startG !== endG || isLevelBlendRoad(attached)) {
     return [...nextFeatures, attached];
@@ -931,11 +1039,12 @@ export function weaveSameGradeCrossings(
 
 /**
  * 去掉「仅因曾同层织路」留下的共线中点：异层交叉不应共享路口顶点。
- * 弯折点、同层路口、匝道挂接点保留。
+ * 弯折点、同层路口、匝道挂接点、跨层标高转换点保留。
  */
 export function stripObsoleteJunctionVertices(features: MapFeature[]): MapFeature[] {
   return features.map((f) => {
     if (!isPathKind(f) || f.points.length <= 2) return f;
+    // 跨层坡道：整段保留顶点（含标高转换点），不做共线剥离
     if (isRampFeature(f)) return f;
     const grade = featureGrade(f);
     const points: Point[] = [];
@@ -963,17 +1072,18 @@ export function stripObsoleteJunctionVertices(features: MapFeature[]): MapFeatur
 
 /**
  * 过密折线（旧弯道密采样）RDP 简化，强制保留端点与同层路口 / 挂接顶点。
- * 加载旧图、改标高重织时自动瘦身。
+ * 加载旧图、改标高重织时自动瘦身。跨层路径不瘦身，以免丢掉标高转换点。
  */
 export function simplifyDensePath(
   feature: MapFeature,
   features: MapFeature[],
 ): MapFeature {
-  const isRamp =
-    feature.kind === 'road' &&
-    (feature.roadLevel === 'ramp' || isRampFeature(feature));
-  const threshold = isRamp ? DENSE_RAMP_SIMPLIFY_AT : DENSE_PATH_SIMPLIFY_AT;
-  const eps = isRamp ? DENSE_RAMP_SIMPLIFY_EPS_M : DENSE_PATH_SIMPLIFY_EPS_M;
+  // 跨层：保留全部顶点（转换点）
+  if (isRampFeature(feature)) return feature;
+  const isRampTool =
+    feature.kind === 'road' && feature.roadLevel === 'ramp';
+  const threshold = isRampTool ? DENSE_RAMP_SIMPLIFY_AT : DENSE_PATH_SIMPLIFY_AT;
+  const eps = isRampTool ? DENSE_RAMP_SIMPLIFY_EPS_M : DENSE_PATH_SIMPLIFY_EPS_M;
   if (!isPathKind(feature) || feature.points.length < threshold) {
     return feature;
   }
@@ -984,7 +1094,7 @@ export function simplifyDensePath(
       keep.add(i);
       continue;
     }
-    if (!isRamp) continue;
+    if (!isRampTool) continue;
     for (const f of features) {
       if (f.id === feature.id || !isPathKind(f)) continue;
       for (let s = 0; s < f.points.length - 1; s++) {
@@ -1236,4 +1346,180 @@ export function collectJoinedCaps(features: MapFeature[]): Set<string> {
   }
 
   return joined;
+}
+
+/** 道路路面宽度（世界米）；匝道用固定细宽 */
+export function roadBodyWidthM(f: MapFeature): number {
+  if (f.kind !== 'road') return ROAD_STYLES.local.width;
+  if (f.roadLevel === 'ramp' || isRampFeature(f)) return ROAD_STYLES.ramp.width;
+  return ROAD_STYLES[normalizeRoadClass(f.roadLevel)].width;
+}
+
+function roadVisualClass(f: MapFeature): Exclude<RoadLevel, 'ramp'> {
+  if (f.roadLevel === 'ramp' || isRampFeature(f)) {
+    return normalizeRoadClass(f.roadLevelFrom ?? f.roadLevelEnd ?? 'local');
+  }
+  return normalizeRoadClass(f.roadLevel);
+}
+
+export type JoinMouth = {
+  point: Point;
+  grade: FeatureGrade;
+  /** 宿主路面宽度（世界米） */
+  hostWidth: number;
+  hostColor: string;
+  hostCasing: string;
+};
+
+/**
+ * 汇入口：端点挂在他路中心线/顶点，或 degree≥2 的路口节点。
+ * 取接触道路中最宽的一条作为宿主配色与开口半径。
+ */
+export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
+  type Acc = {
+    point: Point;
+    grade: FeatureGrade;
+    hostWidth: number;
+    hostRank: number;
+    hostColor: string;
+    hostCasing: string;
+  };
+  const byKey = new Map<string, Acc>();
+
+  const considerHost = (
+    point: Point,
+    grade: FeatureGrade,
+    host: MapFeature,
+  ) => {
+    if (host.kind !== 'road' || host.points.length < 2) return;
+    const cls = roadVisualClass(host);
+    const width = roadBodyWidthM(host);
+    const rank = ROAD_CLASS_RANK[cls];
+    const style = ROAD_STYLES[cls];
+    const key = `${grade}|${quantizeKey(point)}`;
+    const prev = byKey.get(key);
+    if (
+      !prev ||
+      width > prev.hostWidth + 0.05 ||
+      (Math.abs(width - prev.hostWidth) < 0.05 && rank > prev.hostRank)
+    ) {
+      byKey.set(key, {
+        point: prev?.point ?? { ...point },
+        grade,
+        hostWidth: width,
+        hostRank: rank,
+        hostColor: style.color,
+        hostCasing: style.casing,
+      });
+    }
+  };
+
+  // 端点挂接：tip 落在他路 → 记一口
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
+    const tips: { point: Point; grade: FeatureGrade }[] = [
+      { point: f.points[0], grade: featureGrade(f) },
+      {
+        point: f.points[f.points.length - 1],
+        grade: featureGradeEnd(f),
+      },
+    ];
+    for (const tip of tips) {
+      for (const host of features) {
+        if (!isPathKind(host) || host.id === f.id || host.kind !== 'road') continue;
+        let hit = false;
+        for (const p of host.points) {
+          if (dist(tip.point, p) <= ENDPOINT_MERGE_M) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) {
+          for (let i = 0; i < host.points.length - 1; i++) {
+            const on = closestOnSegment(tip.point, {
+              a: host.points[i],
+              b: host.points[i + 1],
+            });
+            if (on.dist <= ENDPOINT_MERGE_M) {
+              hit = true;
+              break;
+            }
+          }
+        }
+        if (hit) considerHost(tip.point, tip.grade, host);
+      }
+    }
+  }
+
+  // 多路共享路口节点
+  for (const node of collectJunctionNodes(features)) {
+    if (node.degree < 2) continue;
+    for (const f of features) {
+      if (!isPathKind(f) || f.kind !== 'road' || f.points.length < 2) continue;
+      for (const p of f.points) {
+        if (dist(p, node.point) <= ENDPOINT_MERGE_M) {
+          considerHost(node.point, node.grade, f);
+          break;
+        }
+      }
+    }
+  }
+
+  return [...byKey.values()].map((a) => ({
+    point: a.point,
+    grade: a.grade,
+    hostWidth: a.hostWidth,
+    hostColor: a.hostColor,
+    hostCasing: a.hostCasing,
+  }));
+}
+
+/**
+ * 已接合端点应对宿主半宽截断路缘：key = `${featureId}|start|end` → 截断米数。
+ */
+export function collectCasingTrimM(features: MapFeature[]): Map<string, number> {
+  const trim = new Map<string, number>();
+  const joined = collectJoinedCaps(features);
+
+  const hostHalfAt = (tip: Point, selfId: string): number => {
+    let best = 0;
+    for (const host of features) {
+      if (!isPathKind(host) || host.id === selfId || host.kind !== 'road') continue;
+      let hit = false;
+      for (const p of host.points) {
+        if (dist(tip, p) <= ENDPOINT_MERGE_M) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) {
+        for (let i = 0; i < host.points.length - 1; i++) {
+          const on = closestOnSegment(tip, {
+            a: host.points[i],
+            b: host.points[i + 1],
+          });
+          if (on.dist <= ENDPOINT_MERGE_M) {
+            hit = true;
+            break;
+          }
+        }
+      }
+      if (!hit) continue;
+      best = Math.max(best, roadBodyWidthM(host) * 0.5);
+    }
+    return best;
+  };
+
+  for (const f of features) {
+    if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
+    if (joined.has(`${f.id}|start`)) {
+      const half = hostHalfAt(f.points[0], f.id);
+      if (half > 0.5) trim.set(`${f.id}|start`, half);
+    }
+    if (joined.has(`${f.id}|end`)) {
+      const half = hostHalfAt(f.points[f.points.length - 1], f.id);
+      if (half > 0.5) trim.set(`${f.id}|end`, half);
+    }
+  }
+  return trim;
 }

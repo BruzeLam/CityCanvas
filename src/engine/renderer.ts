@@ -32,7 +32,10 @@ import type { GuideSnap, Segment } from './geometry';
 import {
   collectJoinedCaps,
   collectJunctionNodes,
+  collectJoinMouths,
+  collectCasingTrimM,
   segmentIntersection,
+  type JoinMouth,
 } from './junctions';
 import {
   ensureTerrain,
@@ -53,6 +56,8 @@ type RoadDrawPiece = {
   order: number;
   /** 只画这段世界坐标折线；缺省画整条 */
   subPoints?: Point[];
+  /** 端点短截：与宿主同层，须压在主路下 */
+  isTip?: boolean;
 };
 
 function isRampRoadFeature(f: MapFeature): boolean {
@@ -70,9 +75,61 @@ function polylineCumLen(points: Point[]): { cum: number[]; total: number } {
   return { cum, total: cum[cum.length - 1] || 1 };
 }
 
+/** 沿折线截取 [s0, s1] 米处的子折线 */
+function slicePolylineByArc(
+  points: Point[],
+  cum: number[],
+  s0: number,
+  s1: number,
+): Point[] {
+  const total = cum[cum.length - 1] || 1;
+  const a = Math.max(0, Math.min(total, s0));
+  const b = Math.max(0, Math.min(total, s1));
+  if (b - a < 0.5 || points.length < 2) return [];
+
+  const at = (s: number): Point => {
+    for (let i = 0; i < points.length - 1; i++) {
+      if (s <= cum[i + 1] + 1e-9) {
+        const span = cum[i + 1] - cum[i] || 1;
+        const u = (s - cum[i]) / span;
+        return {
+          x: points[i].x + (points[i + 1].x - points[i].x) * u,
+          y: points[i].y + (points[i + 1].y - points[i].y) * u,
+        };
+      }
+    }
+    return { ...points[points.length - 1] };
+  };
+
+  const out: Point[] = [at(a)];
+  for (let i = 1; i < points.length - 1; i++) {
+    if (cum[i] > a + 1e-6 && cum[i] < b - 1e-6) out.push({ ...points[i] });
+  }
+  out.push(at(b));
+  return out;
+}
+
+/** 从两端截断折线（米）；过短则返回 null */
+function trimPolylineEnds(
+  points: Point[],
+  trimStartM: number,
+  trimEndM: number,
+): Point[] | null {
+  const { cum, total } = polylineCumLen(points);
+  const s0 = Math.max(0, trimStartM);
+  const s1 = Math.max(0, trimEndM);
+  if (total < s0 + s1 + 2) return null;
+  const sliced = slicePolylineByArc(points, cum, s0, total - s1);
+  return sliced.length >= 2 ? sliced : null;
+}
+
+/** 匝道端点短截：与宿主同层绘制，避免中段抬升后整条压在主路上 */
+const RAMP_TIP_STUB_M = 14;
+
 /**
- * 匝道绘制拆段：仅在匝道↔匝道交叉处切开（插值标高比高下）。
- * 端点汇入主路不靠 tip stub，而靠「同层主路最后画、盖住端点」。
+ * 匝道拆段：
+ * 1) 两端 tip stub（端点标高，先于同层主路）
+ * 2) 中段按匝道交叉切开（插值标高）
  */
 function buildRampDrawPieces(
   feature: MapFeature,
@@ -82,9 +139,11 @@ function buildRampDrawPieces(
   const pts = feature.points;
   if (pts.length < 2) return [];
 
+  const { cum, total } = polylineCumLen(pts);
   const g0 = featureGrade(feature);
   const g1 = featureGradeEnd(feature);
-  const { cum, total } = polylineCumLen(pts);
+  const tipM = Math.min(RAMP_TIP_STUB_M, total * 0.28);
+  const canStub = total > tipM * 2.4 && Math.abs(g0 - g1) > 1e-6;
 
   type Split = { segIndex: number; t: number; point: Point };
   const splits: Split[] = [];
@@ -110,10 +169,6 @@ function buildRampDrawPieces(
     else consider(other, false);
   }
 
-  if (splits.length === 0) {
-    return [{ feature, grade: (g0 + g1) / 2, order }];
-  }
-
   const pathTAt = (p: Point): number => {
     let bestT = 0;
     let bestD = Infinity;
@@ -134,38 +189,84 @@ function buildRampDrawPieces(
     return bestT;
   };
 
-  splits.sort((a, b) => a.segIndex - b.segIndex || a.t - b.t);
-  const crossKeys = new Set(
-    splits.map(
-      (s) => `${Math.round(s.point.x * 10) / 10},${Math.round(s.point.y * 10) / 10}`,
-    ),
-  );
+  const pieces: RoadDrawPiece[] = [];
 
-  const built: Point[] = [{ ...pts[0] }];
-  let si = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    while (si < splits.length && splits[si].segIndex === i) {
-      const s = splits[si++];
-      const prev = built[built.length - 1];
-      if (Math.hypot(s.point.x - prev.x, s.point.y - prev.y) > 0.4) {
-        built.push({ ...s.point });
-      }
+  if (canStub) {
+    const startStub = slicePolylineByArc(pts, cum, 0, tipM);
+    const endStub = slicePolylineByArc(pts, cum, total - tipM, total);
+    if (startStub.length >= 2) {
+      pieces.push({ feature, grade: g0, order, subPoints: startStub, isTip: true });
     }
-    const end = pts[i + 1];
-    const prev = built[built.length - 1];
-    if (Math.hypot(end.x - prev.x, end.y - prev.y) > 0.4) {
-      built.push({ ...end });
+    if (endStub.length >= 2) {
+      pieces.push({ feature, grade: g1, order, subPoints: endStub, isTip: true });
     }
   }
 
-  const isCross = (p: Point) =>
-    crossKeys.has(`${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`);
+  const midStart = canStub ? tipM : 0;
+  const midEnd = canStub ? total - tipM : total;
+  let midPts = canStub
+    ? slicePolylineByArc(pts, cum, midStart, midEnd)
+    : pts.map((p) => ({ ...p }));
+  if (midPts.length < 2) {
+    return pieces.length
+      ? pieces
+      : [{ feature, grade: (g0 + g1) / 2, order }];
+  }
 
-  const pieces: RoadDrawPiece[] = [];
-  let cur: Point[] = [built[0]];
-  for (let i = 1; i < built.length; i++) {
-    cur.push(built[i]);
-    if (i < built.length - 1 && isCross(built[i]) && cur.length >= 2) {
+  if (splits.length > 0) {
+    const crossKeys = new Set<string>();
+    const withHits: Point[] = [{ ...midPts[0] }];
+    for (let i = 0; i < midPts.length - 1; i++) {
+      const a = midPts[i];
+      const b = midPts[i + 1];
+      const onSeg: { u: number; point: Point }[] = [];
+      for (const s of splits) {
+        const along =
+          cum[s.segIndex] + s.t * (cum[s.segIndex + 1] - cum[s.segIndex]);
+        if (along <= midStart + 0.5 || along >= midEnd - 0.5) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const lenSq = dx * dx + dy * dy || 1;
+        const u = ((s.point.x - a.x) * dx + (s.point.y - a.y) * dy) / lenSq;
+        if (u <= 0.02 || u >= 0.98) continue;
+        const proj = { x: a.x + u * dx, y: a.y + u * dy };
+        if (Math.hypot(s.point.x - proj.x, s.point.y - proj.y) < 1.2) {
+          onSeg.push({ u, point: { ...s.point } });
+          crossKeys.add(
+            `${Math.round(s.point.x * 10) / 10},${Math.round(s.point.y * 10) / 10}`,
+          );
+        }
+      }
+      onSeg.sort((p, q) => p.u - q.u);
+      for (const h of onSeg) {
+        const prev = withHits[withHits.length - 1];
+        if (Math.hypot(h.point.x - prev.x, h.point.y - prev.y) > 0.4) {
+          withHits.push(h.point);
+        }
+      }
+      const prev = withHits[withHits.length - 1];
+      if (Math.hypot(b.x - prev.x, b.y - prev.y) > 0.4) withHits.push({ ...b });
+    }
+    midPts = withHits;
+
+    const isCross = (p: Point) =>
+      crossKeys.has(`${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`);
+
+    let cur: Point[] = [midPts[0]];
+    for (let i = 1; i < midPts.length; i++) {
+      cur.push(midPts[i]);
+      if (i < midPts.length - 1 && isCross(midPts[i]) && cur.length >= 2) {
+        const mid = cur[Math.floor(cur.length / 2)];
+        pieces.push({
+          feature,
+          grade: gradeAtPathT(feature, pathTAt(mid)),
+          order,
+          subPoints: cur,
+        });
+        cur = [midPts[i]];
+      }
+    }
+    if (cur.length >= 2) {
       const mid = cur[Math.floor(cur.length / 2)];
       pieces.push({
         feature,
@@ -173,22 +274,43 @@ function buildRampDrawPieces(
         order,
         subPoints: cur,
       });
-      cur = [built[i]];
     }
-  }
-  if (cur.length >= 2) {
-    const mid = cur[Math.floor(cur.length / 2)];
+  } else if (canStub) {
+    const mid = midPts[Math.floor(midPts.length / 2)];
     pieces.push({
       feature,
       grade: gradeAtPathT(feature, pathTAt(mid)),
       order,
-      subPoints: cur,
+      subPoints: midPts,
     });
+  } else {
+    pieces.push({ feature, grade: (g0 + g1) / 2, order });
   }
+
   return pieces.length ? pieces : [{ feature, grade: (g0 + g1) / 2, order }];
 }
 
-/** 同层：先全部匝道（交叉按标高），再全部主路盖住端点 → 同级汇入 */
+function drawJunctionMouths(
+  ctx: CanvasRenderingContext2D,
+  mouths: JoinMouth[],
+  band: number,
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  for (const m of mouths) {
+    if (Math.floor(m.grade + 1e-9) !== band) continue;
+    const p = toScreen(m.point, viewport);
+    const r = Math.max(2, (m.hostWidth * 0.5) * viewport.zoom);
+    let fill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
+    if (style === 'sketch') fill = sketchRoadFill(m.hostColor);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+}
+
+/** 同层：tip stub → 匝道 → 主路；路缘在汇入处截断开口；路面后补宿主色圆盘 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -198,6 +320,8 @@ function drawRoadsMerged(
   rivers: MapFeature[],
 ) {
   const joinedCaps = collectJoinedCaps(roads);
+  const casingTrim = collectCasingTrimM(roads);
+  const mouths = collectJoinMouths(roads);
   const pieces: RoadDrawPiece[] = [];
   const orderOf = new Map(roads.map((f, i) => [f.id, i]));
 
@@ -214,11 +338,13 @@ function drawRoadsMerged(
     }
   }
 
-  // 整数层内：所有匝道在前（其间按连续标高），主路在后整层压盖端点
   pieces.sort((a, b) => {
     const bandA = Math.floor(a.grade + 1e-9);
     const bandB = Math.floor(b.grade + 1e-9);
     if (bandA !== bandB) return bandA - bandB;
+    const tipA = a.isTip ? 0 : 1;
+    const tipB = b.isTip ? 0 : 1;
+    if (tipA !== tipB) return tipA - tipB;
     const rampA = isRampRoadFeature(a.feature) ? 0 : 1;
     const rampB = isRampRoadFeature(b.feature) ? 0 : 1;
     if (rampA !== rampB) return rampA - rampB;
@@ -242,25 +368,78 @@ function drawRoadsMerged(
     while (j < pieces.length && gradeBand(pieces[j].grade) === band) j++;
     const batch = pieces.slice(i, j);
 
-    const ramps = batch.filter((p) => isRampRoadFeature(p.feature));
-    const mains = batch.filter((p) => !isRampRoadFeature(p.feature));
+    const tips = batch.filter((p) => p.isTip);
+    const ramps = batch.filter(
+      (p) => !p.isTip && isRampRoadFeature(p.feature),
+    );
+    const mains = batch.filter(
+      (p) => !p.isTip && !isRampRoadFeature(p.feature),
+    );
 
-    // 匝道：按已排序顺序逐条画完（交叉谁高谁在上）
+    for (const piece of tips) {
+      drawRoadCasing(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        casingTrim,
+        piece.subPoints,
+      );
+      drawRoadFill(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        piece.subPoints,
+      );
+    }
     for (const piece of ramps) {
-      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
-      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+      drawRoadCasing(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        casingTrim,
+        piece.subPoints,
+      );
+      drawRoadFill(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        piece.subPoints,
+      );
     }
-    // 主路：先全部路缘再路面，并盖住同层匝道端点 → 平面汇入
     for (const piece of mains) {
-      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+      drawRoadCasing(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        casingTrim,
+        piece.subPoints,
+      );
     }
     for (const piece of mains) {
-      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+      drawRoadFill(
+        ctx,
+        piece.feature,
+        viewport,
+        style,
+        joinedCaps,
+        piece.subPoints,
+      );
     }
+    // 宿主色圆盘撕开汇入口，盖住异级路缘横杠
+    drawJunctionMouths(ctx, mouths, band, viewport, style);
     i = j;
   }
 
-  // 穿水段：桥梁 / 隧道覆写样式 + 端口标记
   if (terrain || rivers.length > 0) {
     const spansByGrade: { feature: MapFeature; span: WaterSpan }[] = [];
     for (const feature of roads) {
@@ -723,13 +902,14 @@ function sketchRoadFill(color: string): string {
   return `rgb(${Math.round(p.r * 0.15 + 240)},${Math.round(p.g * 0.15 + 240)},${Math.round(p.b * 0.15 + 240)})`;
 }
 
-/** 分段描边时略延长，避免 round cap 叠成毛毛虫 —— 已改为连续子路径，保留注释占位 */
+/** 路缘：汇入端按宿主半宽截断，边线在主路边开口，不封死路口 */
 function drawRoadCasing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
   viewport: Viewport,
   style: MapStyle,
   joinedCaps: Set<string>,
+  casingTrim: Map<string, number>,
   subPoints?: Point[],
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
@@ -743,7 +923,30 @@ function drawRoadCasing(
   const fromStyle = ROAD_STYLES[normalizeRoadClass(fromLevel)];
   const endStyle = ROAD_STYLES[normalizeRoadClass(levelEnd)];
 
-  const world = subPoints && subPoints.length >= 2 ? subPoints : feature.points;
+  let world = subPoints && subPoints.length >= 2 ? subPoints : feature.points;
+  if (world.length < 2) return;
+
+  const tipEps = 0.75;
+  const startsAtTip =
+    Math.hypot(world[0].x - feature.points[0].x, world[0].y - feature.points[0].y) <
+    tipEps;
+  const endsAtTip =
+    Math.hypot(
+      world[world.length - 1].x - feature.points[feature.points.length - 1].x,
+      world[world.length - 1].y - feature.points[feature.points.length - 1].y,
+    ) < tipEps;
+
+  // 整条路端点接合：路缘在宿主半宽处截断 → 边线开口
+  let trimStart = 0;
+  let trimEnd = 0;
+  if (startsAtTip) trimStart = casingTrim.get(`${feature.id}|start`) ?? 0;
+  if (endsAtTip) trimEnd = casingTrim.get(`${feature.id}|end`) ?? 0;
+  if (trimStart > 0 || trimEnd > 0) {
+    const trimmed = trimPolylineEnds(world, trimStart, trimEnd);
+    if (!trimmed) return; // 过短：不画封死的路缘 stub
+    world = trimmed;
+  }
+
   const points = world.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
@@ -761,19 +964,14 @@ function drawRoadCasing(
       ? sketchRoadInk(colorStyle.casing)
       : colorStyle.casing;
 
-  // 子路径两端：只有真正接到整条路端点才画自由端帽；交叉切开处用 butt，避免毛边
-  const tipEps = 0.75;
-  const startsAtTip =
-    Math.hypot(world[0].x - feature.points[0].x, world[0].y - feature.points[0].y) < tipEps;
-  const endsAtTip =
-    Math.hypot(
-      world[world.length - 1].x - feature.points[feature.points.length - 1].x,
-      world[world.length - 1].y - feature.points[feature.points.length - 1].y,
-    ) < tipEps;
   const splitInterior = Boolean(subPoints) && !(startsAtTip && endsAtTip);
-  const cap: CanvasLineCap = splitInterior
-    ? startsAtTip || endsAtTip
-      ? strokeCap
+  // 截断后的汇入端一律 butt，避免圆帽又把口封上
+  const opened = trimStart > 0 || trimEnd > 0;
+  const cap: CanvasLineCap = opened || splitInterior
+    ? startsAtTip || endsAtTip || opened
+      ? opened
+        ? 'butt'
+        : strokeCap
       : 'butt'
     : strokeCap;
 
@@ -796,10 +994,18 @@ function drawRoadCasing(
   ctx.lineCap = cap;
   ctx.stroke();
 
+  // 已开口的端不补自由端圆盘
   const tips: Point[] = [];
-  if (startsAtTip && freeEnds.includes(feature.points[0])) tips.push(feature.points[0]);
+  if (
+    startsAtTip &&
+    trimStart <= 0 &&
+    freeEnds.includes(feature.points[0])
+  ) {
+    tips.push(feature.points[0]);
+  }
   if (
     endsAtTip &&
+    trimEnd <= 0 &&
     freeEnds.includes(feature.points[feature.points.length - 1])
   ) {
     tips.push(feature.points[feature.points.length - 1]);

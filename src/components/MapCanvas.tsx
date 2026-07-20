@@ -54,6 +54,7 @@ import {
   reweaveAllCrossings,
   setFeaturesGrade,
   roadClassAtPoint,
+  ensureGradeTransitionVertex,
   RAMP_ATTACH_M,
 } from '../engine/junctions';
 import { dist } from '../engine/pathUtils';
@@ -164,6 +165,10 @@ export function MapCanvas({
   const [curveAnchorHeading, setCurveAnchorHeading] = useState<number | null>(null);
   /** 本笔路径起点标高（吸附到已有路时锁定） */
   const [draftStartGrade, setDraftStartGrade] = useState<FeatureGrade | null>(null);
+  /** 绘制中换层时的转换顶点索引（该点必须保留） */
+  const [draftGradeTransitionIndex, setDraftGradeTransitionIndex] = useState<
+    number | null
+  >(null);
   const [lastSnapKind, setLastSnapKind] = useState<SnapKind>('none');
   const [activeGuide, setActiveGuide] = useState<PreviewGuide | null>(null);
   const [brushCursor, setBrushCursor] = useState<Point | null>(null);
@@ -208,6 +213,7 @@ export function MapCanvas({
     setCurveControl(null);
     setCurveAnchorHeading(null);
     setDraftStartGrade(null);
+    setDraftGradeTransitionIndex(null);
     setLastSnapKind('none');
     setActiveGuide(null);
     setBrushCursor(null);
@@ -432,6 +438,7 @@ export function MapCanvas({
     setCurveControl(null);
     setCurveAnchorHeading(null);
     setDraftStartGrade(null);
+    setDraftGradeTransitionIndex(null);
     setLastSnapKind('none');
     setActiveGuide(null);
     brushPainting.current = false;
@@ -579,6 +586,9 @@ export function MapCanvas({
         endG = featureGrade(endTip.feature);
       } else if (endNear) {
         endG = endNear.grade;
+      } else if (draftStartGrade != null && drawGrade !== startG) {
+        // 绘制中用 -/= 换层且终点未挂接：终点层取工具栏当前标高
+        endG = drawGrade;
       }
 
       const startClass = roadClassAtPoint(
@@ -631,39 +641,56 @@ export function MapCanvas({
     const meta =
       kind === 'road' || kind === 'railway' ? resolvePathGrades(polyDraft) : null;
 
+    const transitionPrefer =
+      draftGradeTransitionIndex != null &&
+      draftGradeTransitionIndex >= 0 &&
+      draftGradeTransitionIndex < polyDraft.length
+        ? polyDraft[draftGradeTransitionIndex]
+        : null;
+
     const pathList =
       parallelEnabled && (kind === 'road' || kind === 'railway')
         ? buildParallelPaths(polyDraft, parallelSpacingM, parallelSide)
         : [polyDraft];
 
     commitPathFeatures(
-      pathList.map((points) => ({
-        id: createId(),
-        kind,
-        points,
-        closed: false,
-        roadLevel: kind === 'road' ? (meta?.roadLevel ?? roadLevel) : undefined,
-        roadLevelFrom: kind === 'road' ? meta?.roadLevelFrom : undefined,
-        roadLevelEnd: kind === 'road' ? meta?.roadLevelEnd : undefined,
-        railKind: kind === 'railway' ? railKind : undefined,
-        metroColor:
-          kind === 'railway' && (railKind === 'metro' || railKind === 'tram')
-            ? metroColor ||
-              (railKind === 'tram' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR)
-            : undefined,
-        lineName:
-          kind === 'railway' &&
-          (railKind === 'metro' || railKind === 'tram') &&
-          lineName.trim()
-            ? lineName.trim()
-            : undefined,
-        grade: meta?.grade,
-        gradeEnd: meta?.gradeEnd,
-      })),
+      pathList.map((rawPoints) => {
+        const startG = meta?.grade ?? drawGrade;
+        const endG = meta?.gradeEnd ?? startG;
+        const points =
+          kind === 'road' || kind === 'railway'
+            ? ensureGradeTransitionVertex(rawPoints, startG, endG, transitionPrefer)
+            : rawPoints;
+        return {
+          id: createId(),
+          kind,
+          points,
+          closed: false,
+          roadLevel: kind === 'road' ? (meta?.roadLevel ?? roadLevel) : undefined,
+          roadLevelFrom: kind === 'road' ? meta?.roadLevelFrom : undefined,
+          roadLevelEnd: kind === 'road' ? meta?.roadLevelEnd : undefined,
+          railKind: kind === 'railway' ? railKind : undefined,
+          metroColor:
+            kind === 'railway' && (railKind === 'metro' || railKind === 'tram')
+              ? metroColor ||
+                (railKind === 'tram' ? DEFAULT_TRAM_COLOR : DEFAULT_METRO_COLOR)
+              : undefined,
+          lineName:
+            kind === 'railway' &&
+            (railKind === 'metro' || railKind === 'tram') &&
+            lineName.trim()
+              ? lineName.trim()
+              : undefined,
+          grade: meta?.grade,
+          gradeEnd: meta?.gradeEnd,
+        };
+      }),
     );
     resetDrafts();
   }, [
     commitPathFeatures,
+    draftGradeTransitionIndex,
+    drawGrade,
     lineName,
     metroColor,
     parallelEnabled,
@@ -806,9 +833,22 @@ export function MapCanvas({
           return;
         }
       }
+      // 绘制中换层：锁定起点层，并记下当前末顶点为标高转换点
+      if (polyDraft.length > 0) {
+        if (draftStartGrade == null) setDraftStartGrade(drawGrade);
+        setDraftGradeTransitionIndex(polyDraft.length - 1);
+      }
       onDrawGradeChange(clampGrade(drawGrade + delta));
     },
-    [drawGrade, onDrawGradeChange, onProjectChange, selectedFeatureId, tool],
+    [
+      draftStartGrade,
+      drawGrade,
+      onDrawGradeChange,
+      onProjectChange,
+      polyDraft.length,
+      selectedFeatureId,
+      tool,
+    ],
   );
 
   const handleContextMenu = (e: React.MouseEvent) => {
