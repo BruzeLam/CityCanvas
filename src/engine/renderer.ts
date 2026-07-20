@@ -47,17 +47,12 @@ function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
 
 type RoadDrawPiece = {
   feature: MapFeature;
-  /** 连续标高，用于 z-order；匝道取子段中点插值 */
+  /** 连续标高，用于 z-order；匝道交叉处取子段中点插值 */
   grade: number;
   /** 创建顺序（features 下标）；标高相同时后创建的在上 */
   order: number;
-  /**
-   * 只画这段世界坐标折线（匝道交叉拆分后的连续子路径）。
-   * 缺省画整条 feature.points。
-   */
+  /** 只画这段世界坐标折线；缺省画整条 */
   subPoints?: Point[];
-  /** 端点短截：同级汇入主路，须压在主路下 */
-  isTip?: boolean;
 };
 
 function isRampRoadFeature(f: MapFeature): boolean {
@@ -75,47 +70,9 @@ function polylineCumLen(points: Point[]): { cum: number[]; total: number } {
   return { cum, total: cum[cum.length - 1] || 1 };
 }
 
-/** 沿折线截取 [s0, s1] 米处的子折线（含端点插值） */
-function slicePolylineByArc(
-  points: Point[],
-  cum: number[],
-  s0: number,
-  s1: number,
-): Point[] {
-  const total = cum[cum.length - 1] || 1;
-  const a = Math.max(0, Math.min(total, s0));
-  const b = Math.max(0, Math.min(total, s1));
-  if (b - a < 0.5 || points.length < 2) return [];
-
-  const at = (s: number): Point => {
-    for (let i = 0; i < points.length - 1; i++) {
-      if (s <= cum[i + 1] + 1e-9) {
-        const span = cum[i + 1] - cum[i] || 1;
-        const u = (s - cum[i]) / span;
-        return {
-          x: points[i].x + (points[i + 1].x - points[i].x) * u,
-          y: points[i].y + (points[i + 1].y - points[i].y) * u,
-        };
-      }
-    }
-    return { ...points[points.length - 1] };
-  };
-
-  const out: Point[] = [at(a)];
-  for (let i = 1; i < points.length - 1; i++) {
-    if (cum[i] > a + 1e-6 && cum[i] < b - 1e-6) out.push({ ...points[i] });
-  }
-  out.push(at(b));
-  return out;
-}
-
-/** 匝道端点短截长度（米）：压在主路下形成同级汇入 */
-const RAMP_TIP_STUB_M = 16;
-
 /**
- * 匝道拆段：
- * 1) 两端 tip stub（端点标高，压主路下）
- * 2) 中段再按匝道交叉切开（插值标高比大小）
+ * 匝道绘制拆段：仅在匝道↔匝道交叉处切开（插值标高比高下）。
+ * 端点汇入主路不靠 tip stub，而靠「同层主路最后画、盖住端点」。
  */
 function buildRampDrawPieces(
   feature: MapFeature,
@@ -125,11 +82,9 @@ function buildRampDrawPieces(
   const pts = feature.points;
   if (pts.length < 2) return [];
 
-  const { cum, total } = polylineCumLen(pts);
   const g0 = featureGrade(feature);
   const g1 = featureGradeEnd(feature);
-  const tipM = Math.min(RAMP_TIP_STUB_M, total * 0.28);
-  const canStub = total > tipM * 2.4;
+  const { cum, total } = polylineCumLen(pts);
 
   type Split = { segIndex: number; t: number; point: Point };
   const splits: Split[] = [];
@@ -144,9 +99,7 @@ function buildRampDrawPieces(
         const hit = segmentIntersection(a1, a2, other.points[j], other.points[j + 1]);
         if (!hit) continue;
         splits.push({ segIndex: i, t: hit.t, point: hit.point });
-        if (self) {
-          splits.push({ segIndex: j, t: hit.u, point: hit.point });
-        }
+        if (self) splits.push({ segIndex: j, t: hit.u, point: hit.point });
       }
     }
   };
@@ -155,6 +108,10 @@ function buildRampDrawPieces(
     if (!isRampRoadFeature(other)) continue;
     if (other.id === feature.id) consider(other, true);
     else consider(other, false);
+  }
+
+  if (splits.length === 0) {
+    return [{ feature, grade: (g0 + g1) / 2, order }];
   }
 
   const pathTAt = (p: Point): number => {
@@ -171,91 +128,44 @@ function buildRampDrawPieces(
       const d = Math.hypot(p.x - q.x, p.y - q.y);
       if (d < bestD) {
         bestD = d;
-        bestT = (cum[i] + u * (cum[i + 1] - cum[i])) / total;
+        bestT = total > 0 ? (cum[i] + u * (cum[i + 1] - cum[i])) / total : 0;
       }
     }
     return bestT;
   };
 
+  splits.sort((a, b) => a.segIndex - b.segIndex || a.t - b.t);
+  const crossKeys = new Set(
+    splits.map(
+      (s) => `${Math.round(s.point.x * 10) / 10},${Math.round(s.point.y * 10) / 10}`,
+    ),
+  );
+
+  const built: Point[] = [{ ...pts[0] }];
+  let si = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    while (si < splits.length && splits[si].segIndex === i) {
+      const s = splits[si++];
+      const prev = built[built.length - 1];
+      if (Math.hypot(s.point.x - prev.x, s.point.y - prev.y) > 0.4) {
+        built.push({ ...s.point });
+      }
+    }
+    const end = pts[i + 1];
+    const prev = built[built.length - 1];
+    if (Math.hypot(end.x - prev.x, end.y - prev.y) > 0.4) {
+      built.push({ ...end });
+    }
+  }
+
+  const isCross = (p: Point) =>
+    crossKeys.has(`${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`);
+
   const pieces: RoadDrawPiece[] = [];
-
-  if (canStub) {
-    const startStub = slicePolylineByArc(pts, cum, 0, tipM);
-    const endStub = slicePolylineByArc(pts, cum, total - tipM, total);
-    if (startStub.length >= 2) {
-      pieces.push({ feature, grade: g0, order, subPoints: startStub, isTip: true });
-    }
-    if (endStub.length >= 2) {
-      pieces.push({ feature, grade: g1, order, subPoints: endStub, isTip: true });
-    }
-  }
-
-  // 中段：去掉 tip，再按交叉切开
-  const midStart = canStub ? tipM : 0;
-  const midEnd = canStub ? total - tipM : total;
-  let midPts = slicePolylineByArc(pts, cum, midStart, midEnd);
-  if (midPts.length < 2) {
-    if (pieces.length === 0) {
-      pieces.push({ feature, grade: (g0 + g1) / 2, order });
-    }
-    return pieces;
-  }
-
-  // 把交叉点落到中段上并切开
-  if (splits.length > 0) {
-    type HitOnMid = { u: number; point: Point };
-    const crossKeys = new Set<string>();
-    const withHits: Point[] = [{ ...midPts[0] }];
-    for (let i = 0; i < midPts.length - 1; i++) {
-      const a = midPts[i];
-      const b = midPts[i + 1];
-      const onSeg: HitOnMid[] = [];
-      for (const s of splits) {
-        const along = cum[s.segIndex] + s.t * (cum[s.segIndex + 1] - cum[s.segIndex]);
-        if (along <= midStart + 0.5 || along >= midEnd - 0.5) continue;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const lenSq = dx * dx + dy * dy || 1;
-        const u = ((s.point.x - a.x) * dx + (s.point.y - a.y) * dy) / lenSq;
-        if (u <= 0.02 || u >= 0.98) continue;
-        const proj = { x: a.x + u * dx, y: a.y + u * dy };
-        if (Math.hypot(s.point.x - proj.x, s.point.y - proj.y) < 1.2) {
-          onSeg.push({ u, point: { ...s.point } });
-          crossKeys.add(
-            `${Math.round(s.point.x * 10) / 10},${Math.round(s.point.y * 10) / 10}`,
-          );
-        }
-      }
-      onSeg.sort((p, q) => p.u - q.u);
-      for (const h of onSeg) {
-        const prev = withHits[withHits.length - 1];
-        if (Math.hypot(h.point.x - prev.x, h.point.y - prev.y) > 0.4) {
-          withHits.push(h.point);
-        }
-      }
-      const prev = withHits[withHits.length - 1];
-      if (Math.hypot(b.x - prev.x, b.y - prev.y) > 0.4) withHits.push({ ...b });
-    }
-    midPts = withHits;
-
-    const isCross = (p: Point) =>
-      crossKeys.has(`${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`);
-
-    let cur: Point[] = [midPts[0]];
-    for (let i = 1; i < midPts.length; i++) {
-      cur.push(midPts[i]);
-      if (i < midPts.length - 1 && isCross(midPts[i]) && cur.length >= 2) {
-        const mid = cur[Math.floor(cur.length / 2)];
-        pieces.push({
-          feature,
-          grade: gradeAtPathT(feature, pathTAt(mid)),
-          order,
-          subPoints: cur,
-        });
-        cur = [midPts[i]];
-      }
-    }
-    if (cur.length >= 2) {
+  let cur: Point[] = [built[0]];
+  for (let i = 1; i < built.length; i++) {
+    cur.push(built[i]);
+    if (i < built.length - 1 && isCross(built[i]) && cur.length >= 2) {
       const mid = cur[Math.floor(cur.length / 2)];
       pieces.push({
         feature,
@@ -263,21 +173,22 @@ function buildRampDrawPieces(
         order,
         subPoints: cur,
       });
+      cur = [built[i]];
     }
-  } else {
-    const mid = midPts[Math.floor(midPts.length / 2)];
+  }
+  if (cur.length >= 2) {
+    const mid = cur[Math.floor(cur.length / 2)];
     pieces.push({
       feature,
-      grade: canStub ? gradeAtPathT(feature, pathTAt(mid)) : (g0 + g1) / 2,
+      grade: gradeAtPathT(feature, pathTAt(mid)),
       order,
-      subPoints: canStub ? midPts : undefined,
+      subPoints: cur,
     });
   }
-
-  return pieces;
+  return pieces.length ? pieces : [{ feature, grade: (g0 + g1) / 2, order }];
 }
 
-/** 同层先画完所有路缘，再画路面；匝道交叉按插值标高拆段压盖 */
+/** 同层：先全部匝道（交叉按标高），再全部主路盖住端点 → 同级汇入 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -303,19 +214,15 @@ function drawRoadsMerged(
     }
   }
 
-  // 整数层内：tip stub 最先（压主路下）→ 再按标高；同标高匝道先于主路；后创建在上
+  // 整数层内：所有匝道在前（其间按连续标高），主路在后整层压盖端点
   pieces.sort((a, b) => {
     const bandA = Math.floor(a.grade + 1e-9);
     const bandB = Math.floor(b.grade + 1e-9);
     if (bandA !== bandB) return bandA - bandB;
-    const tipA = a.isTip ? 0 : 1;
-    const tipB = b.isTip ? 0 : 1;
-    if (tipA !== tipB) return tipA - tipB;
+    const rampA = isRampRoadFeature(a.feature) ? 0 : 1;
+    const rampB = isRampRoadFeature(b.feature) ? 0 : 1;
+    if (rampA !== rampB) return rampA - rampB;
     if (Math.abs(a.grade - b.grade) > 1e-5) return a.grade - b.grade;
-    const rampFirst = (f: MapFeature) => (isRampRoadFeature(f) ? 0 : 1);
-    const ra0 = rampFirst(a.feature);
-    const rb0 = rampFirst(b.feature);
-    if (ra0 !== rb0) return ra0 - rb0;
     const classOf = (f: MapFeature) => {
       if (f.roadLevel === 'ramp') return rampSolidClass(f) ?? 'local';
       return normalizeRoadClass(f.roadLevel);
@@ -335,45 +242,20 @@ function drawRoadsMerged(
     while (j < pieces.length && gradeBand(pieces[j].grade) === band) j++;
     const batch = pieces.slice(i, j);
 
-    // tip 先画完；其余：匝道逐条 casing+fill，主路批量 casing→fill
-    let k = 0;
-    while (k < batch.length) {
-      if (batch[k].isTip || isRampRoadFeature(batch[k].feature)) {
-        drawRoadCasing(
-          ctx,
-          batch[k].feature,
-          viewport,
-          style,
-          joinedCaps,
-          batch[k].subPoints,
-        );
-        drawRoadFill(
-          ctx,
-          batch[k].feature,
-          viewport,
-          style,
-          joinedCaps,
-          batch[k].subPoints,
-        );
-        k++;
-      } else {
-        let m = k;
-        while (
-          m < batch.length &&
-          !batch[m].isTip &&
-          !isRampRoadFeature(batch[m].feature)
-        ) {
-          m++;
-        }
-        const mains = batch.slice(k, m);
-        for (const piece of mains) {
-          drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
-        }
-        for (const piece of mains) {
-          drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
-        }
-        k = m;
-      }
+    const ramps = batch.filter((p) => isRampRoadFeature(p.feature));
+    const mains = batch.filter((p) => !isRampRoadFeature(p.feature));
+
+    // 匝道：按已排序顺序逐条画完（交叉谁高谁在上）
+    for (const piece of ramps) {
+      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+    }
+    // 主路：先全部路缘再路面，并盖住同层匝道端点 → 平面汇入
+    for (const piece of mains) {
+      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
+    }
+    for (const piece of mains) {
+      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.subPoints);
     }
     i = j;
   }

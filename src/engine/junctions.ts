@@ -616,26 +616,32 @@ export function findGradeAttachment(
 }
 
 /**
- * 在对向路上插入挂接节点（同级平面交叉的共享顶点）。
- * 靠近线段端点时只挪对应顶点，避免把整条路远端拽过来。
+ * 在对向路上登记挂接：中段插入共享顶点；靠近端点则不挪主路顶点，
+ * 只返回已有顶点坐标供匝道端点对齐（避免主路被拽断）。
  */
 function insertAttachmentOnPeer(
   peer: MapFeature,
   segIndex: number,
   t: number,
   point: Point,
-): MapFeature {
-  if (t < 0.02 || t > 0.98) {
+): { peer: MapFeature; snapPoint: Point } {
+  if (t < 0.08 || t > 0.92) {
     const vi = t < 0.5 ? segIndex : segIndex + 1;
-    if (vi < 0 || vi >= peer.points.length) return peer;
-    return {
-      ...peer,
-      points: peer.points.map((p, i) => (i === vi ? { ...point } : p)),
-    };
+    if (vi >= 0 && vi < peer.points.length) {
+      return { peer, snapPoint: { ...peer.points[vi] } };
+    }
+  }
+  // 已有很近顶点：对齐过去，不插点、不挪点
+  const near = nearestExisting(peer.points, point, ENDPOINT_MERGE_M * 0.85);
+  if (near) {
+    return { peer, snapPoint: { ...near } };
   }
   return {
-    ...peer,
-    points: applyHitsToPolyline(peer.points, [{ segIndex, t, point }]),
+    peer: {
+      ...peer,
+      points: applyHitsToPolyline(peer.points, [{ segIndex, t, point }]),
+    },
+    snapPoint: { ...point },
   };
 }
 
@@ -738,31 +744,37 @@ function snapRampTipsToMains(
     if (tipIndex === 0) startG = hit.grade;
     else endG = hit.grade;
 
-    // 端点落到中心线；若邻点过近则丢掉，避免尖角鼓包
+    const attached = insertAttachmentOnPeer(
+      hit.feature,
+      hit.segIndex,
+      hit.t,
+      hit.point,
+    );
+    const snapPt = attached.snapPoint;
+
+    // 端点对齐到主路顶点/中心线；邻点过近则丢掉
     if (tipIndex === 0) {
       const rest = points.slice(1);
       while (
         rest.length > 1 &&
-        dist(hit.point, rest[0]) < Math.max(4, ENDPOINT_MERGE_M * 0.6)
+        dist(snapPt, rest[0]) < Math.max(4, ENDPOINT_MERGE_M * 0.6)
       ) {
         rest.shift();
       }
-      points = [{ ...hit.point }, ...rest];
+      points = [{ ...snapPt }, ...rest];
     } else {
       const rest = points.slice(0, -1);
       while (
         rest.length > 1 &&
-        dist(hit.point, rest[rest.length - 1]) < Math.max(4, ENDPOINT_MERGE_M * 0.6)
+        dist(snapPt, rest[rest.length - 1]) < Math.max(4, ENDPOINT_MERGE_M * 0.6)
       ) {
         rest.pop();
       }
-      points = [...rest, { ...hit.point }];
+      points = [...rest, { ...snapPt }];
     }
 
     nextFeatures = nextFeatures.map((f) =>
-      f.id === hit.feature.id
-        ? insertAttachmentOnPeer(f, hit.segIndex, hit.t, hit.point)
-        : f,
+      f.id === hit.feature.id ? attached.peer : f,
     );
   };
 
@@ -815,16 +827,20 @@ export function attachCrossGradeTips(
     );
     if (!hit) return;
 
+    const attached = insertAttachmentOnPeer(
+      hit.feature,
+      hit.segIndex,
+      hit.t,
+      hit.point,
+    );
     if (tipIndex === 0) {
-      points = [{ ...hit.point }, ...points.slice(1)];
+      points = [{ ...attached.snapPoint }, ...points.slice(1)];
     } else {
-      points = [...points.slice(0, -1), { ...hit.point }];
+      points = [...points.slice(0, -1), { ...attached.snapPoint }];
     }
 
     nextFeatures = nextFeatures.map((f) =>
-      f.id === hit.feature.id
-        ? insertAttachmentOnPeer(f, hit.segIndex, hit.t, hit.point)
-        : f,
+      f.id === hit.feature.id ? attached.peer : f,
     );
   };
 
