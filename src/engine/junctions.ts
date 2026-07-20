@@ -1,11 +1,13 @@
-import type { FeatureGrade, MapFeature, Point } from '../types';
+import type { FeatureGrade, MapFeature, Point, RoadLevel } from '../types';
 import {
   clampGrade,
   featureGrade,
   featureGradeEnd,
   isLevelBlendRoad,
   isRampFeature,
+  normalizeRoadClass,
 } from '../types';
+import { simplifyPolylineRdp } from './curveMath';
 import { closestOnSegment, dist } from './geometry';
 
 const EPS = 1e-6;
@@ -14,6 +16,9 @@ export const ENDPOINT_MERGE_M = 6;
 const JUNCTION_SNAP_M = 10;
 /** 匝道端点挂接到目标路（含中段）的搜索半径 */
 export const RAMP_ATTACH_M = 22;
+/** 超过此顶点数的折线在重织时做 RDP 简化（保留路口） */
+const DENSE_PATH_SIMPLIFY_AT = 40;
+const DENSE_PATH_SIMPLIFY_EPS_M = 0.7;
 
 type SegHit = {
   featureId: string;
@@ -284,20 +289,127 @@ export function findPathTipAt(
 }
 
 /**
+ * 从某点推断所接「非匝道」道路等级；只接匝道或空白则返回 null。
+ */
+export function roadClassAtPoint(
+  features: MapFeature[],
+  point: Point,
+  excludeId?: string,
+  maxDist = RAMP_ATTACH_M,
+): Exclude<RoadLevel, 'ramp'> | null {
+  const classOf = (f: MapFeature): Exclude<RoadLevel, 'ramp'> | null => {
+    if (f.kind !== 'road') return null;
+    if (f.roadLevel === 'ramp') return null;
+    return normalizeRoadClass(f.roadLevel);
+  };
+
+  const tip = findPathTipAt(
+    features,
+    point,
+    ENDPOINT_MERGE_M,
+    (f) => f.id !== excludeId && classOf(f) != null,
+  );
+  if (tip) {
+    const c = classOf(tip.feature);
+    if (c) return c;
+  }
+
+  let best: { dist: number; cls: Exclude<RoadLevel, 'ramp'> } | null = null;
+  for (const f of features) {
+    if (excludeId && f.id === excludeId) continue;
+    const cls = classOf(f);
+    if (!cls || f.points.length < 2) continue;
+    for (let i = 0; i < f.points.length - 1; i++) {
+      const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
+      if (hit.dist > maxDist) continue;
+      if (!best || hit.dist < best.dist) best = { dist: hit.dist, cls };
+    }
+  }
+  return best?.cls ?? null;
+}
+
+/**
+ * 按匝道当前首尾端点重算 roadLevelFrom / End：
+ * - 两端都接到非匝道路 → 写入对应等级（可渐变）
+ * - 只接一端 → 两端都写成该等级（纯色）
+ * - 都未接 → 清空（灰色默认匝道色）
+ */
+export function refreshRampRoadClasses(
+  features: MapFeature[],
+  rampId: string,
+): MapFeature[] {
+  const ramp = features.find((f) => f.id === rampId);
+  if (!ramp || ramp.kind !== 'road' || ramp.roadLevel !== 'ramp' || ramp.points.length < 2) {
+    return features;
+  }
+  const startCls = roadClassAtPoint(features, ramp.points[0], rampId);
+  const endCls = roadClassAtPoint(
+    features,
+    ramp.points[ramp.points.length - 1],
+    rampId,
+  );
+
+  let roadLevelFrom: typeof startCls | undefined;
+  let roadLevelEnd: typeof endCls | undefined;
+  if (startCls && endCls) {
+    roadLevelFrom = startCls;
+    roadLevelEnd = endCls;
+  } else if (startCls || endCls) {
+    const only = (startCls ?? endCls)!;
+    roadLevelFrom = only;
+    roadLevelEnd = only;
+  } else {
+    roadLevelFrom = undefined;
+    roadLevelEnd = undefined;
+  }
+
+  if (ramp.roadLevelFrom === roadLevelFrom && ramp.roadLevelEnd === roadLevelEnd) {
+    return features;
+  }
+
+  return features.map((f) =>
+    f.id === rampId
+      ? {
+          ...f,
+          roadLevelFrom,
+          roadLevelEnd,
+        }
+      : f,
+  );
+}
+
+/** 刷新图中全部匝道的起终点等级锚定 */
+export function refreshAllRampRoadClasses(features: MapFeature[]): MapFeature[] {
+  let next = features;
+  for (const f of features) {
+    if (f.kind === 'road' && f.roadLevel === 'ramp') {
+      next = refreshRampRoadClasses(next, f.id);
+    }
+  }
+  return next;
+}
+
+/**
  * 同层首尾相接：把 draft 并入已有路径（消除端点圆帽与延伸处多余节点）。
- * 仅同 kind / 同等级 / 同标高且非匝道时合并；起终点任一端贴上都可续接。
+ * 普通路：同 kind / 同等级 / 同标高。
+ * 匝道：可与另一条匝道首尾拉通，合并后按两端主路刷新配色。
  */
 export function tryMergeHeadToTail(
   features: MapFeature[],
   draft: MapFeature,
 ): MapFeature[] | null {
   if (!isPathKind(draft) || draft.points.length < 2) return null;
-  if (isRampFeature(draft) || isLevelBlendRoad(draft) || draft.roadLevel === 'ramp') return null;
+
+  const draftIsRamp = draft.kind === 'road' && draft.roadLevel === 'ramp';
+  if (!draftIsRamp && (isRampFeature(draft) || isLevelBlendRoad(draft))) return null;
 
   const grade = featureGrade(draft);
-  const filter = (f: MapFeature) => canMergeInto(f, draft, grade);
+  const filter = draftIsRamp
+    ? (f: MapFeature) =>
+        f.kind === 'road' && f.roadLevel === 'ramp' && f.points.length >= 2
+    : (f: MapFeature) => canMergeInto(f, draft, grade);
 
-  type Merge = { host: MapFeature; points: Point[] };
+  type Merge = { host: MapFeature; points: Point[]; startG: FeatureGrade; endG: FeatureGrade };
   let best: Merge | null = null;
 
   const startTip = findPathTipAt(features, draft.points[0], ENDPOINT_MERGE_M, filter);
@@ -308,7 +420,16 @@ export function tryMergeHeadToTail(
         startTip.end === 'end'
           ? [...startTip.feature.points, ...extension]
           : [...extension.reverse(), ...startTip.feature.points];
-      best = { host: startTip.feature, points };
+      // 合并后：几何起点在 host 远端或 draft 远端
+      const startG =
+        startTip.end === 'end'
+          ? featureGrade(startTip.feature)
+          : featureGradeEnd(draft);
+      const endG =
+        startTip.end === 'end'
+          ? featureGradeEnd(draft)
+          : featureGradeEnd(startTip.feature);
+      best = { host: startTip.feature, points, startG, endG };
     }
   }
 
@@ -325,9 +446,16 @@ export function tryMergeHeadToTail(
         endTip.end === 'end'
           ? [...endTip.feature.points, ...extension.reverse()]
           : [...extension, ...endTip.feature.points];
-      // 若两端都能合，优先更长的合并结果
+      const startG =
+        endTip.end === 'end'
+          ? featureGrade(endTip.feature)
+          : featureGrade(draft);
+      const endG =
+        endTip.end === 'end'
+          ? featureGrade(draft)
+          : featureGradeEnd(endTip.feature);
       if (!best || points.length > best.points.length) {
-        best = { host: endTip.feature, points };
+        best = { host: endTip.feature, points, startG, endG };
       }
     }
   }
@@ -339,12 +467,19 @@ export function tryMergeHeadToTail(
     best.points,
     best.host.id,
     without,
-    grade,
+    draftIsRamp ? featureGrade(best.host) : grade,
   );
   const merged: MapFeature = {
     ...best.host,
     points: simplified,
+    grade: best.startG,
+    gradeEnd: best.endG !== best.startG ? best.endG : undefined,
   };
+
+  if (draftIsRamp) {
+    const withMerged = [...without, merged];
+    return refreshRampRoadClasses(withMerged, merged.id);
+  }
 
   return weaveSameGradeCrossings(without, merged);
 }
@@ -522,7 +657,10 @@ export function attachCrossGradeTips(
     isLevelBlendRoad(attached) ||
     attached.roadLevel === 'ramp'
   ) {
-    return [...nextFeatures, attached];
+    const next = [...nextFeatures, attached];
+    return attached.roadLevel === 'ramp'
+      ? refreshRampRoadClasses(next, attached.id)
+      : next;
   }
 
   return weaveSameGradeCrossings(nextFeatures, attached);
@@ -530,7 +668,9 @@ export function attachCrossGradeTips(
 
 /**
  * 同层道路/铁路交叉时，在双方折线上插入共享交点（形成路口节点）。
- * 不同层不处理（上跨/下穿）。跨层匝道整段跳过织网，避免在下层/上层误插路口。
+ * 不同层不处理（上跨/下穿）。
+ * 匝道（含跨层）：只做端点挂接/拉通，中段相交不织平面路口——
+ * 绘制时按路径插值标高分段压盖（交点处谁高谁在上）。
  */
 export function weaveSameGradeCrossings(
   features: MapFeature[],
@@ -549,6 +689,7 @@ export function weaveSameGradeCrossings(
     (f) =>
       isPathKind(f) &&
       !isRampFeature(f) &&
+      f.roadLevel !== 'ramp' &&
       featureGrade(f) === grade &&
       f.points.length >= 2,
   );
@@ -631,19 +772,159 @@ export function stripObsoleteJunctionVertices(features: MapFeature[]): MapFeatur
 }
 
 /**
- * 对整张路网重算同层交叉节点（幂等：已有端点交不会重复插入）。
- * 先清掉异层残留路口点，再按当前标高重织。
- * 用于加载旧图、拖拽顶点、改标高后修复。
+ * 过密折线（旧弯道密采样）RDP 简化，强制保留端点与同层路口 / 挂接顶点。
+ * 加载旧图、改标高重织时自动瘦身。
  */
+export function simplifyDensePath(
+  feature: MapFeature,
+  features: MapFeature[],
+): MapFeature {
+  if (!isPathKind(feature) || feature.points.length < DENSE_PATH_SIMPLIFY_AT) {
+    return feature;
+  }
+  const grade = featureGrade(feature);
+  const keep = new Set<number>([0, feature.points.length - 1]);
+  const checkAttach = feature.roadLevel === 'ramp' || isRampFeature(feature);
+  for (let i = 1; i < feature.points.length - 1; i++) {
+    if (otherFeatureTouchesPoint(features, feature.id, feature.points[i], grade)) {
+      keep.add(i);
+      continue;
+    }
+    if (!checkAttach) continue;
+    for (const f of features) {
+      if (f.id === feature.id || !isPathKind(f)) continue;
+      for (let s = 0; s < f.points.length - 1; s++) {
+        const hit = closestOnSegment(feature.points[i], {
+          a: f.points[s],
+          b: f.points[s + 1],
+        });
+        if (hit.dist <= ENDPOINT_MERGE_M) {
+          keep.add(i);
+          break;
+        }
+      }
+      if (keep.has(i)) break;
+    }
+  }
+  const points = simplifyPolylineRdp(
+    feature.points,
+    DENSE_PATH_SIMPLIFY_EPS_M,
+    keep,
+  );
+  return points.length >= 2 ? { ...feature, points } : feature;
+}
+
 export function reweaveAllCrossings(features: MapFeature[]): MapFeature[] {
-  const cleaned = stripObsoleteJunctionVertices(features);
+  // 先瘦身过密旧弯道，再清异层残留路口，最后按标高重织，并刷新匝道配色锚定
+  const thinned = features.map((f) => simplifyDensePath(f, features));
+  const cleaned = stripObsoleteJunctionVertices(thinned);
   const base = cleaned.filter((f) => !isPathKind(f));
   const paths = cleaned.filter(isPathKind);
   let acc = [...base];
   for (const path of paths) {
     acc = weaveSameGradeCrossings(acc, path);
   }
-  return acc;
+  return refreshAllRampRoadClasses(acc);
+}
+
+function pathHeading(f: MapFeature): number | null {
+  const a = f.points[0];
+  const b = f.points[f.points.length - 1];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.hypot(dx, dy) < 1) return null;
+  return Math.atan2(dy, dx);
+}
+
+function angleDelta(a: number, b: number): number {
+  let d = Math.abs(a - b) % (Math.PI * 2);
+  if (d > Math.PI) d = Math.PI * 2 - d;
+  return d;
+}
+
+function meanDistToPath(sample: Point[], path: MapFeature): number {
+  let sum = 0;
+  let n = 0;
+  for (const p of sample) {
+    let best = Infinity;
+    for (let i = 0; i < path.points.length - 1; i++) {
+      const hit = closestOnSegment(p, { a: path.points[i], b: path.points[i + 1] });
+      if (hit.dist < best) best = hit.dist;
+    }
+    if (best < Infinity) {
+      sum += best;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : Infinity;
+}
+
+/**
+ * 找与目标路平行的「姐妹线」（双向分隔的另一幅），改标高时一起改，避免只抬一条仍与下层织路口。
+ */
+export function findParallelCompanions(
+  features: MapFeature[],
+  target: MapFeature,
+  maxSpacingM = 28,
+): MapFeature[] {
+  if (!isPathKind(target) || target.points.length < 2) return [];
+  if (isRampFeature(target) || target.roadLevel === 'ramp') return [];
+  const grade = featureGrade(target);
+  const heading = pathHeading(target);
+  if (heading == null) return [];
+
+  const sample: Point[] = [];
+  const step = Math.max(1, Math.floor((target.points.length - 1) / 4));
+  for (let i = 0; i < target.points.length; i += step) {
+    sample.push(target.points[i]);
+  }
+  if (sample[sample.length - 1] !== target.points[target.points.length - 1]) {
+    sample.push(target.points[target.points.length - 1]);
+  }
+
+  const out: MapFeature[] = [];
+  for (const f of features) {
+    if (f.id === target.id || !isPathKind(f) || f.points.length < 2) continue;
+    if (isRampFeature(f) || f.roadLevel === 'ramp') continue;
+    if (f.kind !== target.kind) continue;
+    if (featureGrade(f) !== grade) continue;
+    if (
+      f.kind === 'road' &&
+      (f.roadLevel ?? 'local') !== (target.roadLevel ?? 'local')
+    ) {
+      continue;
+    }
+    const h2 = pathHeading(f);
+    if (h2 == null) continue;
+    const dh = angleDelta(heading, h2);
+    if (dh > (22 * Math.PI) / 180 && Math.abs(dh - Math.PI) > (22 * Math.PI) / 180) {
+      continue;
+    }
+    const lat = meanDistToPath(sample, f);
+    if (lat < 3 || lat > maxSpacingM) continue;
+    out.push(f);
+  }
+  return out;
+}
+
+/** 改标高：目标路 + 平行姐妹线一起改，再重织路口 */
+export function setFeaturesGrade(
+  features: MapFeature[],
+  targetId: string,
+  grade: FeatureGrade,
+): MapFeature[] {
+  const target = features.find((f) => f.id === targetId);
+  if (!target || (target.kind !== 'road' && target.kind !== 'railway')) {
+    return features;
+  }
+  const ids = new Set<string>([
+    targetId,
+    ...findParallelCompanions(features, target).map((f) => f.id),
+  ]);
+  const next = features.map((f) =>
+    ids.has(f.id) ? { ...f, grade, gradeEnd: undefined } : f,
+  );
+  return reweaveAllCrossings(next);
 }
 
 export type JunctionNode = {

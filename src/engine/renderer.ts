@@ -7,7 +7,18 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, gradeAtPathT, isLevelBlendRoad, isRampFeature } from '../types';
+import {
+  ROAD_STYLES,
+  RAIL_STYLES,
+  ROAD_CLASS_RANK,
+  featureGrade,
+  getLayers,
+  gradeAtPathT,
+  isLevelBlendRoad,
+  isRampFeature,
+  normalizeRoadClass,
+  rampSolidClass,
+} from '../types';
 import type { RoadLevel } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
@@ -79,7 +90,12 @@ function drawRoadsMerged(
   const pieces: RoadDrawPiece[] = [];
 
   for (const feature of roads) {
-    if (isRampFeature(feature) && feature.points.length >= 2) {
+    // 跨层/匝道/异级：按段拆开。匝道交汇处用插值标高排序，高的压低的，不织平面路口
+    const split =
+      feature.roadLevel === 'ramp' ||
+      isRampFeature(feature) ||
+      isLevelBlendRoad(feature);
+    if (split && feature.points.length >= 2) {
       const n = feature.points.length - 1;
       for (let i = 0; i < n; i++) {
         const t = (i + 0.5) / n;
@@ -98,14 +114,35 @@ function drawRoadsMerged(
     }
   }
 
-  pieces.sort((a, b) => a.grade - b.grade || a.feature.id.localeCompare(b.feature.id));
+  // 按标高分层绘制：同层先全部边线再全部路面（路口并块）；高层整层压在低层之上（边线在上）
+  pieces.sort((a, b) => {
+    if (a.grade !== b.grade) return a.grade - b.grade;
+    const classOf = (f: typeof a.feature) => {
+      if (f.roadLevel === 'ramp') {
+        return rampSolidClass(f) ?? 'local';
+      }
+      return normalizeRoadClass(f.roadLevel);
+    };
+    const ra = ROAD_CLASS_RANK[classOf(a.feature)];
+    const rb = ROAD_CLASS_RANK[classOf(b.feature)];
+    if (ra !== rb) return ra - rb;
+    return a.feature.id.localeCompare(b.feature.id);
+  });
 
-  // 仅靠绘制顺序表达上跨压盖，不加阴影
-  for (const piece of pieces) {
-    drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
-  }
-  for (const piece of pieces) {
-    drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
+  const gradeBand = (g: number) => Math.floor(g + 1e-9);
+  let i = 0;
+  while (i < pieces.length) {
+    const band = gradeBand(pieces[i].grade);
+    let j = i + 1;
+    while (j < pieces.length && gradeBand(pieces[j].grade) === band) j++;
+    const batch = pieces.slice(i, j);
+    for (const piece of batch) {
+      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
+    }
+    for (const piece of batch) {
+      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
+    }
+    i = j;
   }
 
   // 穿水段：桥梁 / 隧道覆写样式 + 端口标记
@@ -123,7 +160,7 @@ function drawRoadsMerged(
   }
 }
 
-/** 桥梁：实线加粗边框 + 两端折线；隧道：虚线边框 + 两端弧线 */
+/** 过河标记：浅细边线 + 岸口括号；桥=实线，隧=虚线。不加重描边/阴影 */
 function drawWaterCrossing(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
@@ -135,88 +172,88 @@ function drawWaterCrossing(
   if (screen.length < 2) return;
 
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
-  const bodyStyle = ROAD_STYLES[level === 'ramp' ? 'ramp' : level];
+  const bodyStyle =
+    ROAD_STYLES[level === 'ramp' ? 'ramp' : normalizeRoadClass(level)];
   const baseW = bodyStyle.width * viewport.zoom;
   const isBridge = span.grade >= 0;
+  const halfW = baseW / 2;
+  const zoom = viewport.zoom;
+
+  // 比路缘更浅更细
   const ink =
     style === 'blueprint'
-      ? '#8ec5ff'
+      ? 'rgba(120, 170, 210, 0.7)'
       : style === 'sketch'
-        ? '#2a2a2a'
-        : '#4a4038';
+        ? 'rgba(60, 60, 60, 0.45)'
+        : 'rgba(90, 78, 68, 0.5)';
+  const edgeW = Math.max(0.7, 0.85 * zoom);
+  const portalW = Math.max(0.85, 1 * zoom);
+
+  const leftRail = offsetPolyline(screen, halfW);
+  const rightRail = offsetPolyline(screen, -halfW);
 
   ctx.save();
-
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = edgeW;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'butt';
   if (isBridge) {
-    // 加粗实线路缘（桥梁）
-    tracePath(ctx, screen, false);
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = baseW + Math.max(3.5, 4.2 * viewport.zoom);
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'butt';
     ctx.setLineDash([]);
-    ctx.stroke();
-
-    // 保留路面色
-    const fill =
-      style === 'blueprint'
-        ? '#e8f4ff'
-        : style === 'sketch'
-          ? '#f5f5f3'
-          : bodyStyle.color;
-    tracePath(ctx, screen, false);
-    ctx.strokeStyle = fill;
-    ctx.lineWidth = baseW;
-    ctx.stroke();
   } else {
-    // 隧道：虚线外框，略收路面
-    tracePath(ctx, screen, false);
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = baseW + Math.max(2.5, 3 * viewport.zoom);
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'butt';
-    const dash = Math.max(5, 6 * viewport.zoom);
-    ctx.setLineDash([dash, dash * 0.75]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    const fill =
-      style === 'blueprint'
-        ? 'rgba(180, 210, 240, 0.85)'
-        : style === 'sketch'
-          ? '#e8e8e6'
-          : bodyStyle.color;
-    tracePath(ctx, screen, false);
-    ctx.strokeStyle = fill;
-    ctx.lineWidth = Math.max(1.2, baseW * 0.85);
-    ctx.stroke();
+    const dash = Math.max(3.5, 4.5 * zoom);
+    ctx.setLineDash([dash, dash * 0.85]);
   }
+  strokePolyline(ctx, leftRail);
+  strokePolyline(ctx, rightRail);
+  ctx.setLineDash([]);
 
-  const halfW = (baseW + (isBridge ? 4 : 3) * viewport.zoom) / 2;
-  drawCrossingPortal(
-    ctx,
-    screen[0],
-    span.entryHeading,
-    halfW,
-    viewport.zoom,
-    ink,
-    isBridge ? 'bridge' : 'tunnel',
+  const n = screen.length;
+  const entryH = Math.atan2(screen[1].y - screen[0].y, screen[1].x - screen[0].x);
+  const exitH = Math.atan2(
+    screen[n - 1].y - screen[n - 2].y,
+    screen[n - 1].x - screen[n - 2].x,
   );
-  drawCrossingPortal(
-    ctx,
-    screen[screen.length - 1],
-    span.exitHeading,
-    halfW,
-    viewport.zoom,
-    ink,
-    isBridge ? 'bridge' : 'tunnel',
-  );
+  drawCrossingPortal(ctx, screen[0], entryH, halfW, zoom, ink, portalW, -1);
+  drawCrossingPortal(ctx, screen[n - 1], exitH, halfW, zoom, ink, portalW, 1);
   ctx.restore();
 }
 
+function strokePolyline(ctx: CanvasRenderingContext2D, pts: Point[]) {
+  if (pts.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+}
+
+/** 沿路径法向偏移（左侧为正） */
+function offsetPolyline(pts: Point[], dist: number): Point[] {
+  if (pts.length < 2) return pts.map((p) => ({ ...p }));
+  const out: Point[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    let tx: number;
+    let ty: number;
+    if (i === 0) {
+      tx = pts[1].x - pts[0].x;
+      ty = pts[1].y - pts[0].y;
+    } else if (i === pts.length - 1) {
+      tx = pts[i].x - pts[i - 1].x;
+      ty = pts[i].y - pts[i - 1].y;
+    } else {
+      tx = pts[i + 1].x - pts[i - 1].x;
+      ty = pts[i + 1].y - pts[i - 1].y;
+    }
+    const len = Math.hypot(tx, ty) || 1;
+    const nx = -ty / len;
+    const ny = tx / len;
+    out.push({ x: pts[i].x + nx * dist, y: pts[i].y + ny * dist });
+  }
+  return out;
+}
+
 /**
- * 端口标记：桥梁 = 两侧折线（∧ 形）；隧道 = 两侧弧线门户。
- * heading 为沿路前进方向（弧度）。
+ * 岸口括号：左右各一道「」形，关于路中心轴镜像，开口朝陆地。
+ * landSign: -1 入口，+1 出口。
  */
 function drawCrossingPortal(
   ctx: CanvasRenderingContext2D,
@@ -225,59 +262,41 @@ function drawCrossingPortal(
   halfW: number,
   zoom: number,
   color: string,
-  kind: 'bridge' | 'tunnel',
+  lineW: number,
+  landSign: -1 | 1,
 ) {
   const nx = -Math.sin(heading);
   const ny = Math.cos(heading);
-  const tx = Math.cos(heading);
-  const ty = Math.sin(heading);
-  const wing = halfW + Math.max(2, 2.5 * zoom);
-  const depth = Math.max(4, 5.5 * zoom);
+  const lx = Math.cos(heading) * landSign;
+  const ly = Math.sin(heading) * landSign;
+  const depth = Math.max(2.2, 2.8 * zoom);
+  const flare = Math.max(1.6, 2 * zoom);
 
   ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(1.4, 1.6 * zoom);
+  ctx.lineWidth = lineW;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.setLineDash([]);
 
-  if (kind === 'bridge') {
-    // 折线桥台：左右各一道「外→折→内」折线
-    for (const side of [-1, 1] as const) {
-      const outer = {
-        x: center.x + nx * wing * side - tx * depth * 0.1,
-        y: center.y + ny * wing * side - ty * depth * 0.1,
-      };
-      const kink = {
-        x: center.x + nx * halfW * 0.65 * side - tx * depth * 0.55,
-        y: center.y + ny * halfW * 0.65 * side - ty * depth * 0.55,
-      };
-      const inner = {
-        x: center.x + nx * halfW * 0.2 * side + tx * depth * 0.15,
-        y: center.y + ny * halfW * 0.2 * side + ty * depth * 0.15,
-      };
-      ctx.beginPath();
-      ctx.moveTo(outer.x, outer.y);
-      ctx.lineTo(kink.x, kink.y);
-      ctx.lineTo(inner.x, inner.y);
-      ctx.stroke();
-    }
-  } else {
-    // 弧线隧道口：横跨路面的半圆弧，凸向陆地一侧（-tangent）
-    const left = {
-      x: center.x + nx * wing,
-      y: center.y + ny * wing,
+  for (const side of [-1, 1] as const) {
+    // 路缘交点
+    const edge = {
+      x: center.x + nx * halfW * side,
+      y: center.y + ny * halfW * side,
     };
-    const right = {
-      x: center.x - nx * wing,
-      y: center.y - ny * wing,
+    // 朝陆再略外撇，形成对称括号
+    const mid = {
+      x: edge.x + lx * depth,
+      y: edge.y + ly * depth,
     };
-    const apex = {
-      x: center.x - tx * depth,
-      y: center.y - ty * depth,
+    const tip = {
+      x: mid.x + nx * flare * side,
+      y: mid.y + ny * flare * side,
     };
     ctx.beginPath();
-    ctx.moveTo(left.x, left.y);
-    ctx.quadraticCurveTo(apex.x, apex.y, right.x, right.y);
+    ctx.moveTo(edge.x, edge.y);
+    ctx.lineTo(mid.x, mid.y);
+    ctx.lineTo(tip.x, tip.y);
     ctx.stroke();
   }
 }
@@ -588,11 +607,16 @@ function drawRoadCasing(
   segIndex: number | null = null,
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
-  const fromLevel = (feature.roadLevelFrom ?? (level === 'ramp' ? 'local' : level)) as RoadLevel;
+  const isRamp = level === 'ramp';
+  const solid = isRamp ? rampSolidClass(feature) : normalizeRoadClass(level);
+  const blend = isLevelBlendRoad(feature);
+  const fromLevel = (feature.roadLevelFrom ?? solid ?? 'local') as RoadLevel;
   const levelEnd = (feature.roadLevelEnd ?? fromLevel) as RoadLevel;
-  const bodyStyle = ROAD_STYLES[level === 'ramp' ? 'ramp' : level];
-  const fromStyle = ROAD_STYLES[fromLevel === 'ramp' ? 'local' : fromLevel];
-  const endStyle = ROAD_STYLES[levelEnd === 'ramp' ? 'local' : levelEnd];
+  // 匝道线宽固定；未锚定用灰色，锚定后用对应等级色
+  const bodyStyle = ROAD_STYLES[isRamp ? 'ramp' : (solid ?? 'local')];
+  const colorStyle = ROAD_STYLES[solid ?? 'ramp'];
+  const fromStyle = ROAD_STYLES[normalizeRoadClass(fromLevel)];
+  const endStyle = ROAD_STYLES[normalizeRoadClass(levelEnd)];
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
@@ -604,17 +628,17 @@ function drawRoadCasing(
     style === 'sketch' ? sketchRoadInk(fromStyle.casing) : fromStyle.casing;
   const casing1 =
     style === 'sketch' ? sketchRoadInk(endStyle.casing) : endStyle.casing;
-  const casingMid = isLevelBlendRoad(feature)
+  const casingMid = blend
     ? lerpColor(casing0, casing1, 0.5)
     : style === 'sketch'
-      ? sketchRoadInk(bodyStyle.casing)
-      : bodyStyle.casing;
+      ? sketchRoadInk(colorStyle.casing)
+      : colorStyle.casing;
 
   if (segIndex != null) {
     const n = points.length - 1;
     const t = (segIndex + 0.5) / n;
     const { a, b } = extendedSegEnds(points, segIndex, 1.25);
-    ctx.strokeStyle = isLevelBlendRoad(feature) ? lerpColor(casing0, casing1, t) : casingMid;
+    ctx.strokeStyle = blend ? lerpColor(casing0, casing1, t) : casingMid;
     ctx.lineWidth = casingW;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'butt';
@@ -635,7 +659,6 @@ function drawRoadCasing(
     return;
   }
 
-  // 整条连续描边：匝道固定线宽，无路口加宽
   tracePath(ctx, points, false);
   ctx.strokeStyle = casingMid;
   ctx.lineWidth = casingW;
@@ -654,11 +677,15 @@ function drawRoadFill(
   segIndex: number | null = null,
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
-  const fromLevel = (feature.roadLevelFrom ?? (level === 'ramp' ? 'local' : level)) as RoadLevel;
+  const isRamp = level === 'ramp';
+  const solid = isRamp ? rampSolidClass(feature) : normalizeRoadClass(level);
+  const blend = isLevelBlendRoad(feature);
+  const fromLevel = (feature.roadLevelFrom ?? solid ?? 'local') as RoadLevel;
   const levelEnd = (feature.roadLevelEnd ?? fromLevel) as RoadLevel;
-  const bodyStyle = ROAD_STYLES[level === 'ramp' ? 'ramp' : level];
-  const fromStyle = ROAD_STYLES[fromLevel === 'ramp' ? 'local' : fromLevel];
-  const endStyle = ROAD_STYLES[levelEnd === 'ramp' ? 'local' : levelEnd];
+  const bodyStyle = ROAD_STYLES[isRamp ? 'ramp' : (solid ?? 'local')];
+  const colorStyle = ROAD_STYLES[solid ?? 'ramp'];
+  const fromStyle = ROAD_STYLES[normalizeRoadClass(fromLevel)];
+  const endStyle = ROAD_STYLES[normalizeRoadClass(levelEnd)];
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
@@ -671,19 +698,17 @@ function drawRoadFill(
     fillColor = sketchRoadFill(fromStyle.color);
     endColor = sketchRoadFill(endStyle.color);
   }
-  if (!isLevelBlendRoad(feature) && level !== 'ramp') {
-    fillColor = style === 'blueprint' ? '#e8f4ff' : bodyStyle.color;
-    if (style === 'sketch') fillColor = sketchRoadFill(bodyStyle.color);
-  } else if (level === 'ramp' && !isLevelBlendRoad(feature)) {
-    // 同色匝道：用本体浅灰，不做端点配色渐变
-    fillColor = style === 'blueprint' ? '#e8f4ff' : bodyStyle.color;
-    if (style === 'sketch') fillColor = sketchRoadFill(bodyStyle.color);
+  if (isRamp && !blend) {
+    // 未接路 → 灰色；单端/同级 → 对应等级色
+    fillColor = style === 'blueprint' ? '#e8f4ff' : colorStyle.color;
+    if (style === 'sketch') fillColor = sketchRoadFill(colorStyle.color);
     endColor = fillColor;
+  } else if (!blend && !isRamp) {
+    fillColor = style === 'blueprint' ? '#e8f4ff' : bodyStyle.color;
+    if (style === 'sketch') fillColor = sketchRoadFill(bodyStyle.color);
   }
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
-  const midFill = isLevelBlendRoad(feature)
-    ? lerpColor(fillColor, endColor, 0.5)
-    : fillColor;
+  const midFill = blend ? lerpColor(fillColor, endColor, 0.5) : fillColor;
 
   if (segIndex != null) {
     const n = points.length - 1;
@@ -692,7 +717,7 @@ function drawRoadFill(
     ctx.strokeStyle =
       style === 'blueprint'
         ? '#e8f4ff'
-        : isLevelBlendRoad(feature)
+        : blend
           ? lerpColor(fillColor, endColor, t)
           : midFill;
     ctx.lineWidth = baseFillW;
@@ -715,7 +740,6 @@ function drawRoadFill(
     return;
   }
 
-  // 连续路面；异级仅取中点色，避免分段圆帽毛刺
   tracePath(ctx, points, false);
   ctx.strokeStyle = midFill;
   ctx.lineWidth = baseFillW;

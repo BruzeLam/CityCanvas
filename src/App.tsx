@@ -20,7 +20,7 @@ import {
   DEFAULT_PARALLEL_SPACING_M,
   type ParallelSide,
 } from './engine/parallelOffset';
-import { reweaveAllCrossings } from './engine/junctions';
+import { setFeaturesGrade } from './engine/junctions';
 import type {
   CityProject,
   EraserTarget,
@@ -219,7 +219,7 @@ function App() {
     downloadMapMd(project);
   };
 
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     setHistory((h) => {
       if (h.length === 0 || !project) return h;
       const prev = h[h.length - 1];
@@ -228,7 +228,7 @@ function App() {
       persistLocal(prev);
       return h.slice(0, -1);
     });
-  };
+  }, [persistLocal, project]);
 
   const handleOpenFile = () => {
     fileInputRef.current?.click();
@@ -295,7 +295,7 @@ function App() {
     setLocalOnly(true);
   };
 
-  // H = 拖动，V = 编辑；数字键按当前工具切换子类型
+  // H = 拖动，V = 编辑；数字键按当前工具切换子类型；Ctrl/⌘Z 撤销
   useEffect(() => {
     const roadLevels = Object.keys(ROAD_STYLES) as RoadLevel[];
     const terrainTools: Tool[] = ['land', 'ocean', 'mountain', 'eraser', 'river'];
@@ -304,6 +304,13 @@ function App() {
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
+
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === 'h' || e.key === 'H') {
         e.preventDefault();
@@ -351,7 +358,7 @@ function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tool]);
+  }, [tool, handleUndo]);
 
   if (authLoading || boot === 'booting') {
     return (
@@ -605,11 +612,7 @@ function App() {
             updateProject(
               {
                 ...project,
-                features: reweaveAllCrossings(
-                  project.features.map((f) =>
-                    f.id === selectedFeatureId ? { ...f, grade, gradeEnd: undefined } : f,
-                  ),
-                ),
+                features: setFeaturesGrade(project.features, selectedFeatureId, grade),
               },
               { undoSnapshot: project },
             );

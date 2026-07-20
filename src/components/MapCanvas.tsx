@@ -50,6 +50,8 @@ import {
   tryMergeHeadToTail,
   attachCrossGradeTips,
   reweaveAllCrossings,
+  setFeaturesGrade,
+  roadClassAtPoint,
   RAMP_ATTACH_M,
 } from '../engine/junctions';
 import { dist } from '../engine/pathUtils';
@@ -383,11 +385,11 @@ export function MapCanvas({
       if (incoming.length === 0) return;
       const base = project.features;
 
-      // 平行批量：姐妹路互不挂接 / 互不续接，否则间距小于吸附半径时两端会被吸成同一点
+      // 平行批量：先落图，再整网重织（姐妹线互不吸附，但要与既有路网交汇）
       if (incoming.length > 1) {
         onProjectChange({
           ...project,
-          features: [...base, ...incoming],
+          features: reweaveAllCrossings([...base, ...incoming]),
         });
         return;
       }
@@ -546,7 +548,6 @@ export function MapCanvas({
         points[0],
         RAMP_ATTACH_M,
       );
-      const startFeat = startTip?.feature ?? startNear?.feature;
       // 接到节点/路上：本端标高与目标路同层
       const startG =
         draftStartGrade ??
@@ -565,7 +566,6 @@ export function MapCanvas({
         points[points.length - 1],
         RAMP_ATTACH_M,
       );
-      const endFeat = endTip?.feature ?? endNear?.feature;
 
       let endG = startG;
       if (endTip) {
@@ -574,18 +574,14 @@ export function MapCanvas({
         endG = endNear.grade;
       }
 
-      const startClass: RoadLevel =
-        startFeat?.kind === 'road'
-          ? ((startFeat.roadLevel === 'ramp'
-              ? startFeat.roadLevelFrom
-              : startFeat.roadLevel) ?? roadLevel)
-          : roadLevel;
-      const endClass: RoadLevel =
-        endFeat?.kind === 'road'
-          ? ((endFeat.roadLevel === 'ramp'
-              ? endFeat.roadLevelEnd ?? endFeat.roadLevelFrom
-              : endFeat.roadLevel) ?? startClass)
-          : startClass;
+      const startClass = roadClassAtPoint(
+        projectRef.current.features,
+        points[0],
+      );
+      const endClass = roadClassAtPoint(
+        projectRef.current.features,
+        points[points.length - 1],
+      );
 
       const usingRamp = roadLevel === 'ramp';
       const result: {
@@ -596,15 +592,22 @@ export function MapCanvas({
         roadLevelEnd?: RoadLevel;
       } = {
         grade: startG,
-        roadLevel: usingRamp ? 'ramp' : startClass,
+        roadLevel: usingRamp ? 'ramp' : (startClass ?? roadLevel),
       };
       if (endG !== startG) {
         result.gradeEnd = endG;
       }
       if (usingRamp) {
-        result.roadLevelFrom = startClass === 'ramp' ? 'local' : startClass;
-        result.roadLevelEnd = endClass === 'ramp' ? result.roadLevelFrom : endClass;
-      } else if (endClass !== startClass) {
+        // 只锚定到非匝道主路；未接保持 undefined → 灰色；两端不同 → 渐变
+        if (startClass && endClass) {
+          result.roadLevelFrom = startClass;
+          result.roadLevelEnd = endClass;
+        } else if (startClass || endClass) {
+          const only = (startClass ?? endClass)!;
+          result.roadLevelFrom = only;
+          result.roadLevelEnd = only;
+        }
+      } else if (startClass && endClass && endClass !== startClass) {
         result.roadLevelFrom = startClass;
         result.roadLevelEnd = endClass;
       }
@@ -778,12 +781,10 @@ export function MapCanvas({
           onProjectChange(
             {
               ...projectRef.current,
-              features: reweaveAllCrossings(
-                projectRef.current.features.map((f) =>
-                  f.id === selectedFeatureId
-                    ? { ...f, grade: nextGrade, gradeEnd: undefined }
-                    : f,
-                ),
+              features: setFeaturesGrade(
+                projectRef.current.features,
+                selectedFeatureId,
+                nextGrade,
               ),
             },
             { undoSnapshot: projectRef.current },

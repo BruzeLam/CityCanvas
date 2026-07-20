@@ -62,6 +62,22 @@ export function formatRadius(m: number): string {
   return `R ${Math.round(m)} m`;
 }
 
+/** 弧折线默认弦长上限（米）——城市尺度下足够圆滑，避免上百顶点 */
+export const DEFAULT_ARC_SEGMENT_M = 14;
+
+/** 弧采样最大角步（弧度）≈ 12° */
+const ARC_MAX_ANGLE_RAD = (12 * Math.PI) / 180;
+/** 弧采样最小角步（弧度）≈ 5°，小半径仍保基本圆度 */
+const ARC_MIN_ANGLE_RAD = (5 * Math.PI) / 180;
+const ARC_MIN_SEGMENTS = 4;
+const ARC_MAX_SEGMENTS = 28;
+/** 目标弦高误差（米）：决定角步，与路宽同量级即可 */
+const ARC_SAGITTA_ERR_M = 0.45;
+
+/**
+ * 圆弧折线化：按弦高误差 + 弦长上限自适应段数，硬封顶避免运算爆炸。
+ * 旧实现最少 64 段 / 1–2 m 一步，短匝道也会上百点。
+ */
 function sampleArcAngles(
   center: Point,
   radius: number,
@@ -70,9 +86,32 @@ function sampleArcAngles(
   maxSegmentM: number,
 ): Point[] {
   const arcLen = Math.abs(sweep) * radius;
-  // 密采样：约 1–2 m 一步，最少 64 段，弯道边缘更圆
-  const step = Math.min(Math.max(1, maxSegmentM), 2);
-  const n = Math.max(64, Math.ceil(arcLen / step));
+  const absSweep = Math.abs(sweep);
+  if (arcLen < 1e-3 || absSweep < 1e-6) {
+    return [
+      {
+        x: center.x + Math.cos(ang0) * radius,
+        y: center.y + Math.sin(ang0) * radius,
+      },
+    ];
+  }
+
+  const segCap = Math.max(4, maxSegmentM);
+  // θ ≈ √(8ε/R)，再夹在 [5°, 12°]
+  const angleFromErr =
+    radius > 1 ? Math.sqrt((8 * ARC_SAGITTA_ERR_M) / radius) : ARC_MAX_ANGLE_RAD;
+  const maxAngle = Math.min(
+    ARC_MAX_ANGLE_RAD,
+    Math.max(ARC_MIN_ANGLE_RAD, angleFromErr),
+  );
+
+  const nByAngle = Math.ceil(absSweep / maxAngle);
+  const nByLen = Math.ceil(arcLen / segCap);
+  const n = Math.min(
+    ARC_MAX_SEGMENTS,
+    Math.max(ARC_MIN_SEGMENTS, nByAngle, nByLen),
+  );
+
   const points: Point[] = [];
   for (let i = 0; i <= n; i++) {
     const t = i / n;
@@ -86,6 +125,63 @@ function sampleArcAngles(
 }
 
 /**
+ * Douglas–Peucker 折线简化；keep 中的下标强制保留（端点、路口）。
+ */
+export function simplifyPolylineRdp(
+  points: Point[],
+  epsilonM: number,
+  keep: ReadonlySet<number> = new Set(),
+): Point[] {
+  if (points.length <= 2) return points.map((p) => ({ ...p }));
+  const n = points.length;
+  const must = new Set(keep);
+  must.add(0);
+  must.add(n - 1);
+
+  const marked = new Uint8Array(n);
+  for (const i of must) {
+    if (i >= 0 && i < n) marked[i] = 1;
+  }
+
+  const stack: [number, number][] = [[0, n - 1]];
+  while (stack.length) {
+    const [start, end] = stack.pop()!;
+    if (end <= start + 1) continue;
+    const a = points[start];
+    const b = points[end];
+    let maxDist = 0;
+    let maxIdx = -1;
+    for (let i = start + 1; i < end; i++) {
+      const d = pointSegDist(points[i], a, b);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIdx = i;
+      }
+    }
+    if (maxDist > epsilonM && maxIdx >= 0) {
+      marked[maxIdx] = 1;
+      stack.push([start, maxIdx], [maxIdx, end]);
+    }
+  }
+
+  const out: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    if (marked[i]) out.push({ ...points[i] });
+  }
+  return out.length >= 2 ? out : [points[0], points[n - 1]].map((p) => ({ ...p }));
+}
+
+function pointSegDist(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
  * 天际线 / TF2 式弯道：从 start 出发，沿 heading 切线，画到 end 的圆弧。
  * 圆心在切线法向上，半径由终点几何唯一确定。
  * 不再把优弧夹成 180° 再硬贴终点（那会造成末段折线锯齿）；环匝可超过 180°。
@@ -94,7 +190,7 @@ export function curveFromTangent(
   start: Point,
   headingRad: number,
   end: Point,
-  maxSegmentM = 1.5,
+  maxSegmentM = DEFAULT_ARC_SEGMENT_M,
 ): { points: Point[]; radius: number; sweepDeg: number; endHeading: number } | null {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -166,7 +262,7 @@ export function curveFromBestTangent(
   start: Point,
   headingRad: number,
   end: Point,
-  maxSegmentM = 1.5,
+  maxSegmentM = DEFAULT_ARC_SEGMENT_M,
 ): { points: Point[]; radius: number; sweepDeg: number; endHeading: number } | null {
   type Curve = NonNullable<ReturnType<typeof curveFromTangent>>;
   let best: Curve | null = null;
@@ -231,7 +327,7 @@ export function curveFromThreePoints(
   a: Point,
   b: Point,
   c: Point,
-  maxSegmentM = 1.5,
+  maxSegmentM = DEFAULT_ARC_SEGMENT_M,
 ): CurveResult | null {
   const chordAC = dist(a, c);
   if (chordAC < 2 || dist(a, b) < 2 || dist(b, c) < 2) return null;
@@ -324,7 +420,7 @@ export function curveAdaptiveViaControl(
   c: Point,
   startHeading: number | null,
   endHeading: number | null,
-  maxSegmentM = 1.5,
+  maxSegmentM = DEFAULT_ARC_SEGMENT_M,
 ): CurveResult | null {
   const h0 = startHeading ?? bearingRad(a, b);
   const arc1 = curveFromBestTangent(a, h0, b, maxSegmentM);

@@ -114,15 +114,15 @@ export function displayGrade(g: number): FeatureGrade {
   return clampGrade(Math.round(g));
 }
 
-/** 异级 / 匝道配色渐变 */
+/** 异级 / 匝道配色渐变：两端均锚定且等级不同才渐变 */
 export function isLevelBlendRoad(
   f: Pick<MapFeature, 'kind' | 'roadLevel' | 'roadLevelFrom' | 'roadLevelEnd'>,
 ): boolean {
   if (f.kind !== 'road') return false;
-  if (f.roadLevel === 'ramp' && (f.roadLevelFrom != null || f.roadLevelEnd != null)) {
-    const from = f.roadLevelFrom ?? 'local';
-    const to = f.roadLevelEnd ?? from;
-    return from !== to;
+  if (f.roadLevel === 'ramp') {
+    const from = f.roadLevelFrom;
+    const to = f.roadLevelEnd;
+    return from != null && to != null && from !== to;
   }
   return (
     f.roadLevelEnd != null &&
@@ -132,6 +132,52 @@ export function isLevelBlendRoad(
 
 export function isRampRoad(f: Pick<MapFeature, 'roadLevel'>): boolean {
   return f.roadLevel === 'ramp';
+}
+
+/** 道路等级高低（越大越「高」：快速路 > 主干 > 次干 > 支路） */
+export const ROAD_CLASS_RANK: Record<RoadLevel, number> = {
+  expressway: 4,
+  arterial: 3,
+  collector: 2,
+  local: 1,
+  ramp: 0,
+};
+
+export function normalizeRoadClass(level: RoadLevel | undefined): Exclude<RoadLevel, 'ramp'> {
+  if (!level || level === 'ramp') return 'local';
+  return level;
+}
+
+/** 两端道路中等级较低的一侧 */
+export function lowerRoadClass(
+  a: RoadLevel | undefined,
+  b: RoadLevel | undefined,
+): Exclude<RoadLevel, 'ramp'> {
+  const aa = normalizeRoadClass(a);
+  const bb = normalizeRoadClass(b);
+  return ROAD_CLASS_RANK[aa] <= ROAD_CLASS_RANK[bb] ? aa : bb;
+}
+
+/**
+ * 匝道纯色等级：未接路 → null（画灰色）；只接一端或两端同级 → 该级；
+ * 两端异级 → null（由 isLevelBlendRoad 渐变绘制）。
+ */
+export function rampSolidClass(
+  f: Pick<MapFeature, 'roadLevel' | 'roadLevelFrom' | 'roadLevelEnd'>,
+): Exclude<RoadLevel, 'ramp'> | null {
+  if (f.roadLevel !== 'ramp') return normalizeRoadClass(f.roadLevel);
+  const from = f.roadLevelFrom;
+  const to = f.roadLevelEnd;
+  if (from == null && to == null) return null;
+  if (from != null && to != null && from !== to) return null;
+  return normalizeRoadClass(from ?? to);
+}
+
+/** @deprecated 用 rampSolidClass；保留兼容旧调用 */
+export function rampDisplayClass(
+  f: Pick<MapFeature, 'roadLevel' | 'roadLevelFrom' | 'roadLevelEnd'>,
+): Exclude<RoadLevel, 'ramp'> {
+  return rampSolidClass(f) ?? 'local';
 }
 
 export function clampGrade(n: number): FeatureGrade {
@@ -255,7 +301,7 @@ export const ROAD_STYLES: Record<
   arterial: { label: '主干路', width: 8.5, color: '#ffd966', casing: '#b8960f' },
   collector: { label: '次干路', width: 7.5, color: '#ffffff', casing: '#888888' },
   local: { label: '支路', width: 5, color: '#e8e8e8', casing: '#aaaaaa' },
-  /** 细匝道：连接异级/异层；配色由 roadLevelFrom→End 渐变，接合处加宽过渡 */
+  /** 细匝道：连接异级/异层；线宽固定，配色取两端中较低道路等级 */
   ramp: { label: '匝道', width: 5, color: '#ececec', casing: '#9a9a9a' },
 };
 
