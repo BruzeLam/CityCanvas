@@ -97,11 +97,33 @@ function drawRoadsMerged(
 
   pieces.sort((a, b) => a.grade - b.grade || a.feature.id.localeCompare(b.feature.id));
 
+  const paintPiece = (
+    piece: RoadDrawPiece,
+    paint: (segIndex: number | null) => void,
+  ) => {
+    if (piece.grade > 0) {
+      ctx.save();
+      const elev = Math.min(3, piece.grade);
+      ctx.shadowColor = `rgba(40, 30, 20, ${0.14 + elev * 0.07})`;
+      ctx.shadowBlur = (2.5 + elev * 1.2) * viewport.zoom;
+      ctx.shadowOffsetX = 0.4 * viewport.zoom;
+      ctx.shadowOffsetY = (1.2 + elev * 0.6) * viewport.zoom;
+      paint(piece.segIndex);
+      ctx.restore();
+    } else {
+      paint(piece.segIndex);
+    }
+  };
+
   for (const piece of pieces) {
-    drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
+    paintPiece(piece, (seg) => {
+      drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, seg);
+    });
   }
   for (const piece of pieces) {
-    drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
+    paintPiece(piece, (seg) => {
+      drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, seg);
+    });
   }
 }
 

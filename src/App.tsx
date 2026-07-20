@@ -20,6 +20,7 @@ import {
   DEFAULT_PARALLEL_SPACING_M,
   type ParallelSide,
 } from './engine/parallelOffset';
+import { reweaveAllCrossings } from './engine/junctions';
 import type {
   CityProject,
   EraserTarget,
@@ -604,8 +605,10 @@ function App() {
             updateProject(
               {
                 ...project,
-                features: project.features.map((f) =>
-                  f.id === selectedFeatureId ? { ...f, grade } : f,
+                features: reweaveAllCrossings(
+                  project.features.map((f) =>
+                    f.id === selectedFeatureId ? { ...f, grade, gradeEnd: undefined } : f,
+                  ),
                 ),
               },
               { undoSnapshot: project },

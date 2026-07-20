@@ -778,8 +778,12 @@ export function MapCanvas({
           onProjectChange(
             {
               ...projectRef.current,
-              features: projectRef.current.features.map((f) =>
-                f.id === selectedFeatureId ? { ...f, grade: nextGrade } : f,
+              features: reweaveAllCrossings(
+                projectRef.current.features.map((f) =>
+                  f.id === selectedFeatureId
+                    ? { ...f, grade: nextGrade, gradeEnd: undefined }
+                    : f,
+                ),
               ),
             },
             { undoSnapshot: projectRef.current },

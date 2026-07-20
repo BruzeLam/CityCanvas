@@ -599,12 +599,46 @@ export function weaveSameGradeCrossings(
 }
 
 /**
+ * 去掉「仅因曾同层织路」留下的共线中点：异层交叉不应共享路口顶点。
+ * 弯折点、同层路口、匝道挂接点保留。
+ */
+export function stripObsoleteJunctionVertices(features: MapFeature[]): MapFeature[] {
+  return features.map((f) => {
+    if (!isPathKind(f) || f.points.length <= 2) return f;
+    if (isRampFeature(f)) return f;
+    const grade = featureGrade(f);
+    const points: Point[] = [];
+    for (let i = 0; i < f.points.length; i++) {
+      const p = f.points[i];
+      if (i === 0 || i === f.points.length - 1) {
+        points.push({ ...p });
+        continue;
+      }
+      if (otherFeatureTouchesPoint(features, f.id, p, grade)) {
+        points.push({ ...p });
+        continue;
+      }
+      const prev = f.points[i - 1];
+      const next = f.points[i + 1];
+      if (!isCollinearContinuation(prev, p, next)) {
+        points.push({ ...p });
+        continue;
+      }
+      // 共线且无同层他路共用 → 异层旧路口或延伸残留，丢弃
+    }
+    return points.length >= 2 ? { ...f, points } : f;
+  });
+}
+
+/**
  * 对整张路网重算同层交叉节点（幂等：已有端点交不会重复插入）。
- * 用于加载旧图、拖拽顶点后修复。
+ * 先清掉异层残留路口点，再按当前标高重织。
+ * 用于加载旧图、拖拽顶点、改标高后修复。
  */
 export function reweaveAllCrossings(features: MapFeature[]): MapFeature[] {
-  const base = features.filter((f) => !isPathKind(f));
-  const paths = features.filter(isPathKind);
+  const cleaned = stripObsoleteJunctionVertices(features);
+  const base = cleaned.filter((f) => !isPathKind(f));
+  const paths = cleaned.filter(isPathKind);
   let acc = [...base];
   for (const path of paths) {
     acc = weaveSameGradeCrossings(acc, path);
