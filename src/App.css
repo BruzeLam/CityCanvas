@@ -1920,6 +1920,67 @@ input {
   margin-top: 2px;
 }
 
+.gen-slogan {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.gen-slogan-cn {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gen-ref-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+
+.gen-scale-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.gen-core-params {
+  gap: 10px;
+}
+
+.gen-quality {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f7f4ef;
+}
+
+.gen-quality strong {
+  font-size: 12px;
+}
+
+.gen-quality ul {
+  margin: 8px 0 4px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.gen-quality em {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.gen-quality .muted {
+  margin: 0;
+  font-size: 11px;
+}
+
 @media (max-width: 840px) {
   .gen-main {
     grid-template-columns: 1fr;

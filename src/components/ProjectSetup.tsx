@@ -6,32 +6,37 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { formatDistance } from '../constants/mapPresets';
+import { clampMapSize, clampScale, formatDistance } from '../constants/mapPresets';
 import {
-  LANDSCAPE_PRESETS,
-  SIMPLE_MAP_SIZES,
-  landscapePresetById,
-  sampleLandscapeParams,
-  type LandscapePresetId,
+  CITY_SCALES,
+  GEO_PROTOTYPES,
+  WATER_NETWORK_MAX,
+  WATER_NETWORK_MIN,
+  clampCoreParams,
+  clampWaterNetwork,
+  cityScaleById,
+  expandCoreToTerrainParams,
+  geoPrototypeById,
+  type CityScaleId,
+  type GeoPrototypeId,
+  type MapCoreParams,
 } from '../constants/landscapePresets';
 import { useAuth } from '../context/AuthContext';
 import {
+  FRAGMENTATION_MAX,
+  FRAGMENTATION_MIN,
   GREEN_DENSITY_MAX,
   GREEN_DENSITY_MIN,
-  LAKE_DENSITY_MAX,
-  LAKE_DENSITY_MIN,
   OCEAN_RATIO_MAX,
   OCEAN_RATIO_MIN,
-  RIVER_DENSITY_MAX,
-  RIVER_DENSITY_MIN,
+  analyzeLandscape,
+  clampFragmentation,
   clampGreenDensity,
-  clampLakeDensity,
   clampOceanRatio,
-  clampRiverDensity,
   generateLandscape,
   paintTerrainPreview,
   randomTerrainSeed,
-  type TerrainGenParams,
+  type LandscapeQuality,
 } from '../engine/terrainGen';
 import { preferredTerrainCellSizeM } from '../engine/terrain';
 import { randomCityName } from '../constants/cityNames';
@@ -48,8 +53,12 @@ type Props = {
 };
 
 type PreviewView = { zoom: number; panX: number; panY: number };
-
 const DEFAULT_VIEW: PreviewView = { zoom: 1, panX: 0, panY: 0 };
+
+/** 预览用更大格网，保证拖滑条时即时反馈 */
+function previewCellSizeM(settings: Pick<MapSettings, 'widthM' | 'heightM'>): number {
+  return Math.max(preferredTerrainCellSizeM(settings) * 2.2, 48);
+}
 
 export function ProjectSetup({
   onCreate,
@@ -60,22 +69,18 @@ export function ProjectSetup({
 }: Props) {
   const { user, logout } = useAuth();
   const [name, setName] = useState('未命名城市');
-  const [sizeIdx, setSizeIdx] = useState(1);
   const [cloudMaps, setCloudMaps] = useState<CloudMapSummary[]>([]);
   const [loadingMaps, setLoadingMaps] = useState(false);
 
-  const [presetId, setPresetId] = useState<LandscapePresetId>('coastal');
+  const [prototypeId, setPrototypeId] = useState<GeoPrototypeId>('natural_harbor');
+  const [scaleId, setScaleId] = useState<CityScaleId>('city');
+  const [customWkm, setCustomWkm] = useState(5);
+  const [customHkm, setCustomHkm] = useState(5);
   const [terrainSeed, setTerrainSeed] = useState(() => randomTerrainSeed());
-  const [fineTuneOpen, setFineTuneOpen] = useState(false);
-
-  const [oceanEnabled, setOceanEnabled] = useState(true);
-  const [oceanRatio, setOceanRatio] = useState(0.32);
-  const [lakeEnabled, setLakeEnabled] = useState(true);
-  const [lakeDensity, setLakeDensity] = useState(0.08);
-  const [riverEnabled, setRiverEnabled] = useState(true);
-  const [riverDensity, setRiverDensity] = useState(0.55);
-  const [greenEnabled, setGreenEnabled] = useState(true);
-  const [greenDensity, setGreenDensity] = useState(0.22);
+  const [core, setCore] = useState<MapCoreParams>(() =>
+    clampCoreParams(geoPrototypeById('natural_harbor').defaults),
+  );
+  const [quality, setQuality] = useState<LandscapeQuality | null>(null);
 
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewWrapRef = useRef<HTMLDivElement>(null);
@@ -88,24 +93,6 @@ export function ProjectSetup({
     originX: number;
     originY: number;
   } | null>(null);
-
-  const applyParams = useCallback((params: TerrainGenParams) => {
-    setOceanEnabled(params.oceanEnabled);
-    setOceanRatio(params.oceanRatio);
-    setLakeEnabled(params.lakeEnabled);
-    setLakeDensity(params.lakeDensity);
-    setRiverEnabled(params.riverEnabled);
-    setRiverDensity(params.riverDensity);
-    setGreenEnabled(params.greenEnabled);
-    setGreenDensity(params.greenDensity);
-  }, []);
-
-  // 首次 / 换预设 / 换种子：按配方落参数（微调打开时换种子仍重掷 random）
-  useEffect(() => {
-    const sampled = sampleLandscapeParams(presetId, terrainSeed);
-    applyParams(sampled);
-    setPreviewView(DEFAULT_VIEW);
-  }, [presetId, terrainSeed, applyParams]);
 
   useEffect(() => {
     if (!onBack) return;
@@ -137,47 +124,40 @@ export function ProjectSetup({
     loadCloudMaps();
   }, [loadCloudMaps]);
 
-  const size = SIMPLE_MAP_SIZES[sizeIdx] ?? SIMPLE_MAP_SIZES[1];
-  const settings: MapSettings = useMemo(
-    () => ({
-      widthM: size.widthM,
-      heightM: size.heightM,
-      scale: size.scale,
-    }),
-    [size],
+  const settings: MapSettings = useMemo(() => {
+    if (scaleId === 'custom') {
+      return {
+        widthM: clampMapSize(customWkm * 1000),
+        heightM: clampMapSize(customHkm * 1000),
+        scale: clampScale(
+          Math.round(
+            Math.max(customWkm, customHkm) >= 8
+              ? 25000
+              : Math.max(customWkm, customHkm) >= 4
+                ? 10000
+                : 5000,
+          ),
+        ),
+      };
+    }
+    const s = cityScaleById(scaleId)!;
+    return { widthM: s.widthM, heightM: s.heightM, scale: s.scale };
+  }, [scaleId, customWkm, customHkm]);
+
+  const genParams = useMemo(
+    () => expandCoreToTerrainParams(prototypeId, core, terrainSeed),
+    [prototypeId, core, terrainSeed],
   );
 
-  const genParams = useMemo((): TerrainGenParams => {
-    return {
-      seed: terrainSeed,
-      oceanEnabled,
-      oceanRatio: clampOceanRatio(oceanRatio),
-      lakeEnabled,
-      lakeDensity: clampLakeDensity(lakeDensity),
-      riverEnabled,
-      riverDensity: clampRiverDensity(riverDensity),
-      greenEnabled,
-      greenDensity: clampGreenDensity(greenDensity),
-    };
-  }, [
-    terrainSeed,
-    oceanEnabled,
-    oceanRatio,
-    lakeEnabled,
-    lakeDensity,
-    riverEnabled,
-    riverDensity,
-    greenEnabled,
-    greenDensity,
-  ]);
-
   const landscapePreview = useMemo(() => {
-    return generateLandscape(
-      settings,
-      genParams,
-      preferredTerrainCellSizeM(settings),
-    );
+    return generateLandscape(settings, genParams, previewCellSizeM(settings));
   }, [settings, genParams]);
+
+  useEffect(() => {
+    setQuality(
+      analyzeLandscape(landscapePreview, genParams.fragmentation ?? 0.35),
+    );
+  }, [landscapePreview, genParams.fragmentation]);
 
   useEffect(() => {
     const canvas = previewCanvasRef.current;
@@ -208,7 +188,6 @@ export function ProjectSetup({
     return () => window.removeEventListener('resize', paint);
   }, [landscapePreview, settings.widthM, settings.heightM]);
 
-  // 滚轮缩放需 non-passive，否则浏览器会拦截 preventDefault
   useEffect(() => {
     const wrap = previewWrapRef.current;
     if (!wrap) return;
@@ -261,13 +240,15 @@ export function ProjectSetup({
     dragRef.current = null;
   };
 
-  const selectPreset = (id: LandscapePresetId) => {
-    setPresetId(id);
+  const selectPrototype = (id: GeoPrototypeId) => {
+    setPrototypeId(id);
+    setCore(clampCoreParams(geoPrototypeById(id).defaults));
     setTerrainSeed(randomTerrainSeed());
+    setPreviewView(DEFAULT_VIEW);
   };
 
-  const reshuffleSeed = () => {
-    setTerrainSeed(randomTerrainSeed());
+  const patchCore = (patch: Partial<MapCoreParams>) => {
+    setCore((c) => clampCoreParams({ ...c, ...patch }));
   };
 
   const handleCreate = () => {
@@ -286,6 +267,8 @@ export function ProjectSetup({
           riverDensity: params.riverDensity,
           greenEnabled: params.greenEnabled,
           greenDensity: params.greenDensity,
+          fragmentation: params.fragmentation,
+          geoPrototypeId: prototypeId,
         },
       }),
     );
@@ -299,15 +282,15 @@ export function ProjectSetup({
 
   if (!user && !localOnly) return null;
 
-  const anyWater = oceanEnabled || lakeEnabled || riverEnabled;
-  const waterPct = anyWater
-    ? Math.round((landscapePreview.waterPct || 0) * 100)
-    : 0;
-  const greenPct = greenEnabled
-    ? Math.round((landscapePreview.greenPct || 0) * 100)
-    : 0;
-  const landPct = Math.max(0, 100 - waterPct - greenPct);
-  const activePreset = landscapePresetById(presetId);
+  const proto = geoPrototypeById(prototypeId);
+  const landPct = Math.max(
+    0,
+    100 -
+      Math.round((landscapePreview.waterPct || 0) * 100) -
+      Math.round((landscapePreview.greenPct || 0) * 100),
+  );
+  const waterPct = Math.round((landscapePreview.waterPct || 0) * 100);
+  const greenPct = Math.round((landscapePreview.greenPct || 0) * 100);
 
   return (
     <div className="setup-overlay">
@@ -315,7 +298,11 @@ export function ProjectSetup({
         <header className="setup-header setup-header-row">
           <div>
             <h1>CityCanvas</h1>
-            <p>选场景 → 看预览 → 开画（高级参数可微调）</p>
+            <p className="gen-slogan">
+              Every Great City Begins with a Map.
+              <br />
+              <span className="gen-slogan-cn">每一座伟大的城市，都始于一张地图。</span>
+            </p>
           </div>
           <div className="setup-user">
             {onBack && (
@@ -359,9 +346,6 @@ export function ProjectSetup({
                           {formatDistance(m.widthM)} × {formatDistance(m.heightM)} ·{' '}
                           {m.featureCount} 要素
                         </span>
-                        <span className="cloud-map-date">
-                          更新于 {new Date(m.updatedAt + 'Z').toLocaleString('zh-CN')}
-                        </span>
                       </button>
                       <button
                         type="button"
@@ -378,7 +362,7 @@ export function ProjectSetup({
             </section>
           ) : (
             <section className="cloud-maps-section">
-              <p className="muted">本地模式：进度自动写入浏览器缓存，刷新后继续编辑</p>
+              <p className="muted">本地模式：进度自动写入浏览器缓存</p>
             </section>
           )}
 
@@ -396,7 +380,6 @@ export function ProjectSetup({
                     type="button"
                     className="city-title-dice"
                     title="随机架空城市名"
-                    aria-label="随机生成城市名"
                     onClick={() => setName(randomCityName(name))}
                   >
                     🎲
@@ -404,170 +387,176 @@ export function ProjectSetup({
                 </div>
               </label>
 
+              {/* Step 1 */}
               <fieldset className="setup-field">
-                <span>地图大小</span>
-                <div className="preset-grid gen-size-grid">
-                  {SIMPLE_MAP_SIZES.map((p, i) => (
-                    <button
-                      key={p.label}
-                      type="button"
-                      className={sizeIdx === i ? 'active' : ''}
-                      onClick={() => setSizeIdx(i)}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="muted gen-size-hint">
-                  {formatDistance(settings.widthM)} × {formatDistance(settings.heightM)} · 1 :
-                  {settings.scale.toLocaleString()}
-                </p>
-              </fieldset>
-
-              <fieldset className="setup-field">
-                <span>场景</span>
+                <span>1 · 地理原型</span>
                 <div className="landscape-preset-grid">
-                  {LANDSCAPE_PRESETS.map((p) => (
+                  {GEO_PROTOTYPES.map((p) => (
                     <button
                       key={p.id}
                       type="button"
                       className={
-                        presetId === p.id
+                        prototypeId === p.id
                           ? 'landscape-preset-card active'
                           : 'landscape-preset-card'
                       }
-                      onClick={() => selectPreset(p.id)}
+                      onClick={() => selectPrototype(p.id)}
                     >
                       <strong>{p.label}</strong>
                       <em>{p.blurb}</em>
                     </button>
                   ))}
                 </div>
+                <p className="muted gen-ref-hint">
+                  参考气质：{proto.references.join('、')}（相似风格，非复制）
+                </p>
               </fieldset>
 
-              <button
-                type="button"
-                className="gen-fine-toggle"
-                aria-expanded={fineTuneOpen}
-                onClick={() => setFineTuneOpen((o) => !o)}
-              >
-                {fineTuneOpen ? '收起微调' : '微调海 / 湖 / 河 / 绿'}
-                <span aria-hidden>{fineTuneOpen ? '▴' : '▾'}</span>
-              </button>
-
-              {fineTuneOpen && (
-                <div className="gen-fine-panel">
-                  <label className="terrain-seed-check">
-                    <input
-                      type="checkbox"
-                      checked={oceanEnabled}
-                      onChange={(e) => setOceanEnabled(e.target.checked)}
-                    />
-                    <span>有海洋</span>
-                  </label>
-                  {oceanEnabled && (
-                    <label className="terrain-seed-row">
-                      <span>海洋比例</span>
-                      <input
-                        type="range"
-                        min={OCEAN_RATIO_MIN}
-                        max={OCEAN_RATIO_MAX}
-                        step={0.01}
-                        value={oceanRatio}
-                        onChange={(e) => setOceanRatio(Number(e.target.value))}
-                      />
-                      <em>{Math.round(clampOceanRatio(oceanRatio) * 100)}%</em>
-                    </label>
-                  )}
-                  <label className="terrain-seed-check">
-                    <input
-                      type="checkbox"
-                      checked={lakeEnabled}
-                      onChange={(e) => setLakeEnabled(e.target.checked)}
-                    />
-                    <span>有湖泊</span>
-                  </label>
-                  {lakeEnabled && (
-                    <label className="terrain-seed-row">
-                      <span>湖泊密度</span>
-                      <input
-                        type="range"
-                        min={LAKE_DENSITY_MIN}
-                        max={LAKE_DENSITY_MAX}
-                        step={0.01}
-                        value={lakeDensity}
-                        onChange={(e) => setLakeDensity(Number(e.target.value))}
-                      />
-                      <em>{Math.round(clampLakeDensity(lakeDensity) * 100)}%</em>
-                    </label>
-                  )}
-                  <label className="terrain-seed-check">
-                    <input
-                      type="checkbox"
-                      checked={riverEnabled}
-                      onChange={(e) => setRiverEnabled(e.target.checked)}
-                    />
-                    <span>有河流</span>
-                  </label>
-                  {riverEnabled && (
-                    <label className="terrain-seed-row">
-                      <span>河网密度</span>
-                      <input
-                        type="range"
-                        min={RIVER_DENSITY_MIN}
-                        max={RIVER_DENSITY_MAX}
-                        step={0.01}
-                        value={riverDensity}
-                        onChange={(e) => setRiverDensity(Number(e.target.value))}
-                      />
-                      <em>{Math.round(clampRiverDensity(riverDensity) * 100)}%</em>
-                    </label>
-                  )}
-                  <label className="terrain-seed-check">
-                    <input
-                      type="checkbox"
-                      checked={greenEnabled}
-                      onChange={(e) => setGreenEnabled(e.target.checked)}
-                    />
-                    <span>有绿地</span>
-                  </label>
-                  {greenEnabled && (
-                    <label className="terrain-seed-row">
-                      <span>绿地密度</span>
-                      <input
-                        type="range"
-                        min={GREEN_DENSITY_MIN}
-                        max={GREEN_DENSITY_MAX}
-                        step={0.01}
-                        value={greenDensity}
-                        onChange={(e) => setGreenDensity(Number(e.target.value))}
-                      />
-                      <em>{Math.round(clampGreenDensity(greenDensity) * 100)}%</em>
-                    </label>
-                  )}
-                  <p className="tool-note">
-                    微调会覆盖当前场景落点；换场景或「换一换」会重新套配方。
-                  </p>
+              {/* Step 2 */}
+              <fieldset className="setup-field">
+                <span>2 · 城市尺度</span>
+                <div className="preset-grid gen-size-grid gen-scale-grid">
+                  {CITY_SCALES.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={scaleId === s.id ? 'active' : ''}
+                      onClick={() => setScaleId(s.id)}
+                      title={s.blurb}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={scaleId === 'custom' ? 'active' : ''}
+                    onClick={() => setScaleId('custom')}
+                  >
+                    自定义
+                  </button>
                 </div>
-              )}
+                {scaleId === 'custom' ? (
+                  <div className="custom-row">
+                    <label>
+                      宽 (km)
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        step={0.5}
+                        value={customWkm}
+                        onChange={(e) => setCustomWkm(Number(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      高 (km)
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        step={0.5}
+                        value={customHkm}
+                        onChange={(e) => setCustomHkm(Number(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <p className="muted gen-size-hint">
+                    {formatDistance(settings.widthM)} × {formatDistance(settings.heightM)}
+                    · 推荐比例尺 1:{settings.scale.toLocaleString()}
+                  </p>
+                )}
+              </fieldset>
+
+              {/* Step 3 */}
+              <fieldset className="setup-field gen-core-params">
+                <span>3 · 微调参数</span>
+                <label className="terrain-seed-row">
+                  <span>海洋比例</span>
+                  <input
+                    type="range"
+                    min={OCEAN_RATIO_MIN}
+                    max={OCEAN_RATIO_MAX}
+                    step={0.01}
+                    value={core.oceanRatio}
+                    onChange={(e) =>
+                      patchCore({ oceanRatio: clampOceanRatio(Number(e.target.value)) })
+                    }
+                  />
+                  <em>{Math.round(clampOceanRatio(core.oceanRatio) * 100)}%</em>
+                </label>
+                <label className="terrain-seed-row">
+                  <span>水网密度</span>
+                  <input
+                    type="range"
+                    min={WATER_NETWORK_MIN}
+                    max={WATER_NETWORK_MAX}
+                    step={0.01}
+                    value={core.waterNetwork}
+                    onChange={(e) =>
+                      patchCore({ waterNetwork: clampWaterNetwork(Number(e.target.value)) })
+                    }
+                  />
+                  <em>{Math.round(clampWaterNetwork(core.waterNetwork) * 100)}%</em>
+                </label>
+                <label className="terrain-seed-row">
+                  <span>绿地覆盖</span>
+                  <input
+                    type="range"
+                    min={GREEN_DENSITY_MIN}
+                    max={GREEN_DENSITY_MAX}
+                    step={0.01}
+                    value={core.greenCover}
+                    onChange={(e) =>
+                      patchCore({ greenCover: clampGreenDensity(Number(e.target.value)) })
+                    }
+                  />
+                  <em>{Math.round(clampGreenDensity(core.greenCover) * 100)}%</em>
+                </label>
+                <label className="terrain-seed-row">
+                  <span>地形破碎度</span>
+                  <input
+                    type="range"
+                    min={FRAGMENTATION_MIN}
+                    max={FRAGMENTATION_MAX}
+                    step={0.01}
+                    value={core.fragmentation}
+                    onChange={(e) =>
+                      patchCore({
+                        fragmentation: clampFragmentation(Number(e.target.value)),
+                      })
+                    }
+                  />
+                  <em>{Math.round(clampFragmentation(core.fragmentation) * 100)}%</em>
+                </label>
+              </fieldset>
             </div>
 
+            {/* Step 4 preview */}
             <div className="gen-right">
               <div className="gen-preview-head">
                 <div>
-                  <strong>{activePreset.label}</strong>
-                  <p className="muted">{activePreset.blurb}</p>
+                  <strong>4 · 实时预览</strong>
+                  <p className="muted">
+                    {proto.label} · 低分辨率预览，生成时出完整地图
+                  </p>
                 </div>
                 <div className="gen-preview-actions">
                   <code className="terrain-seed-code">{terrainSeed.toString(16)}</code>
-                  <button type="button" className="chip" onClick={reshuffleSeed}>
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => {
+                      setTerrainSeed(randomTerrainSeed());
+                      setPreviewView(DEFAULT_VIEW);
+                    }}
+                  >
                     换一换
                   </button>
                   <button
                     type="button"
                     className="chip"
                     onClick={() => setPreviewView(DEFAULT_VIEW)}
-                    title="重置预览视角"
                   >
                     复位
                   </button>
@@ -596,17 +585,34 @@ export function ProjectSetup({
               </div>
               <p className="terrain-preview-legend gen-preview-legend">
                 <span className="swatch land" /> 陆地 {landPct}%
-                {anyWater && (
-                  <>
-                    <span className="swatch water" /> 水域 {waterPct}%
-                  </>
-                )}
-                {greenEnabled && (
-                  <>
-                    <span className="swatch green" /> 绿地 {greenPct}%
-                  </>
-                )}
+                <span className="swatch water" /> 水域 {waterPct}%
+                <span className="swatch green" /> 绿地 {greenPct}%
               </p>
+
+              {quality && (
+                <div className="gen-quality">
+                  <strong>地图特点</strong>
+                  <ul>
+                    <li>
+                      可建设面积{' '}
+                      <em>{Math.round(quality.buildablePct * 100)}%</em>
+                    </li>
+                    <li>
+                      港口潜力 <em>{quality.portPotential}</em>
+                    </li>
+                    <li>
+                      扩展潜力 <em>{quality.expansionPotential}</em>
+                    </li>
+                    <li>
+                      水系阻隔 <em>{quality.waterBarrier}</em>
+                    </li>
+                    <li>
+                      地形阻隔 <em>{quality.terrainBarrier}</em>
+                    </li>
+                  </ul>
+                  <p className="muted">帮助理解地图，不是打分。</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -627,7 +633,7 @@ export function ProjectSetup({
             </button>
           )}
           <button type="button" className="primary" onClick={handleCreate}>
-            新建并绘制
+            生成地图
           </button>
         </footer>
       </div>

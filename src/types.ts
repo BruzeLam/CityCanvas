@@ -300,6 +300,9 @@ export type TerrainSeedMeta = {
   waterRatio?: number;
   greenEnabled?: boolean;
   greenDensity?: number;
+  fragmentation?: number;
+  /** 地理原型 id（可选记录） */
+  geoPrototypeId?: string;
 };
 
 export type CityProject = {

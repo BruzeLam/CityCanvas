@@ -47,6 +47,8 @@ export type TerrainGenParams = {
   riverDensity: number;
   greenEnabled: boolean;
   greenDensity: number;
+  /** 岸线 / 地块破碎度 0–1（越高越碎、越不规则） */
+  fragmentation?: number;
 };
 
 export type LandscapeResult = {
@@ -79,6 +81,15 @@ export function clampGreenDensity(r: number): number {
   return Math.max(GREEN_DENSITY_MIN, Math.min(GREEN_DENSITY_MAX, r));
 }
 
+export const DEFAULT_FRAGMENTATION = 0.35;
+export const FRAGMENTATION_MIN = 0.05;
+export const FRAGMENTATION_MAX = 0.9;
+
+export function clampFragmentation(r: number): number {
+  if (!Number.isFinite(r)) return DEFAULT_FRAGMENTATION;
+  return Math.max(FRAGMENTATION_MIN, Math.min(FRAGMENTATION_MAX, r));
+}
+
 export function randomTerrainSeed(): number {
   return (Math.random() * 0xffffffff) >>> 0;
 }
@@ -94,6 +105,7 @@ export function defaultTerrainGenParams(seed?: number): TerrainGenParams {
     riverDensity: DEFAULT_RIVER_DENSITY,
     greenEnabled: true,
     greenDensity: DEFAULT_GREEN_DENSITY,
+    fragmentation: DEFAULT_FRAGMENTATION,
   };
 }
 
@@ -113,8 +125,16 @@ export function generateLandscape(
     return { terrain: grid, waterPct: 0, greenPct: 0 };
   }
 
-  const field = buildHeightField(cols, rows, seed);
+  const field = buildHeightField(
+    cols,
+    rows,
+    seed,
+    clampFragmentation(params.fragmentation ?? DEFAULT_FRAGMENTATION),
+  );
   cells.fill(TERRAIN_LAND);
+
+  const frag = clampFragmentation(params.fragmentation ?? DEFAULT_FRAGMENTATION);
+  const smoothPasses = Math.max(1, Math.round(4 - frag * 3));
 
   if (params.oceanEnabled) {
     const oceanRatio = clampOceanRatio(params.oceanRatio);
@@ -122,7 +142,7 @@ export function generateLandscape(
     for (let i = 0; i < n; i++) {
       if (field[i] <= threshold) cells[i] = TERRAIN_WATER;
     }
-    smoothWaterLand(cells, cols, rows, 4);
+    smoothWaterLand(cells, cols, rows, smoothPasses);
     // 只保留接边的海，内陆候选留给湖泊逻辑
     keepBorderWaterOnly(cells, cols, rows);
     pruneSmallSeas(cells, cols, rows);
@@ -143,7 +163,7 @@ export function generateLandscape(
   if (params.oceanEnabled || params.lakeEnabled) {
     cleanupIslands(cells, cols, rows);
     despeckle(cells, cols, rows);
-    smoothWaterLand(cells, cols, rows, 2);
+    smoothWaterLand(cells, cols, rows, Math.max(1, smoothPasses - 1));
   }
 
   if (params.riverEnabled) {
@@ -167,6 +187,58 @@ export function generateLandscape(
   }
 
   return { terrain: grid, waterPct, greenPct };
+}
+
+export type LandscapeQuality = {
+  buildablePct: number;
+  waterPct: number;
+  greenPct: number;
+  /** 接边水域格占比（港口潜力代理） */
+  coastWaterPct: number;
+  portPotential: '低' | '中' | '高';
+  expansionPotential: '低' | '中' | '高';
+  waterBarrier: '低' | '中' | '高';
+  terrainBarrier: '低' | '中' | '高';
+};
+
+function levelByPct(p: number, low: number, mid: number): '低' | '中' | '高' {
+  if (p < low) return '低';
+  if (p < mid) return '中';
+  return '高';
+}
+
+/** 帮助玩家理解地图特点（不打分） */
+export function analyzeLandscape(
+  result: LandscapeResult,
+  fragmentation = DEFAULT_FRAGMENTATION,
+): LandscapeQuality {
+  const { terrain, waterPct, greenPct } = result;
+  const { cols, rows, cells } = terrain;
+  const n = cols * rows || 1;
+  let land = 0;
+  let coastWater = 0;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = y * cols + x;
+      if (cells[i] === TERRAIN_LAND) land++;
+      if (cells[i] !== TERRAIN_WATER) continue;
+      if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) coastWater++;
+    }
+  }
+  const buildablePct = land / n;
+  const coastWaterPct = coastWater / n;
+  const frag = clampFragmentation(fragmentation);
+
+  return {
+    buildablePct,
+    waterPct,
+    greenPct,
+    coastWaterPct,
+    portPotential: levelByPct(coastWaterPct, 0.01, 0.035),
+    expansionPotential: levelByPct(buildablePct, 0.35, 0.55),
+    waterBarrier: levelByPct(waterPct, 0.18, 0.35),
+    terrainBarrier: levelByPct(frag * 0.55 + greenPct * 0.45, 0.28, 0.48),
+  };
 }
 
 /** @deprecated 使用 generateLandscape */
@@ -242,14 +314,22 @@ function paintGreens(
   }
 }
 
-function buildHeightField(cols: number, rows: number, seed: number): Float32Array {
+function buildHeightField(
+  cols: number,
+  rows: number,
+  seed: number,
+  fragmentation = DEFAULT_FRAGMENTATION,
+): Float32Array {
   const field = new Float32Array(cols * rows);
   const biasAngle = hashUnit(seed) * Math.PI * 2;
   const biasX = Math.cos(biasAngle);
   const biasY = Math.sin(biasAngle);
+  const frag = clampFragmentation(fragmentation);
 
-  const continentFreq = 1.9 + hashUnit(seed + 7) * 0.7;
-  const warpAmt = 0.12 + hashUnit(seed + 13) * 0.1;
+  const continentFreq = 1.9 + hashUnit(seed + 7) * 0.7 + frag * 0.85;
+  const warpAmt = 0.08 + hashUnit(seed + 13) * 0.08 + frag * 0.22;
+  const rippleAmp = 0.04 + frag * 0.12;
+  const octaves = frag > 0.55 ? 6 : 5;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -263,7 +343,7 @@ function buildHeightField(cols: number, rows: number, seed: number): Float32Arra
       const uu = u + wu;
       const vv = v + wv;
 
-      let h = fbm2d(uu * continentFreq, vv * continentFreq, seed, 5, 2.05, 0.48);
+      let h = fbm2d(uu * continentFreq, vv * continentFreq, seed, octaves, 2.05, 0.48);
       const macro = fbm2d(uu * 0.72, vv * 0.72, seed + 33, 3, 2.0, 0.5);
       h = h * 0.56 + macro * 0.44;
 
@@ -271,8 +351,8 @@ function buildHeightField(cols: number, rows: number, seed: number): Float32Arra
       h -= Math.max(0, side) * 0.34;
       h += Math.max(0, -side) * 0.06;
 
-      const ripples = fbm2d(u * 6.2, v * 6.2, seed + 77, 3, 2.1, 0.48);
-      h += (ripples - 0.5) * 0.07;
+      const ripples = fbm2d(u * (5.5 + frag * 4), v * (5.5 + frag * 4), seed + 77, 3, 2.1, 0.48);
+      h += (ripples - 0.5) * rippleAmp;
 
       field[r * cols + c] = h;
     }
