@@ -13,12 +13,12 @@ export function GlyphRoadLevel({
   const style = ROAD_STYLES[level];
   const strokeW =
     {
-      expressway: 6.2,
-      arterial: 5,
-      collector: 3.6,
-      local: 2.4,
+      expressway: 5.4,
+      arterial: 4.8,
+      collector: 4.2,
+      local: 2.8,
       ramp: 2,
-    }[level] ?? 2.4;
+    }[level] ?? 2.8;
   const dash = level === 'expressway' || level === 'arterial';
   const bg = active
     ? '#2f2c28'
