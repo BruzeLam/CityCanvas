@@ -34,6 +34,63 @@ export const DEFAULT_GREEN_DENSITY = 0.28;
 export const GREEN_DENSITY_MIN = 0.08;
 export const GREEN_DENSITY_MAX = 0.7;
 
+/** 地理原型结构 DNA（非 StylePreset；决定骨架，不靠自然语言） */
+export type CoastBias =
+  | 'none'
+  | 'one_side'
+  | 'bay_indent'
+  | 'surround'
+  | 'fjord'
+  | 'peninsula';
+
+export type ChannelStyle =
+  | 'sparse'
+  | 'dense_narrow'
+  | 'wide_sparse'
+  | 'delta_branch'
+  | 'single_trunk';
+
+export type GreenBias = 'uniform' | 'rim' | 'coastal_ridge' | 'high_ground';
+
+export type LandformShape =
+  | 'default'
+  | 'basin'
+  | 'harbor'
+  | 'plain'
+  | 'valley'
+  | 'archipelago'
+  | 'mountain_sea'
+  | 'fjord'
+  | 'peninsula'
+  | 'delta'
+  | 'lake_bowl';
+
+export type FeatureDna = {
+  landform: LandformShape;
+  coastBias: CoastBias;
+  channelStyle: ChannelStyle;
+  greenBias: GreenBias;
+  /** 陆块破碎感 0–1（群岛高） */
+  landBreak: number;
+  /** 湖相对河的偏好 0–1 */
+  lakeBias: number;
+  /** 盆地环山强度 0–1 */
+  basinRing: number;
+  /** 港湾凹入强度 0–1 */
+  bayDepth: number;
+};
+
+export const DEFAULT_FEATURE_DNA: FeatureDna = {
+  landform: 'default',
+  coastBias: 'one_side',
+  channelStyle: 'wide_sparse',
+  greenBias: 'uniform',
+  landBreak: 0.25,
+  lakeBias: 0.35,
+  basinRing: 0,
+  bayDepth: 0.2,
+};
+
 export type TerrainGenParams = {
   seed: number;
   /** 海：接地图边界的大片水域 */
@@ -49,6 +106,8 @@ export type TerrainGenParams = {
   greenDensity: number;
   /** 岸线 / 地块破碎度 0–1（越高越碎、越不规则） */
   fragmentation?: number;
+  /** 地理原型结构配方 */
+  dna?: FeatureDna;
 };
 
 export type LandscapeResult = {
@@ -125,15 +184,11 @@ export function generateLandscape(
     return { terrain: grid, waterPct: 0, greenPct: 0 };
   }
 
-  const field = buildHeightField(
-    cols,
-    rows,
-    seed,
-    clampFragmentation(params.fragmentation ?? DEFAULT_FRAGMENTATION),
-  );
+  const dna = params.dna ?? DEFAULT_FEATURE_DNA;
+  const frag = clampFragmentation(params.fragmentation ?? DEFAULT_FRAGMENTATION);
+  const field = buildHeightField(cols, rows, seed, frag, dna);
   cells.fill(TERRAIN_LAND);
 
-  const frag = clampFragmentation(params.fragmentation ?? DEFAULT_FRAGMENTATION);
   const smoothPasses = Math.max(1, Math.round(4 - frag * 3));
 
   if (params.oceanEnabled) {
@@ -142,10 +197,17 @@ export function generateLandscape(
     for (let i = 0; i < n; i++) {
       if (field[i] <= threshold) cells[i] = TERRAIN_WATER;
     }
+    if (dna.bayDepth > 0.15 && (dna.coastBias === 'bay_indent' || dna.landform === 'harbor')) {
+      carveHarborBay(cells, cols, rows, seed, dna.bayDepth, field);
+    }
+    if (dna.coastBias === 'fjord' || dna.landform === 'fjord') {
+      carveFjords(cells, cols, rows, seed, 0.45 + dna.bayDepth * 0.4);
+    }
     smoothWaterLand(cells, cols, rows, smoothPasses);
     // 只保留接边的海，内陆候选留给湖泊逻辑
     keepBorderWaterOnly(cells, cols, rows);
-    pruneSmallSeas(cells, cols, rows);
+    const minSea = dna.landBreak > 0.55 ? 0.004 : 0.012;
+    pruneSmallSeas(cells, cols, rows, minSea);
   }
 
   if (params.lakeEnabled) {
@@ -156,19 +218,21 @@ export function generateLandscape(
       rows,
       seed,
       clampLakeDensity(params.lakeDensity),
+      dna,
     );
   }
 
   // 大水体先清理；河道稍后刻，避免多数票把窄河抹掉
   if (params.oceanEnabled || params.lakeEnabled) {
-    cleanupIslands(cells, cols, rows);
+    const islandMin = dna.landBreak > 0.55 ? 0.002 : 0.008;
+    cleanupIslands(cells, cols, rows, islandMin);
     despeckle(cells, cols, rows);
     smoothWaterLand(cells, cols, rows, Math.max(1, smoothPasses - 1));
   }
 
   if (params.riverEnabled) {
     const density = clampRiverDensity(params.riverDensity);
-    const rivers = generateRiverNetwork(cells, cols, rows, seed, density);
+    const rivers = generateRiverNetwork(cells, cols, rows, seed, density, dna);
     carveRiverNetwork(cells, cols, rows, rivers, cellSizeM);
   }
 
@@ -179,7 +243,15 @@ export function generateLandscape(
   waterPct = water / n;
 
   if (params.greenEnabled) {
-    paintGreens(cells, cols, rows, field, seed, clampGreenDensity(params.greenDensity));
+    paintGreens(
+      cells,
+      cols,
+      rows,
+      field,
+      seed,
+      clampGreenDensity(params.greenDensity),
+      dna,
+    );
     smoothGreenLand(cells, cols, rows, 3);
     let green = 0;
     for (let i = 0; i < n; i++) if (cells[i] === TERRAIN_GREEN) green++;
@@ -276,12 +348,17 @@ function paintGreens(
   height: Float32Array,
   seed: number,
   density: number,
+  dna: FeatureDna = DEFAULT_FEATURE_DNA,
 ): void {
   const landIdx: number[] = [];
   for (let i = 0; i < cells.length; i++) {
     if (cells[i] === TERRAIN_LAND) landIdx.push(i);
   }
   if (landIdx.length === 0) return;
+
+  const biasAngle = hashUnit(seed + 503) * Math.PI * 2;
+  const ridgeX = Math.cos(biasAngle);
+  const ridgeY = Math.sin(biasAngle);
 
   const scores = new Float32Array(landIdx.length);
   for (let k = 0; k < landIdx.length; k++) {
@@ -292,7 +369,27 @@ function paintGreens(
     const v = (y + 0.5) / rows;
     const patch = fbm2d(u * 3.4, v * 3.4, seed + 401, 3, 2.1, 0.5);
     const detail = fbm2d(u * 7.5, v * 7.5, seed + 419, 2, 2.0, 0.5);
-    scores[k] = patch * 0.72 + detail * 0.18 + height[i] * 0.1;
+    let s = patch * 0.55 + detail * 0.15 + height[i] * 0.12;
+
+    const edge =
+      Math.min(x, y, cols - 1 - x, rows - 1 - y) / Math.max(cols, rows);
+    const radial = Math.hypot(u - 0.5, v - 0.5) * 2; // 0 center → ~1.4 corner
+
+    if (dna.greenBias === 'rim' || dna.landform === 'basin') {
+      s += Math.max(0, radial - 0.35) * (0.55 + dna.basinRing * 0.45);
+      s -= Math.max(0, 0.4 - radial) * 0.35; // 中部少绿，留给建设
+    } else if (dna.greenBias === 'coastal_ridge' || dna.landform === 'mountain_sea') {
+      const side = (u - 0.5) * ridgeX + (v - 0.5) * ridgeY;
+      s += Math.max(0, -side) * 0.55; // 靠山一侧
+      s -= Math.max(0, side) * 0.2;
+    } else if (dna.greenBias === 'high_ground') {
+      s += height[i] * 0.45;
+      s += (1 - edge) * 0.08;
+    } else {
+      s += height[i] * 0.08;
+    }
+
+    scores[k] = s;
   }
 
   const sorted = Float32Array.from(scores);
@@ -319,17 +416,83 @@ function buildHeightField(
   rows: number,
   seed: number,
   fragmentation = DEFAULT_FRAGMENTATION,
+  dna: FeatureDna = DEFAULT_FEATURE_DNA,
 ): Float32Array {
   const field = new Float32Array(cols * rows);
   const biasAngle = hashUnit(seed) * Math.PI * 2;
   const biasX = Math.cos(biasAngle);
   const biasY = Math.sin(biasAngle);
   const frag = clampFragmentation(fragmentation);
+  const breakAmt = Math.max(0, Math.min(1, dna.landBreak));
 
-  const continentFreq = 1.9 + hashUnit(seed + 7) * 0.7 + frag * 0.85;
-  const warpAmt = 0.08 + hashUnit(seed + 13) * 0.08 + frag * 0.22;
-  const rippleAmp = 0.04 + frag * 0.12;
+  let continentFreq = 1.9 + hashUnit(seed + 7) * 0.7 + frag * 0.85;
+  let warpAmt = 0.08 + hashUnit(seed + 13) * 0.08 + frag * 0.22;
+  let rippleAmp = 0.04 + frag * 0.12;
+  let sideOcean = 0.34;
+  let sideLand = 0.06;
   const octaves = frag > 0.55 ? 6 : 5;
+
+  // 原型骨架：改频率 / 侧向海陆 / 宏观形状
+  switch (dna.landform) {
+    case 'plain':
+      continentFreq = 1.15 + frag * 0.35;
+      warpAmt *= 0.55;
+      rippleAmp *= 0.45;
+      sideOcean = 0.06;
+      sideLand = 0.02;
+      break;
+    case 'basin':
+      continentFreq = 1.4 + frag * 0.4;
+      warpAmt *= 0.7;
+      sideOcean = 0.04;
+      sideLand = 0.02;
+      break;
+    case 'harbor':
+      continentFreq = 2.0 + frag * 0.55;
+      sideOcean = 0.42;
+      sideLand = 0.1;
+      break;
+    case 'mountain_sea':
+      continentFreq = 1.85 + frag * 0.5;
+      sideOcean = 0.48;
+      sideLand = 0.18;
+      break;
+    case 'valley':
+      continentFreq = 1.55 + frag * 0.4;
+      sideOcean = 0.08;
+      break;
+    case 'archipelago':
+      continentFreq = 2.6 + frag * 0.9 + breakAmt;
+      warpAmt += 0.12 + breakAmt * 0.15;
+      rippleAmp += 0.08;
+      sideOcean = 0.28;
+      break;
+    case 'fjord':
+      continentFreq = 2.1 + frag * 0.5;
+      warpAmt *= 0.65;
+      sideOcean = 0.38;
+      break;
+    case 'peninsula':
+      continentFreq = 1.9 + frag * 0.45;
+      sideOcean = 0.4;
+      sideLand = 0.12;
+      break;
+    case 'delta':
+      continentFreq = 1.7 + frag * 0.55;
+      sideOcean = 0.36;
+      warpAmt += 0.06;
+      break;
+    case 'lake_bowl':
+      continentFreq = 1.5 + frag * 0.35;
+      sideOcean = 0.05;
+      break;
+    default:
+      break;
+  }
+
+  const valleyAngle = biasAngle + Math.PI * 0.5;
+  const valleyX = Math.cos(valleyAngle);
+  const valleyY = Math.sin(valleyAngle);
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -348,8 +511,56 @@ function buildHeightField(
       h = h * 0.56 + macro * 0.44;
 
       const side = (u - 0.5) * biasX + (v - 0.5) * biasY;
-      h -= Math.max(0, side) * 0.34;
-      h += Math.max(0, -side) * 0.06;
+      if (dna.coastBias === 'surround') {
+        const edge = Math.min(u, v, 1 - u, 1 - v);
+        h -= Math.max(0, 0.22 - edge) * (0.55 + breakAmt * 0.35);
+      } else if (dna.coastBias !== 'none') {
+        h -= Math.max(0, side) * sideOcean;
+        h += Math.max(0, -side) * sideLand;
+      }
+
+      // 盆地：边缘抬高、中心相对平坦可建
+      if (dna.landform === 'basin' || dna.basinRing > 0.05) {
+        const radial = Math.hypot(u - 0.5, v - 0.5) * 2;
+        const ring = Math.max(0, radial - 0.28);
+        h += ring * (0.28 + dna.basinRing * 0.5);
+        h += (0.42 - Math.min(radial, 0.42)) * 0.08;
+      }
+
+      // 河谷：沿山谷轴压低一条走廊
+      if (dna.landform === 'valley') {
+        const along = (u - 0.5) * valleyX + (v - 0.5) * valleyY;
+        const across = (u - 0.5) * -valleyY + (v - 0.5) * valleyX;
+        h -= Math.max(0, 0.22 - Math.abs(across)) * 0.55;
+        h += Math.abs(along) * 0.04;
+      }
+
+      // 半岛：中心脊向海洋侧伸出
+      if (dna.landform === 'peninsula' || dna.coastBias === 'peninsula') {
+        const along = (u - 0.5) * biasX + (v - 0.5) * biasY;
+        const across = (u - 0.5) * -biasY + (v - 0.5) * biasX;
+        h += Math.max(0, along) * 0.22;
+        h -= Math.abs(across) * 0.18;
+        h -= Math.max(0, -along) * 0.35;
+      }
+
+      // 三角洲：靠海一侧更低、更碎
+      if (dna.landform === 'delta') {
+        h -= Math.max(0, side) * 0.18;
+        h += (valueNoise2d(u * 6, v * 6, seed + 55) - 0.5) * 0.12;
+      }
+
+      // 湖区：中心浅碗
+      if (dna.landform === 'lake_bowl') {
+        const radial = Math.hypot(u - 0.5, v - 0.5) * 2;
+        h -= Math.max(0, 0.55 - radial) * 0.32;
+      }
+
+      // 群岛：高频碎斑
+      if (dna.landform === 'archipelago' || breakAmt > 0.45) {
+        const speck = fbm2d(u * 8, v * 8, seed + 88, 3, 2.2, 0.5);
+        h += (speck - 0.5) * (0.1 + breakAmt * 0.22);
+      }
 
       const ripples = fbm2d(u * (5.5 + frag * 4), v * (5.5 + frag * 4), seed + 77, 3, 2.1, 0.48);
       h += (ripples - 0.5) * rippleAmp;
@@ -358,6 +569,72 @@ function buildHeightField(
     }
   }
   return field;
+}
+
+/** 从开敞海一侧向内凹入港湾 */
+function carveHarborBay(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  seed: number,
+  bayDepth: number,
+  field: Float32Array,
+): void {
+  const angle = hashUnit(seed + 211) * Math.PI * 2;
+  const ox = Math.cos(angle);
+  const oy = Math.sin(angle);
+  const depth = 0.18 + bayDepth * 0.28;
+  const width = 0.14 + bayDepth * 0.12;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const u = (x + 0.5) / cols - 0.5;
+      const v = (y + 0.5) / rows - 0.5;
+      const along = u * ox + v * oy;
+      const across = u * -oy + v * ox;
+      // 靠海半侧、窄通道向内陆
+      if (along < 0.02) continue;
+      const throat = Math.abs(across) / width;
+      const reach = along / depth;
+      if (throat + reach * reach > 1.15) continue;
+      const i = y * cols + x;
+      if (field[i] < 0.62) cells[i] = TERRAIN_WATER;
+    }
+  }
+}
+
+/** 狭长水道切入陆地 */
+function carveFjords(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  seed: number,
+  strength: number,
+): void {
+  const count = 2 + Math.round(strength * 2);
+  const angle0 = hashUnit(seed + 307) * Math.PI * 2;
+  for (let f = 0; f < count; f++) {
+    const angle = angle0 + f * 0.55 + hashUnit(seed + 40 + f) * 0.35;
+    const ox = Math.cos(angle);
+    const oy = Math.sin(angle);
+    const lateral = (hashUnit(seed + 90 + f) - 0.5) * 0.45;
+    const px = -oy;
+    const py = ox;
+    const width = 0.035 + strength * 0.03;
+    const length = 0.35 + strength * 0.35;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const u = (x + 0.5) / cols - 0.5;
+        const v = (y + 0.5) / rows - 0.5;
+        const cu = u - px * lateral;
+        const cv = v - py * lateral;
+        const along = cu * ox + cv * oy;
+        const across = cu * -oy + cv * ox;
+        if (along < 0.05 || along > length) continue;
+        if (Math.abs(across) > width * (1.1 - along * 0.4)) continue;
+        cells[y * cols + x] = TERRAIN_WATER;
+      }
+    }
+  }
 }
 
 /** 多数票平滑岸线，减轻锯齿 */
@@ -430,6 +707,7 @@ function generateRiverNetwork(
   rows: number,
   seed: number,
   density: number,
+  dna: FeatureDna = DEFAULT_FEATURE_DNA,
 ): RiverSegment[] {
   const n = cols * rows;
   const seaDist = buildOutletDistance(cells, cols, rows);
@@ -437,10 +715,35 @@ function generateRiverNetwork(
   const sourceUsed = new Uint8Array(n);
   const rivers: RiverSegment[] = [];
 
-  const trunkCount = Math.max(1, Math.min(2, Math.round(0.55 + density * 1.2)));
-  const tribCount = Math.max(0, Math.round(density * 3.2));
-  const trunkMin = Math.max(28, Math.floor(Math.max(cols, rows) * 0.3));
-  const tribMin = Math.max(14, Math.floor(Math.max(cols, rows) * 0.14));
+  let trunkCount = Math.max(1, Math.min(2, Math.round(0.55 + density * 1.2)));
+  let tribCount = Math.max(0, Math.round(density * 3.2));
+  let trunkMin = Math.max(28, Math.floor(Math.max(cols, rows) * 0.3));
+  let tribMin = Math.max(14, Math.floor(Math.max(cols, rows) * 0.14));
+
+  switch (dna.channelStyle) {
+    case 'dense_narrow':
+      trunkCount = Math.max(2, Math.min(3, Math.round(1.2 + density * 1.6)));
+      tribCount = Math.max(3, Math.round(density * 6.5));
+      trunkMin = Math.max(22, Math.floor(Math.max(cols, rows) * 0.22));
+      tribMin = Math.max(10, Math.floor(Math.max(cols, rows) * 0.1));
+      break;
+    case 'single_trunk':
+      trunkCount = 1;
+      tribCount = Math.max(1, Math.round(density * 2.2));
+      trunkMin = Math.max(36, Math.floor(Math.max(cols, rows) * 0.38));
+      break;
+    case 'delta_branch':
+      trunkCount = Math.max(1, Math.min(2, Math.round(0.8 + density)));
+      tribCount = Math.max(2, Math.round(density * 5));
+      tribMin = Math.max(12, Math.floor(Math.max(cols, rows) * 0.12));
+      break;
+    case 'sparse':
+      trunkCount = Math.max(1, Math.round(0.4 + density * 0.8));
+      tribCount = Math.max(0, Math.round(density * 1.5));
+      break;
+    default:
+      break;
+  }
 
   for (let i = 0; i < trunkCount * 6 && rivers.filter((r) => r.order === 2).length < trunkCount; i++) {
     const source = pickSourceCell(cells, cols, rows, seed + i * 97, sourceUsed, seaDist);
@@ -969,6 +1272,7 @@ function paintLakes(
   rows: number,
   seed: number,
   density: number,
+  dna: FeatureDna = DEFAULT_FEATURE_DNA,
 ): void {
   const landIdx: number[] = [];
   for (let i = 0; i < cells.length; i++) {
@@ -986,7 +1290,24 @@ function paintLakes(
     const basin = fbm2d(u * 4.2, v * 4.2, seed + 701, 3, 2.1, 0.5);
     // 偏低 + 盆地噪声低 → 更易成湖；避开贴边（留给海）
     const edge = Math.min(x, y, cols - 1 - x, rows - 1 - y) / Math.max(cols, rows);
-    scores[k] = (1 - field[i]) * 0.55 + (1 - basin) * 0.35 + edge * 0.25;
+    let s = (1 - field[i]) * 0.55 + (1 - basin) * 0.35 + edge * 0.25;
+
+    if (dna.landform === 'lake_bowl' || dna.lakeBias > 0.5) {
+      const radial = Math.hypot(u - 0.5, v - 0.5) * 2;
+      s += Math.max(0, 0.55 - radial) * (0.35 + dna.lakeBias * 0.35);
+    }
+    if (dna.landform === 'basin') {
+      // 盆地中心可有浅湖，边缘少湖
+      const radial = Math.hypot(u - 0.5, v - 0.5) * 2;
+      s += Math.max(0, 0.4 - radial) * 0.25;
+      s -= Math.max(0, radial - 0.55) * 0.4;
+    }
+    if (dna.landform === 'plain') {
+      // 水网平原：多小湖塘
+      s += (1 - basin) * 0.2;
+    }
+
+    scores[k] = s;
   }
 
   const sorted = Float32Array.from(scores);
@@ -1032,9 +1353,14 @@ function keepBorderWaterOnly(cells: Uint8Array, cols: number, rows: number): voi
   }
 }
 
-function pruneSmallSeas(cells: Uint8Array, cols: number, rows: number): void {
+function pruneSmallSeas(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  minFrac = 0.01,
+): void {
   const n = cols * rows;
-  const minSea = Math.max(48, Math.floor(n * 0.01));
+  const minSea = Math.max(48, Math.floor(n * minFrac));
   const labels = labelComponents(cells, cols, rows, TERRAIN_WATER);
   for (const comp of labels.components) {
     const touchesBorder = comp.cells.some((i) => {
@@ -1048,9 +1374,14 @@ function pruneSmallSeas(cells: Uint8Array, cols: number, rows: number): void {
   }
 }
 
-function cleanupIslands(cells: Uint8Array, cols: number, rows: number): void {
+function cleanupIslands(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  minFrac = 0.005,
+): void {
   const n = cols * rows;
-  const minIslandKeep = Math.max(28, Math.floor(n * 0.005));
+  const minIslandKeep = Math.max(28, Math.floor(n * minFrac));
   const landLabels = labelComponents(cells, cols, rows, TERRAIN_LAND);
   let largestLand = 0;
   for (const comp of landLabels.components) {

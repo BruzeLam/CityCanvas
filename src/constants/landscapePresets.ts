@@ -1,5 +1,6 @@
 /**
  * 地理原型配方 → TerrainGenParams（见 docs/map-generator-design.md）
+ * Feature DNA 决定骨架；四滑条只在 DNA 上扰动。
  * 非暂缓的 StylePreset（江南水乡等）；参考库提取为后续阶段。
  */
 import {
@@ -8,6 +9,7 @@ import {
   clampLakeDensity,
   clampOceanRatio,
   clampRiverDensity,
+  type FeatureDna,
   type TerrainGenParams,
 } from '../engine/terrainGen';
 
@@ -45,6 +47,8 @@ export type GeoPrototype = {
   defaults: MapCoreParams;
   /** 是否倾向接边海 */
   prefersOcean: boolean;
+  /** 结构 DNA：决定骨架形态 */
+  dna: FeatureDna;
 };
 
 export const GEO_PROTOTYPES: GeoPrototype[] = [
@@ -60,6 +64,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       greenCover: 0.22,
       fragmentation: 0.28,
     },
+    dna: {
+      landform: 'plain',
+      coastBias: 'none',
+      channelStyle: 'dense_narrow',
+      greenBias: 'uniform',
+      landBreak: 0.15,
+      lakeBias: 0.55,
+      basinRing: 0,
+      bayDepth: 0,
+    },
   },
   {
     id: 'estuary_delta',
@@ -72,6 +86,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       waterNetwork: 0.65,
       greenCover: 0.2,
       fragmentation: 0.42,
+    },
+    dna: {
+      landform: 'delta',
+      coastBias: 'one_side',
+      channelStyle: 'delta_branch',
+      greenBias: 'uniform',
+      landBreak: 0.4,
+      lakeBias: 0.25,
+      basinRing: 0,
+      bayDepth: 0.25,
     },
   },
   {
@@ -86,6 +110,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       greenCover: 0.24,
       fragmentation: 0.48,
     },
+    dna: {
+      landform: 'harbor',
+      coastBias: 'bay_indent',
+      channelStyle: 'wide_sparse',
+      greenBias: 'high_ground',
+      landBreak: 0.35,
+      lakeBias: 0.2,
+      basinRing: 0,
+      bayDepth: 0.72,
+    },
   },
   {
     id: 'basin',
@@ -98,6 +132,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       waterNetwork: 0.38,
       greenCover: 0.4,
       fragmentation: 0.35,
+    },
+    dna: {
+      landform: 'basin',
+      coastBias: 'none',
+      channelStyle: 'single_trunk',
+      greenBias: 'rim',
+      landBreak: 0.12,
+      lakeBias: 0.4,
+      basinRing: 0.78,
+      bayDepth: 0,
     },
   },
   {
@@ -112,6 +156,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       greenCover: 0.38,
       fragmentation: 0.52,
     },
+    dna: {
+      landform: 'mountain_sea',
+      coastBias: 'one_side',
+      channelStyle: 'sparse',
+      greenBias: 'coastal_ridge',
+      landBreak: 0.3,
+      lakeBias: 0.15,
+      basinRing: 0,
+      bayDepth: 0.2,
+    },
   },
   {
     id: 'valley_city',
@@ -124,6 +178,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       waterNetwork: 0.55,
       greenCover: 0.3,
       fragmentation: 0.32,
+    },
+    dna: {
+      landform: 'valley',
+      coastBias: 'none',
+      channelStyle: 'single_trunk',
+      greenBias: 'high_ground',
+      landBreak: 0.18,
+      lakeBias: 0.2,
+      basinRing: 0.15,
+      bayDepth: 0,
     },
   },
   {
@@ -138,6 +202,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       greenCover: 0.26,
       fragmentation: 0.72,
     },
+    dna: {
+      landform: 'archipelago',
+      coastBias: 'surround',
+      channelStyle: 'sparse',
+      greenBias: 'high_ground',
+      landBreak: 0.82,
+      lakeBias: 0.15,
+      basinRing: 0,
+      bayDepth: 0.15,
+    },
   },
   {
     id: 'lake_region',
@@ -150,6 +224,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       waterNetwork: 0.58,
       greenCover: 0.34,
       fragmentation: 0.3,
+    },
+    dna: {
+      landform: 'lake_bowl',
+      coastBias: 'none',
+      channelStyle: 'wide_sparse',
+      greenBias: 'rim',
+      landBreak: 0.2,
+      lakeBias: 0.85,
+      basinRing: 0.25,
+      bayDepth: 0,
     },
   },
   {
@@ -164,6 +248,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       greenCover: 0.18,
       fragmentation: 0.18,
     },
+    dna: {
+      landform: 'plain',
+      coastBias: 'none',
+      channelStyle: 'sparse',
+      greenBias: 'uniform',
+      landBreak: 0.08,
+      lakeBias: 0.2,
+      basinRing: 0,
+      bayDepth: 0,
+    },
   },
   {
     id: 'peninsula',
@@ -177,6 +271,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       greenCover: 0.22,
       fragmentation: 0.45,
     },
+    dna: {
+      landform: 'peninsula',
+      coastBias: 'peninsula',
+      channelStyle: 'wide_sparse',
+      greenBias: 'high_ground',
+      landBreak: 0.28,
+      lakeBias: 0.18,
+      basinRing: 0,
+      bayDepth: 0.3,
+    },
   },
   {
     id: 'fjord',
@@ -189,6 +293,16 @@ export const GEO_PROTOTYPES: GeoPrototype[] = [
       waterNetwork: 0.4,
       greenCover: 0.42,
       fragmentation: 0.62,
+    },
+    dna: {
+      landform: 'fjord',
+      coastBias: 'fjord',
+      channelStyle: 'single_trunk',
+      greenBias: 'coastal_ridge',
+      landBreak: 0.4,
+      lakeBias: 0.2,
+      basinRing: 0.1,
+      bayDepth: 0.65,
     },
   },
 ];
@@ -264,8 +378,8 @@ export function clampCoreParams(core: MapCoreParams): MapCoreParams {
 }
 
 /**
- * 四核心参数 + 地理原型 → 完整生成参数。
- * 水网密度同时驱动河/湖；破碎度写入 fragmentation。
+ * 四核心参数 + 地理原型 DNA → 完整生成参数。
+ * 水网密度驱动河/湖；DNA 决定骨架形态。
  */
 export function expandCoreToTerrainParams(
   prototypeId: GeoPrototypeId,
@@ -275,16 +389,29 @@ export function expandCoreToTerrainParams(
   const proto = geoPrototypeById(prototypeId);
   const c = clampCoreParams(core);
   const wn = c.waterNetwork;
-  const oceanEnabled = proto.prefersOcean ? c.oceanRatio >= 0.06 : c.oceanRatio >= 0.12;
-  const lakeEnabled = wn >= 0.12;
+  const dna = proto.dna;
+
+  const oceanEnabled = proto.prefersOcean ? c.oceanRatio >= 0.06 : c.oceanRatio >= 0.14;
+  const lakeEnabled = wn >= 0.1 || dna.lakeBias >= 0.5;
   const riverEnabled = wn >= 0.08;
   const greenEnabled = c.greenCover >= 0.06;
 
-  // 水网：低值偏河，高值河湖并重；湖区原型偏湖
-  const lakeBias =
-    prototypeId === 'lake_region' || prototypeId === 'water_plain' ? 0.55 : 0.35;
-  const lakeDensity = clampLakeDensity(0.04 + wn * 0.36 * (0.5 + lakeBias));
-  const riverDensity = clampRiverDensity(0.12 + wn * 0.88);
+  const lakeDensity = clampLakeDensity(
+    0.03 + wn * 0.38 * (0.35 + dna.lakeBias) + dna.lakeBias * 0.06,
+  );
+  let riverDensity = clampRiverDensity(0.1 + wn * 0.9);
+  if (dna.channelStyle === 'dense_narrow') {
+    riverDensity = clampRiverDensity(Math.min(1, riverDensity * 1.15 + 0.08));
+  } else if (dna.channelStyle === 'sparse') {
+    riverDensity = clampRiverDensity(riverDensity * 0.75);
+  } else if (dna.channelStyle === 'single_trunk') {
+    riverDensity = clampRiverDensity(0.2 + wn * 0.55);
+  }
+
+  // 破碎度：滑条与 DNA landBreak 合成
+  const fragmentation = clampFragmentation(
+    c.fragmentation * 0.7 + dna.landBreak * 0.3,
+  );
 
   return {
     seed,
@@ -296,7 +423,8 @@ export function expandCoreToTerrainParams(
     riverDensity,
     greenEnabled,
     greenDensity: c.greenCover,
-    fragmentation: c.fragmentation,
+    fragmentation,
+    dna,
   };
 }
 
