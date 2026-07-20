@@ -5,101 +5,84 @@ import { ROAD_STYLES } from '../types';
 
 type GlyphProps = { active?: boolean };
 
-/** 道路等级：画布上的粗细与配色预览 */
+/** 道路等级：与轨道同款圆标，线宽/配色对齐画布 */
 export function GlyphRoadLevel({
   level,
   active,
 }: GlyphProps & { level: RoadLevel }) {
   const style = ROAD_STYLES[level];
-  const strokeW = { expressway: 9, arterial: 7, collector: 5, local: 3.2 }[level];
+  const strokeW = { expressway: 6.2, arterial: 5, collector: 3.6, local: 2.4 }[level];
   const dash = level === 'expressway' || level === 'arterial';
+  const bg = active
+    ? '#2f2c28'
+    : level === 'expressway'
+      ? '#fde9c8'
+      : level === 'arterial'
+        ? '#fff4cc'
+        : level === 'collector'
+          ? '#f0eeea'
+          : '#ebe8e3';
   return (
-    <svg className="tb-preview-glyph" viewBox="0 0 56 28" aria-hidden>
-      <rect x="1" y="1" width="54" height="26" rx="4" fill={active ? '#2f2c28' : '#f3efe8'} />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={bg} />
       <path
-        d="M6 14h44"
+        d="M4 12h16"
         stroke={style.casing}
-        strokeWidth={strokeW + 2.4}
+        strokeWidth={strokeW + 1.8}
         strokeLinecap="round"
       />
-      <path
-        d="M6 14h44"
-        stroke={style.color}
-        strokeWidth={strokeW}
-        strokeLinecap="round"
-      />
+      <path d="M4 12h16" stroke={style.color} strokeWidth={strokeW} strokeLinecap="round" />
       {dash && (
         <path
-          d="M10 14h36"
-          stroke={active ? 'rgba(255,255,255,0.85)' : '#fff'}
-          strokeWidth={Math.max(1.2, strokeW * 0.22)}
+          d="M6 12h12"
+          stroke="#fff"
+          strokeWidth={Math.max(1, strokeW * 0.28)}
           strokeLinecap="round"
-          strokeDasharray="4 3"
+          strokeDasharray="2.8 2"
         />
       )}
     </svg>
   );
 }
 
-/** 直线画法 */
+/** 直线画法（圆标） */
 export function GlyphPathStraight({ active }: GlyphProps) {
   return (
-    <svg className="tb-preview-glyph" viewBox="0 0 56 28" aria-hidden>
-      <rect x="1" y="1" width="54" height="26" rx="4" fill={active ? '#2f2c28' : '#f3efe8'} />
-      <path
-        d="M8 14h40"
-        stroke={active ? '#f0b429' : '#d4a017'}
-        strokeWidth="5"
-        strokeLinecap="round"
-      />
-      <path
-        d="M12 14h4M20 14h4M28 14h4M36 14h4"
-        stroke="#fff"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-      <circle cx="8" cy="14" r="2.6" fill={active ? '#ffe08a' : '#fff'} stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1.2" />
-      <circle cx="48" cy="14" r="2.6" fill={active ? '#ffe08a' : '#fff'} stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1.2" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#2f2c28' : '#f3efe8'} />
+      <path d="M5 12h14" stroke={active ? '#f0b429' : '#d4a017'} strokeWidth="4.2" strokeLinecap="round" />
+      <path d="M8 12h2M12 12h2M16 12h2" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="5" cy="12" r="2" fill="#fff" stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1" />
+      <circle cx="19" cy="12" r="2" fill="#fff" stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1" />
     </svg>
   );
 }
 
-/** 弯道画法：突出三点 A→B→C */
+/** 弯道画法：三点 1→2→3（圆标） */
 export function GlyphPathCurve({ active }: GlyphProps) {
   const ink = active ? '#ffe08a' : '#d4a017';
-  const dot = active ? '#fff' : '#fff';
-  const ring = active ? '#c47d12' : '#b8860b';
   const label = active ? '#2f2c28' : '#5a4a28';
   return (
-    <svg className="tb-preview-glyph" viewBox="0 0 56 28" aria-hidden>
-      <rect x="1" y="1" width="54" height="26" rx="4" fill={active ? '#2f2c28' : '#f3efe8'} />
-      {/* 三点折线暗示，半透明 */}
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#2f2c28' : '#f3efe8'} />
       <path
-        d="M8 20 L28 6 L48 20"
+        d="M5 17 L12 6 L19 17"
         fill="none"
         stroke={active ? 'rgba(255,224,138,0.35)' : 'rgba(180,140,40,0.35)'}
-        strokeWidth="1.2"
-        strokeDasharray="2.5 2"
+        strokeWidth="1"
+        strokeDasharray="2 1.5"
       />
-      {/* 劣弧弯道 */}
-      <path
-        d="M8 20 Q28 2 48 20"
-        fill="none"
-        stroke={ink}
-        strokeWidth="4.2"
-        strokeLinecap="round"
-      />
-      {/* 点 A / B / C */}
-      <circle cx="8" cy="20" r="3.2" fill={dot} stroke={ring} strokeWidth="1.3" />
-      <circle cx="28" cy="6" r="3.4" fill="#ff7a45" stroke="#fff" strokeWidth="1.2" />
-      <circle cx="48" cy="20" r="3.2" fill={dot} stroke={ring} strokeWidth="1.3" />
-      <text x="8" y="21.2" textAnchor="middle" fontSize="5.5" fontWeight="800" fill={label}>
+      <path d="M5 17 Q12 4 19 17" fill="none" stroke={ink} strokeWidth="3.4" strokeLinecap="round" />
+      <circle cx="5" cy="17" r="2.4" fill="#fff" stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1" />
+      <circle cx="12" cy="6" r="2.6" fill="#ff7a45" stroke="#fff" strokeWidth="1" />
+      <circle cx="19" cy="17" r="2.4" fill="#fff" stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1" />
+      <text x="5" y="17.9" textAnchor="middle" fontSize="4.5" fontWeight="800" fill={label}>
         1
       </text>
-      <text x="28" y="7.4" textAnchor="middle" fontSize="5.5" fontWeight="800" fill="#fff">
+      <text x="12" y="7.1" textAnchor="middle" fontSize="4.5" fontWeight="800" fill="#fff">
         2
       </text>
-      <text x="48" y="21.2" textAnchor="middle" fontSize="5.5" fontWeight="800" fill={label}>
+      <text x="19" y="17.9" textAnchor="middle" fontSize="4.5" fontWeight="800" fill={label}>
         3
       </text>
     </svg>

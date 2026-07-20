@@ -393,27 +393,23 @@ export function Toolbar({
             <p className="option-label">
               等级 <span className="option-hint">1–4</span>
             </p>
-            <div className="preview-chip-row compact">
+            <div className="tb-tile-grid">
               {ROAD_LEVELS.map(([id, style], i) => (
-                <button
+                <Tile
                   key={id}
-                  type="button"
-                  className={
-                    tool === 'road' && roadLevel === id ? 'preview-chip active' : 'preview-chip'
+                  label={style.label}
+                  hotkey={String(i + 1)}
+                  active={tool === 'road' && roadLevel === id}
+                  glyph={
+                    <GlyphRoadLevel level={id} active={tool === 'road' && roadLevel === id} />
                   }
+                  title={`${style.label} · ${i + 1}`}
                   onClick={() => {
                     selectTransit('road');
                     onRoadLevelChange(id);
                     onToolChange('road');
                   }}
-                  title={`${style.label} · ${i + 1}`}
-                >
-                  <GlyphRoadLevel level={id} active={tool === 'road' && roadLevel === id} />
-                  <span className="preview-chip-label">
-                    <kbd className="chip-kbd">{i + 1}</kbd>
-                    {style.label}
-                  </span>
-                </button>
+                />
               ))}
             </div>
           </div>
@@ -493,25 +489,22 @@ export function Toolbar({
         {isPathGuided(tool) && (
           <div className="tb-options">
             <p className="option-label">画法</p>
-            <div className="preview-chip-row compact">
+            <div className="tb-tile-grid">
               {PATH_DRAW_MODES.map((m) => (
-                <button
+                <Tile
                   key={m.id}
-                  type="button"
-                  className={pathDrawMode === m.id ? 'preview-chip active' : 'preview-chip'}
-                  onClick={() => onPathDrawModeChange(m.id)}
+                  label={m.id === 'curve' ? '弯道' : m.label}
+                  active={pathDrawMode === m.id}
+                  glyph={
+                    m.id === 'curve' ? (
+                      <GlyphPathCurve active={pathDrawMode === 'curve'} />
+                    ) : (
+                      <GlyphPathStraight active={pathDrawMode === 'straight'} />
+                    )
+                  }
                   title={m.desc}
-                >
-                  {m.id === 'curve' ? (
-                    <GlyphPathCurve active={pathDrawMode === 'curve'} />
-                  ) : (
-                    <GlyphPathStraight active={pathDrawMode === 'straight'} />
-                  )}
-                  <span className="preview-chip-label">
-                    {m.label}
-                    {m.id === 'curve' ? ' · 三点' : ''}
-                  </span>
-                </button>
+                  onClick={() => onPathDrawModeChange(m.id)}
+                />
               ))}
             </div>
             <p className="option-label">标高 {formatGrade(drawGrade)}</p>
