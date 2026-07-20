@@ -345,50 +345,11 @@ function buildRampDrawPieces(
 }
 
 /**
- * 沿汇入方向撕开宿主侧路缘（destination-out）。
- * 只清 tip 宽度的一条缝，不沿主路拉矩形 → 无补丁。
- * 须在主路 casing 之后、fill 之前。
+ * 汇入口：擦掉 tip 路缘 butt 封口 + 宿主侧边线，再补路面色/渐变。
+ * destination-out 只沿汇入方向、tip 路缘宽 —— 不会沿主路拉出补丁。
+ * 须在本层全部 casing/fill 画完后调用。
  */
-function openHostMouthAlongApproach(
-  ctx: CanvasRenderingContext2D,
-  mouths: JoinMouth[],
-  band: number,
-  viewport: Viewport,
-  style: MapStyle,
-) {
-  const z = viewport.zoom;
-  const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * z) : 2 * z;
-  ctx.save();
-  ctx.globalCompositeOperation = 'destination-out';
-  for (const m of mouths) {
-    if (Math.floor(m.grade + 1e-9) !== band) continue;
-    const p = toScreen(m.point, viewport);
-    const hostBodyW = Math.max(2, m.hostWidth * z);
-    const tipCasingW = Math.max(2, m.tipWidth * z) + casingExtra;
-    const tipFillW = Math.max(2, m.tipWidth * z);
-    // approach：路内 → tip；汇入从 tip 外侧扫向宿主中心
-    const ax = m.approachX;
-    const ay = m.approachY;
-    const outer = hostBodyW * 0.5 + casingExtra + tipFillW * 0.15;
-    const inner = Math.max(0, hostBodyW * 0.12);
-
-    ctx.beginPath();
-    ctx.moveTo(p.x - ax * outer, p.y - ay * outer);
-    ctx.lineTo(p.x - ax * inner, p.y - ay * inner);
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = tipCasingW + 1;
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-/**
- * tip → 宿主色渐变（匝道出入口 / 丁字尽头异色汇入）。
- * 仅 tip 路宽，不做加宽涂抹。
- */
-function drawJoinBlends(
+function sealJoinMouths(
   ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
   band: number,
@@ -398,45 +359,65 @@ function drawJoinBlends(
   if (style === 'blueprint') return;
   const z = viewport.zoom;
   const fillScale = style === 'sketch' ? 0.72 : 1;
+  const casingExtra = style === 'sketch' ? Math.max(1.5, 1.8 * z) : 2 * z;
+
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
-    if (m.tipColor === m.hostColor) continue;
-
     const p = toScreen(m.point, viewport);
+    const hostBodyW = Math.max(2, m.hostWidth * z);
+    const tipBodyW = Math.max(2, m.tipWidth * z);
+    const tipCasingW = tipBodyW + casingExtra;
+    const tipFillW = Math.max(2, tipBodyW * fillScale);
+    const ax = m.approachX;
+    const ay = m.approachY;
+    // 从 tip 路内（过宿主外缘）扫到宿主中心，盖住 tip 封口线与宿主侧边
+    const outer = hostBodyW * 0.5 + casingExtra + tipFillW * 0.35;
+    const inner = 0;
+
+    // 1) 擦掉中间那条深色封口/侧边
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.moveTo(p.x - ax * outer, p.y - ay * outer);
+    ctx.lineTo(p.x - ax * inner, p.y - ay * inner);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = tipCasingW + 2;
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.stroke();
+    ctx.restore();
+
+    // 2) 立刻补回路面：异色渐变，同色实心 —— 不留透明洞
     let hostFill = m.hostColor;
     let tipFill = m.tipColor;
     if (style === 'sketch') {
       hostFill = sketchRoadFill(m.hostColor);
       tipFill = sketchRoadFill(m.tipColor);
     }
-    const tipFillW = Math.max(2, m.tipWidth * z * fillScale);
-    const halfHost = (m.hostWidth * 0.5) * z;
-    const ax = m.approachX;
-    const ay = m.approachY;
-    // 从宿主路缘外缘内侧 → 中心：tip 色淡入宿主色
     const a = {
-      x: p.x - ax * (halfHost + tipFillW * 0.85),
-      y: p.y - ay * (halfHost + tipFillW * 0.85),
+      x: p.x - ax * (hostBodyW * 0.5 + tipFillW * 0.9),
+      y: p.y - ay * (hostBodyW * 0.5 + tipFillW * 0.9),
     };
-    const b = {
-      x: p.x - ax * (tipFillW * 0.05),
-      y: p.y - ay * (tipFillW * 0.05),
-    };
-    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-    g.addColorStop(0, tipFill);
-    g.addColorStop(0.45, lerpColor(tipFill, hostFill, 0.35));
-    g.addColorStop(1, hostFill);
+    const b = { x: p.x, y: p.y };
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = g;
+    if (m.tipColor === m.hostColor) {
+      ctx.strokeStyle = tipFill;
+    } else {
+      const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      g.addColorStop(0, tipFill);
+      g.addColorStop(0.5, lerpColor(tipFill, hostFill, 0.45));
+      g.addColorStop(1, hostFill);
+      ctx.strokeStyle = g;
+    }
     ctx.lineWidth = tipFillW;
     ctx.lineCap = 'butt';
     ctx.stroke();
   }
 }
 
-/** 同层：tip stub → 匝道 → 主路；tip 截路缘；汇入口撕侧边 + tip→宿主渐变 */
+/** 同层：tip stub → 匝道 → 主路；汇入口擦封口线并补渐变 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -553,8 +534,6 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 沿汇入方向撕开宿主侧路缘（tip 宽缝，无沿主路补丁）
-    openHostMouthAlongApproach(ctx, mouths, band, viewport, style);
     for (const piece of mains) {
       drawRoadFill(
         ctx,
@@ -566,7 +545,8 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    drawJoinBlends(ctx, mouths, band, viewport, style);
+    // 擦掉 tip 封口线 / 宿主侧边，再补渐变或同色路面
+    sealJoinMouths(ctx, mouths, band, viewport, style);
     i = j;
   }
 

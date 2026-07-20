@@ -1538,13 +1538,21 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     return false;
   };
 
-  /** tip 是否落在宿主端点上（两路端点相接）：不算丁字汇入，避免误撕边 */
-  const tipOnHostEndpoint = (tip: Point, host: MapFeature): boolean => {
+  /** 端点对端点且近似共线：续接，不是侧向汇入 */
+  const isCollinearTipContinuation = (
+    tip: Point,
+    joiner: MapFeature,
+    end: 'start' | 'end',
+    host: MapFeature,
+  ): boolean => {
     if (host.points.length < 2) return false;
-    return (
+    const onEnd =
       dist(tip, host.points[0]) <= ENDPOINT_MERGE_M ||
-      dist(tip, host.points[host.points.length - 1]) <= ENDPOINT_MERGE_M
-    );
+      dist(tip, host.points[host.points.length - 1]) <= ENDPOINT_MERGE_M;
+    if (!onEnd) return false;
+    const ht = hostTangentAt(host, tip);
+    const dir = approachDirAtTip(joiner, end);
+    return Math.abs(ht.x * dir.x + ht.y * dir.y) > 0.85;
   };
 
   const considerJoin = (
@@ -1556,8 +1564,14 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
     if (host.kind !== 'road' || host.points.length < 2) return;
     // 宿主也是匝道：互挂不画汇入口
     if (host.roadLevel === 'ramp' || isRampFeature(host)) return;
-    // 端点对端点续接：不是丁字/匝道挂侧边
-    if (tipOnHostEndpoint(tipPoint, host)) return;
+    // 共线续接不是侧挂 / 丁字（匝道一律开口）
+    if (
+      joiner.roadLevel !== 'ramp' &&
+      !isRampFeature(joiner) &&
+      isCollinearTipContinuation(tipPoint, joiner, end, host)
+    ) {
+      return;
+    }
 
     const hostGrade = featureGrade(host);
     const hostCls = roadVisualClass(host);
@@ -1623,19 +1637,16 @@ export function collectJoinMouths(features: MapFeature[]): JoinMouth[] {
 }
 
 /**
- * 已接合端点截断 tip 路缘：须停在宿主路面内侧，避免 butt 封口线落在路缘带上。
+ * 已接合端点截断 tip 路缘：停在宿主路面内侧，避免 butt 封口线露在汇入口。
+ * 浅角汇入按 1/sin 加长截断。
  * key = `${featureId}|start|end` → 截断米数。
  */
 export function collectCasingTrimM(features: MapFeature[]): Map<string, number> {
   const trim = new Map<string, number>();
   const joined = collectJoinedCaps(features);
-  /**
-   * tip 路缘终点相对宿主半宽再往中心收：落在路面下，由宿主 fill 盖住。
-   * 旧逻辑 +pad 会把截断点推到路缘环上，留下横切封口线。
-   */
-  const CASING_UNDER_FILL_M = 1.2;
+  const CASING_UNDER_FILL_M = 2.0;
 
-  const hostTrimAt = (tip: Point, selfId: string): number => {
+  const hostTrimAt = (tip: Point, selfId: string, approach: Point): number => {
     let best = 0;
     for (const host of features) {
       if (!isPathKind(host) || host.id === selfId || host.kind !== 'road') continue;
@@ -1660,7 +1671,10 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
       }
       if (!hit) continue;
       const half = roadBodyWidthM(host) * 0.5;
-      best = Math.max(best, Math.max(1.25, half - CASING_UNDER_FILL_M));
+      const ht = hostTangentAt(host, tip);
+      const sinA = Math.abs(ht.x * approach.y - ht.y * approach.x);
+      const along = half / Math.max(sinA, 0.22);
+      best = Math.max(best, along + CASING_UNDER_FILL_M);
     }
     return best;
   };
@@ -1668,11 +1682,15 @@ export function collectCasingTrimM(features: MapFeature[]): Map<string, number> 
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2 || f.kind !== 'road') continue;
     if (joined.has(`${f.id}|start`)) {
-      const t = hostTrimAt(f.points[0], f.id);
+      const t = hostTrimAt(f.points[0], f.id, approachDirAtTip(f, 'start'));
       if (t > 0.5) trim.set(`${f.id}|start`, t);
     }
     if (joined.has(`${f.id}|end`)) {
-      const t = hostTrimAt(f.points[f.points.length - 1], f.id);
+      const t = hostTrimAt(
+        f.points[f.points.length - 1],
+        f.id,
+        approachDirAtTip(f, 'end'),
+      );
       if (t > 0.5) trim.set(`${f.id}|end`, t);
     }
   }
