@@ -1290,7 +1290,7 @@ export function MapCanvas({
       const endLabel = formatGrade(drawGrade);
       const gradeHint =
         draftStartGrade != null && draftStartGrade !== drawGrade
-          ? `匝道留在 ${startLabel}（不抬到终点层）· 配色可渐变 · -/= 不影响本段高度`
+          ? `跨层坡道 ${startLabel}→${endLabel} · 标高连续过渡 · -/= 改终点层`
           : `标高 ${endLabel} · -/= 换层`;
       const parallelHint = parallelEnabled
         ? ` · 平行 ${parallelSpacingM} m（${parallelSide === 'both' ? '双侧' : parallelSide === 'left' ? '左' : '右'}）`
@@ -1331,9 +1331,11 @@ export function MapCanvas({
     const tagText = tag ? ` · ${tag}` : '';
     const shiftHint = shiftSnap ? ' · Shift' : '';
     const gradeLine =
-      draftStartGrade != null
-        ? `匝道留在 ${formatGrade(draftStartGrade)}`
-        : `标高 ${formatGrade(drawGrade)}`;
+      draftStartGrade != null && draftStartGrade !== drawGrade
+        ? `跨层 ${formatGrade(draftStartGrade)}→${formatGrade(drawGrade)}`
+        : draftStartGrade != null
+          ? `标高 ${formatGrade(draftStartGrade)}`
+          : `标高 ${formatGrade(drawGrade)}`;
 
     if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {
       const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);

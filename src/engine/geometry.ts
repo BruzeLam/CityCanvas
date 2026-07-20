@@ -10,9 +10,10 @@ const PARALLEL_SNAP_FACTOR = 1.6;
 
 /**
  * 平行双线建议净距（中心线间距，米）。
+ * 配合当前道路线宽（约 7.5–9.5）：双线中心距 ≈ 线宽 + 缝宽。
  * 小于中心线吸附半径时，落笔会被吸到邻路中心线——用 Alt 可临时关闭软吸附。
  */
-export const PARALLEL_CLEAR_M = 16;
+export const PARALLEL_CLEAR_M = 12;
 
 export function dist(a: Point, b: Point): number {
   const dx = a.x - b.x;

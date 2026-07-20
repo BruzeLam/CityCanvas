@@ -4,8 +4,8 @@ import { PARALLEL_CLEAR_M } from './geometry';
 /** 平行模式默认中心线间距（米） */
 export const DEFAULT_PARALLEL_SPACING_M = PARALLEL_CLEAR_M;
 
-export const PARALLEL_SPACING_MIN_M = 4;
-export const PARALLEL_SPACING_MAX_M = 120;
+export const PARALLEL_SPACING_MIN_M = 3;
+export const PARALLEL_SPACING_MAX_M = 80;
 
 export type ParallelSide = 'left' | 'right' | 'both';
 

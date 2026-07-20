@@ -7,7 +7,7 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, isLevelBlendRoad, isRampRoad } from '../types';
+import { ROAD_STYLES, RAIL_STYLES, featureGrade, getLayers, gradeAtPathT, isLevelBlendRoad, isRampFeature, isRampRoad } from '../types';
 import type { RoadLevel } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
@@ -23,13 +23,16 @@ import {
 import { getTerrainBitmap, type TerrainPaintQuality } from './terrainDraw';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
-  return renderGrade(a) - renderGrade(b);
+  return featureGrade(a) - featureGrade(b);
 }
 
-/** 匝道按起点层参与 z-order（整段留在分支道路所在层，不抬到终点层） */
-function renderGrade(f: MapFeature): number {
-  return featureGrade(f);
-}
+type RoadDrawPiece = {
+  feature: MapFeature;
+  /** 连续标高，用于 z-order；跨层匝道沿路径插值 */
+  grade: number;
+  /** 只画这一段折线边；null 表示整条 */
+  segIndex: number | null;
+};
 
 function lerpColor(a: string, b: string, t: number): string {
   const pa = parseColor(a);
@@ -62,7 +65,7 @@ function parseColor(c: string): { r: number; g: number; b: number } | null {
   return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
 }
 
-/** 同层先画完所有路缘，再画路面，避免后画的路「盖住」路口 */
+/** 同层先画完所有路缘，再画路面；跨层匝道按连续标高拆段插入，两端接平无分层缝 */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -70,23 +73,35 @@ function drawRoadsMerged(
   style: MapStyle,
 ) {
   const joinedCaps = collectJoinedCaps(roads);
-  const byGrade = new Map<number, MapFeature[]>();
-  for (const road of roads) {
-    const g = renderGrade(road);
-    const list = byGrade.get(g) ?? [];
-    list.push(road);
-    byGrade.set(g, list);
-  }
-  const grades = [...byGrade.keys()].sort((a, b) => a - b);
+  const pieces: RoadDrawPiece[] = [];
 
-  for (const g of grades) {
-    const group = byGrade.get(g)!;
-    for (const feature of group) {
-      drawRoadCasing(ctx, feature, viewport, style, joinedCaps);
+  for (const feature of roads) {
+    if (isRampFeature(feature) && feature.points.length >= 2) {
+      const n = feature.points.length - 1;
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.5) / n;
+        pieces.push({
+          feature,
+          grade: gradeAtPathT(feature, t),
+          segIndex: i,
+        });
+      }
+    } else {
+      pieces.push({
+        feature,
+        grade: featureGrade(feature),
+        segIndex: null,
+      });
     }
-    for (const feature of group) {
-      drawRoadFill(ctx, feature, viewport, style, joinedCaps);
-    }
+  }
+
+  pieces.sort((a, b) => a.grade - b.grade || a.feature.id.localeCompare(b.feature.id));
+
+  for (const piece of pieces) {
+    drawRoadCasing(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
+  }
+  for (const piece of pieces) {
+    drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, piece.segIndex);
   }
 }
 
@@ -398,6 +413,7 @@ function drawRoadCasing(
   viewport: Viewport,
   style: MapStyle,
   joinedCaps: Set<string>,
+  segIndex: number | null = null,
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
   const fromLevel = (feature.roadLevelFrom ?? (level === 'ramp' ? 'local' : level)) as RoadLevel;
@@ -423,20 +439,41 @@ function drawRoadCasing(
       ? sketchRoadInk(bodyStyle.casing)
       : bodyStyle.casing;
 
+  const strokeSeg = (i: number) => {
+    const n = points.length - 1;
+    const t = (i + 0.5) / n;
+    ctx.strokeStyle = isLevelBlendRoad(feature) ? lerpColor(casing0, casing1, t) : casingMid;
+    ctx.lineWidth = shouldTaperRoad(feature)
+      ? rampWidthAt(t, width, fromW, endW) + casingExtra
+      : width + casingExtra;
+    ctx.beginPath();
+    ctx.moveTo(points[i].x, points[i].y);
+    ctx.lineTo(points[i + 1].x, points[i + 1].y);
+    ctx.stroke();
+  };
+
+  if (segIndex != null) {
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    strokeSeg(segIndex);
+    const n = points.length - 1;
+    const tipEnds: Point[] = [];
+    if (segIndex === 0 && freeEnds.includes(feature.points[0])) {
+      tipEnds.push(feature.points[0]);
+    }
+    if (segIndex === n - 1 && freeEnds.includes(feature.points[n])) {
+      tipEnds.push(feature.points[n]);
+    }
+    if (tipEnds.length) {
+      drawFreeEndCaps(ctx, tipEnds, viewport, width + casingExtra, casingMid);
+    }
+    return;
+  }
+
   if (shouldTaperRoad(feature)) {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    for (let i = 0; i < points.length - 1; i++) {
-      const t = (i + 0.5) / (points.length - 1);
-      ctx.strokeStyle = isLevelBlendRoad(feature)
-        ? lerpColor(casing0, casing1, t)
-        : casingMid;
-      ctx.lineWidth = rampWidthAt(t, width, fromW, endW) + casingExtra;
-      ctx.beginPath();
-      ctx.moveTo(points[i].x, points[i].y);
-      ctx.lineTo(points[i + 1].x, points[i + 1].y);
-      ctx.stroke();
-    }
+    for (let i = 0; i < points.length - 1; i++) strokeSeg(i);
   } else {
     tracePath(ctx, points, false);
     ctx.strokeStyle = casingMid;
@@ -454,6 +491,7 @@ function drawRoadFill(
   viewport: Viewport,
   style: MapStyle,
   joinedCaps: Set<string>,
+  segIndex: number | null = null,
 ) {
   const level = (feature.roadLevel ?? 'local') as RoadLevel;
   const fromLevel = (feature.roadLevelFrom ?? (level === 'ramp' ? 'local' : level)) as RoadLevel;
@@ -481,32 +519,57 @@ function drawRoadFill(
   const { strokeCap, freeEnds } = strokeCapsForFeature(feature, joinedCaps);
   const baseFillW = width * fillScale;
 
+  const strokeSeg = (i: number) => {
+    const n = points.length - 1;
+    const t = (i + 0.5) / n;
+    const blend = isLevelBlendRoad(feature) || level === 'ramp';
+    ctx.strokeStyle = blend ? lerpColor(fillColor, endColor, t) : fillColor;
+    ctx.lineWidth = shouldTaperRoad(feature)
+      ? rampWidthAt(t, baseFillW, fromW * fillScale, endW * fillScale)
+      : baseFillW;
+    ctx.beginPath();
+    ctx.moveTo(points[i].x, points[i].y);
+    ctx.lineTo(points[i + 1].x, points[i + 1].y);
+    ctx.stroke();
+  };
+
+  if (segIndex != null) {
+    if (style === 'blueprint') {
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#e8f4ff';
+      ctx.lineWidth = baseFillW;
+      ctx.beginPath();
+      ctx.moveTo(points[segIndex].x, points[segIndex].y);
+      ctx.lineTo(points[segIndex + 1].x, points[segIndex + 1].y);
+      ctx.stroke();
+    } else {
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      strokeSeg(segIndex);
+    }
+    const n = points.length - 1;
+    const tipEnds: Point[] = [];
+    if (segIndex === 0 && freeEnds.includes(feature.points[0])) {
+      tipEnds.push(feature.points[0]);
+    }
+    if (segIndex === n - 1 && freeEnds.includes(feature.points[n])) {
+      tipEnds.push(feature.points[n]);
+    }
+    if (tipEnds.length) {
+      drawFreeEndCaps(ctx, tipEnds, viewport, baseFillW, fillColor);
+    }
+    return;
+  }
+
   if (shouldTaperRoad(feature) && style !== 'blueprint') {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    for (let i = 0; i < points.length - 1; i++) {
-      const t = (i + 0.5) / (points.length - 1);
-      ctx.strokeStyle = isLevelBlendRoad(feature)
-        ? lerpColor(fillColor, endColor, t)
-        : fillColor;
-      ctx.lineWidth = rampWidthAt(t, baseFillW, fromW * fillScale, endW * fillScale);
-      ctx.beginPath();
-      ctx.moveTo(points[i].x, points[i].y);
-      ctx.lineTo(points[i + 1].x, points[i + 1].y);
-      ctx.stroke();
-    }
+    for (let i = 0; i < points.length - 1; i++) strokeSeg(i);
   } else if (isLevelBlendRoad(feature) && style !== 'blueprint') {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    for (let i = 0; i < points.length - 1; i++) {
-      const t = (i + 0.5) / (points.length - 1);
-      ctx.strokeStyle = lerpColor(fillColor, endColor, t);
-      ctx.lineWidth = baseFillW;
-      ctx.beginPath();
-      ctx.moveTo(points[i].x, points[i].y);
-      ctx.lineTo(points[i + 1].x, points[i + 1].y);
-      ctx.stroke();
-    }
+    for (let i = 0; i < points.length - 1; i++) strokeSeg(i);
   } else {
     tracePath(ctx, points, false);
     ctx.strokeStyle = fillColor;

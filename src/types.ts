@@ -89,9 +89,29 @@ export function featureGradeEnd(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): Feat
   return clampGrade(f.gradeEnd);
 }
 
-/** 跨层匝道（起终点标高不同）——仅用于挂接；绘制 z-order 仍用起点层 */
+/** 跨层匝道（起终点标高不同）——挂接与绘制均用连续插值标高 */
 export function isRampFeature(f: Pick<MapFeature, 'grade' | 'gradeEnd'>): boolean {
   return f.gradeEnd != null && featureGradeEnd(f) !== featureGrade(f);
+}
+
+/**
+ * 路径参数 t∈[0,1] 处的连续标高（跨层匝道线性插值；同层为整段起点层）。
+ * 系统内部可用 0.5 等中间值排序绘制；工具栏展示仍用整数层。
+ */
+export function gradeAtPathT(
+  f: Pick<MapFeature, 'grade' | 'gradeEnd'>,
+  t: number,
+): number {
+  const g0 = featureGrade(f);
+  const g1 = featureGradeEnd(f);
+  if (g0 === g1) return g0;
+  const u = Math.max(0, Math.min(1, t));
+  return g0 + (g1 - g0) * u;
+}
+
+/** 展示用：连续标高四舍五入到整数层 */
+export function displayGrade(g: number): FeatureGrade {
+  return clampGrade(Math.round(g));
 }
 
 /** 异级 / 匝道配色渐变 */
