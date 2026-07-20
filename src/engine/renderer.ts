@@ -21,6 +21,7 @@ import {
   type TerrainGrid,
 } from './terrain';
 import { getTerrainBitmap, type TerrainPaintQuality } from './terrainDraw';
+import { findWaterSpans, type WaterSpan } from './waterCrossing';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
   return featureGrade(a) - featureGrade(b);
@@ -71,6 +72,8 @@ function drawRoadsMerged(
   roads: MapFeature[],
   viewport: Viewport,
   style: MapStyle,
+  terrain: TerrainGrid | null,
+  rivers: MapFeature[],
 ) {
   const joinedCaps = collectJoinedCaps(roads);
   const pieces: RoadDrawPiece[] = [];
@@ -124,6 +127,188 @@ function drawRoadsMerged(
     paintPiece(piece, (seg) => {
       drawRoadFill(ctx, piece.feature, viewport, style, joinedCaps, seg);
     });
+  }
+
+  // 穿水段：桥梁 / 隧道覆写样式 + 端口标记
+  if (terrain || rivers.length > 0) {
+    const spansByGrade: { feature: MapFeature; span: WaterSpan }[] = [];
+    for (const feature of roads) {
+      for (const span of findWaterSpans(feature, terrain, rivers)) {
+        spansByGrade.push({ feature, span });
+      }
+    }
+    spansByGrade.sort((a, b) => a.span.grade - b.span.grade);
+    for (const { feature, span } of spansByGrade) {
+      drawWaterCrossing(ctx, feature, span, viewport, style);
+    }
+  }
+}
+
+/** 桥梁：实线加粗边框 + 两端折线；隧道：虚线边框 + 两端弧线 */
+function drawWaterCrossing(
+  ctx: CanvasRenderingContext2D,
+  feature: MapFeature,
+  span: WaterSpan,
+  viewport: Viewport,
+  style: MapStyle,
+) {
+  const screen = span.points.map((p) => toScreen(p, viewport));
+  if (screen.length < 2) return;
+
+  const level = (feature.roadLevel ?? 'local') as RoadLevel;
+  const bodyStyle = ROAD_STYLES[level === 'ramp' ? 'ramp' : level];
+  const baseW = bodyStyle.width * viewport.zoom;
+  const isBridge = span.grade >= 0;
+  const ink =
+    style === 'blueprint'
+      ? '#8ec5ff'
+      : style === 'sketch'
+        ? '#2a2a2a'
+        : '#4a4038';
+
+  ctx.save();
+  if (span.grade > 0) {
+    const elev = Math.min(3, span.grade);
+    ctx.shadowColor = `rgba(40, 30, 20, ${0.16 + elev * 0.06})`;
+    ctx.shadowBlur = (2 + elev) * viewport.zoom;
+    ctx.shadowOffsetY = (1 + elev * 0.5) * viewport.zoom;
+  }
+
+  if (isBridge) {
+    // 加粗实线路缘（桥梁）
+    tracePath(ctx, screen, false);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = baseW + Math.max(3.5, 4.2 * viewport.zoom);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'butt';
+    ctx.setLineDash([]);
+    ctx.stroke();
+
+    // 保留路面色
+    const fill =
+      style === 'blueprint'
+        ? '#e8f4ff'
+        : style === 'sketch'
+          ? '#f5f5f3'
+          : bodyStyle.color;
+    tracePath(ctx, screen, false);
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = baseW;
+    ctx.stroke();
+  } else {
+    // 隧道：虚线外框，略收路面
+    tracePath(ctx, screen, false);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = baseW + Math.max(2.5, 3 * viewport.zoom);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'butt';
+    const dash = Math.max(5, 6 * viewport.zoom);
+    ctx.setLineDash([dash, dash * 0.75]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const fill =
+      style === 'blueprint'
+        ? 'rgba(180, 210, 240, 0.85)'
+        : style === 'sketch'
+          ? '#e8e8e6'
+          : bodyStyle.color;
+    tracePath(ctx, screen, false);
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = Math.max(1.2, baseW * 0.85);
+    ctx.stroke();
+  }
+
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+
+  const halfW = (baseW + (isBridge ? 4 : 3) * viewport.zoom) / 2;
+  drawCrossingPortal(
+    ctx,
+    screen[0],
+    span.entryHeading,
+    halfW,
+    viewport.zoom,
+    ink,
+    isBridge ? 'bridge' : 'tunnel',
+  );
+  drawCrossingPortal(
+    ctx,
+    screen[screen.length - 1],
+    span.exitHeading,
+    halfW,
+    viewport.zoom,
+    ink,
+    isBridge ? 'bridge' : 'tunnel',
+  );
+  ctx.restore();
+}
+
+/**
+ * 端口标记：桥梁 = 两侧折线（∧ 形）；隧道 = 两侧弧线门户。
+ * heading 为沿路前进方向（弧度）。
+ */
+function drawCrossingPortal(
+  ctx: CanvasRenderingContext2D,
+  center: Point,
+  heading: number,
+  halfW: number,
+  zoom: number,
+  color: string,
+  kind: 'bridge' | 'tunnel',
+) {
+  const nx = -Math.sin(heading);
+  const ny = Math.cos(heading);
+  const tx = Math.cos(heading);
+  const ty = Math.sin(heading);
+  const wing = halfW + Math.max(2, 2.5 * zoom);
+  const depth = Math.max(4, 5.5 * zoom);
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.4, 1.6 * zoom);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.setLineDash([]);
+
+  if (kind === 'bridge') {
+    // 折线桥台：左右各一道「外→折→内」折线
+    for (const side of [-1, 1] as const) {
+      const outer = {
+        x: center.x + nx * wing * side - tx * depth * 0.1,
+        y: center.y + ny * wing * side - ty * depth * 0.1,
+      };
+      const kink = {
+        x: center.x + nx * halfW * 0.65 * side - tx * depth * 0.55,
+        y: center.y + ny * halfW * 0.65 * side - ty * depth * 0.55,
+      };
+      const inner = {
+        x: center.x + nx * halfW * 0.2 * side + tx * depth * 0.15,
+        y: center.y + ny * halfW * 0.2 * side + ty * depth * 0.15,
+      };
+      ctx.beginPath();
+      ctx.moveTo(outer.x, outer.y);
+      ctx.lineTo(kink.x, kink.y);
+      ctx.lineTo(inner.x, inner.y);
+      ctx.stroke();
+    }
+  } else {
+    // 弧线隧道口：横跨路面的半圆弧，凸向陆地一侧（-tangent）
+    const left = {
+      x: center.x + nx * wing,
+      y: center.y + ny * wing,
+    };
+    const right = {
+      x: center.x - nx * wing,
+      y: center.y - ny * wing,
+    };
+    const apex = {
+      x: center.x - tx * depth,
+      y: center.y - ty * depth,
+    };
+    ctx.beginPath();
+    ctx.moveTo(left.x, left.y);
+    ctx.quadraticCurveTo(apex.x, apex.y, right.x, right.y);
+    ctx.stroke();
   }
 }
 
@@ -1161,7 +1346,9 @@ export function renderMap(
 
   if (layers.roads) {
     const roads = features.filter((f) => f.kind === 'road').sort(sortByGradeAsc);
-    drawRoadsMerged(ctx, roads, viewport, project.mapStyle);
+    const rivers = features.filter((f) => f.kind === 'river');
+    const terrain = ensureTerrain(project.settings, project.terrain);
+    drawRoadsMerged(ctx, roads, viewport, project.mapStyle, terrain, rivers);
   }
 
   if (layers.railways) {
