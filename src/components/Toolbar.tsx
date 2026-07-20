@@ -36,7 +36,6 @@ import {
   GlyphPathStraight,
   GlyphRail,
   GlyphRiverLine,
-  GlyphRoad,
   GlyphRoadLevel,
   GlyphStationRect,
   GlyphStationRound,
@@ -125,6 +124,7 @@ function Tile({
   title,
   onClick,
   glyph,
+  hotkey,
 }: {
   label: string;
   active?: boolean;
@@ -133,6 +133,7 @@ function Tile({
   title?: string;
   onClick?: () => void;
   glyph: ReactNode;
+  hotkey?: string;
 }) {
   return (
     <button
@@ -144,6 +145,7 @@ function Tile({
     >
       <span className="tb-tile-glyph">{glyph}</span>
       <span className="tb-tile-label">{label}</span>
+      {hotkey ? <span className="tb-tile-hotkey">{hotkey}</span> : null}
       {soon ? <span className="tb-tile-soon">后</span> : null}
     </button>
   );
@@ -261,37 +263,42 @@ export function Toolbar({
         <div className="tb-tile-grid">
           <Tile
             label="陆地"
+            hotkey="1"
             active={tool === 'land'}
             glyph={<GlyphLand active={tool === 'land'} />}
-            title="陆地刷"
+            title="陆地刷 · 1"
             onClick={() => onToolChange('land')}
           />
           <Tile
             label="水域"
+            hotkey="2"
             active={tool === 'ocean'}
             glyph={<GlyphWater active={tool === 'ocean'} />}
-            title="水域刷"
+            title="水域刷 · 2"
             onClick={() => onToolChange('ocean')}
           />
           <Tile
             label="绿地"
+            hotkey="3"
             active={tool === 'mountain'}
             glyph={<GlyphGreen active={tool === 'mountain'} />}
-            title="绿地刷"
+            title="绿地刷 · 3"
             onClick={() => onToolChange('mountain')}
           />
           <Tile
             label="橡皮"
+            hotkey="4"
             active={tool === 'eraser'}
             glyph={<GlyphEraser active={tool === 'eraser'} />}
-            title="按类型擦除"
+            title="按类型擦除 · 4"
             onClick={() => onToolChange('eraser')}
           />
           <Tile
             label="河道线"
+            hotkey="5"
             active={tool === 'river'}
             glyph={<GlyphRiverLine active={tool === 'river'} />}
-            title="河道中心线"
+            title="河道中心线 · 5"
             onClick={() => onToolChange('river')}
           />
         </div>
@@ -300,9 +307,11 @@ export function Toolbar({
           <div className="tb-options">
             {tool === 'eraser' && (
               <>
-                <p className="option-label">擦除目标</p>
+                <p className="option-label">
+                  擦除目标 <span className="option-hint">1–5</span>
+                </p>
                 <div className="chip-row" role="radiogroup" aria-label="擦除目标">
-                  {ERASER_TARGETS.map((t) => (
+                  {ERASER_TARGETS.map((t, i) => (
                     <button
                       key={t.id}
                       type="button"
@@ -310,8 +319,9 @@ export function Toolbar({
                       aria-checked={eraserTarget === t.id}
                       className={eraserTarget === t.id ? 'chip active' : 'chip'}
                       onClick={() => onEraserTargetChange(t.id)}
-                      title={t.hint}
+                      title={`${t.hint} · ${i + 1}`}
                     >
+                      <kbd className="chip-kbd">{i + 1}</kbd>
                       {t.label}
                     </button>
                   ))}
@@ -367,7 +377,11 @@ export function Toolbar({
               role="tab"
               aria-selected={transitOpen === id}
               className={transitOpen === id ? 'tb-subtab active' : 'tb-subtab'}
-              onClick={() => selectTransit(id)}
+              onClick={() => {
+                selectTransit(id);
+                if (id === 'road') onToolChange('road');
+                if (id === 'rail') onToolChange('railway');
+              }}
             >
               {label}
             </button>
@@ -376,52 +390,49 @@ export function Toolbar({
 
         {transitOpen === 'road' && (
           <div className="tb-panel">
-            <div className="tb-tile-grid">
-              <Tile
-                label="道路"
-                active={tool === 'road'}
-                glyph={<GlyphRoad active={tool === 'road'} />}
-                title="绘制道路（可扩容等级）"
-                onClick={() => {
-                  selectTransit('road');
-                  onToolChange('road');
-                }}
-              />
+            <p className="option-label">
+              等级 <span className="option-hint">1–4</span>
+            </p>
+            <div className="preview-chip-row compact">
+              {ROAD_LEVELS.map(([id, style], i) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={
+                    tool === 'road' && roadLevel === id ? 'preview-chip active' : 'preview-chip'
+                  }
+                  onClick={() => {
+                    selectTransit('road');
+                    onRoadLevelChange(id);
+                    onToolChange('road');
+                  }}
+                  title={`${style.label} · ${i + 1}`}
+                >
+                  <GlyphRoadLevel level={id} active={tool === 'road' && roadLevel === id} />
+                  <span className="preview-chip-label">
+                    <kbd className="chip-kbd">{i + 1}</kbd>
+                    {style.label}
+                  </span>
+                </button>
+              ))}
             </div>
-            {tool === 'road' && (
-              <div className="tb-options">
-                <p className="option-label">等级</p>
-                <div className="preview-chip-row">
-                  {ROAD_LEVELS.map(([id, style]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={roadLevel === id ? 'preview-chip active' : 'preview-chip'}
-                      onClick={() => onRoadLevelChange(id)}
-                      title={`${style.label} · 宽约 ${style.width}px`}
-                    >
-                      <GlyphRoadLevel level={id} active={roadLevel === id} />
-                      <span className="preview-chip-label">{style.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <p className="tool-note">预览即画布配色粗细 · 后期可扩容更多类型</p>
-              </div>
-            )}
           </div>
         )}
 
         {transitOpen === 'rail' && (
           <div className="tb-panel">
-            <p className="option-label">线路</p>
+            <p className="option-label">
+              线路 <span className="option-hint">1–4</span>
+            </p>
             <div className="tb-tile-grid">
-              {RAIL_KINDS.map((r) => (
+              {RAIL_KINDS.map((r, i) => (
                 <Tile
                   key={r.id}
                   label={r.label}
+                  hotkey={String(i + 1)}
                   active={tool === 'railway' && railKind === r.id}
                   glyph={<GlyphRail active={tool === 'railway' && railKind === r.id} kind={r.id} />}
-                  title={r.hint}
+                  title={`${r.hint} · ${i + 1}`}
                   onClick={() => {
                     selectTransit('rail');
                     onRailKindChange(r.id);
@@ -482,7 +493,7 @@ export function Toolbar({
         {isPathGuided(tool) && (
           <div className="tb-options">
             <p className="option-label">画法</p>
-            <div className="preview-chip-row">
+            <div className="preview-chip-row compact">
               {PATH_DRAW_MODES.map((m) => (
                 <button
                   key={m.id}

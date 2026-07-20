@@ -38,6 +38,9 @@ import {
   DEFAULT_GRADE,
   DEFAULT_METRO_COLOR,
   DEFAULT_RAIL_KIND,
+  ERASER_TARGETS,
+  RAIL_KINDS,
+  ROAD_STYLES,
   getLayers,
 } from './types';
 import './App.css';
@@ -291,8 +294,11 @@ function App() {
     setLocalOnly(true);
   };
 
-  // H = 拖动，V = 编辑
+  // H = 拖动，V = 编辑；数字键按当前工具切换子类型
   useEffect(() => {
+    const roadLevels = Object.keys(ROAD_STYLES) as RoadLevel[];
+    const terrainTools: Tool[] = ['land', 'ocean', 'mountain', 'eraser', 'river'];
+
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
@@ -302,15 +308,49 @@ function App() {
         e.preventDefault();
         setTool('pan');
         setSelectedFeatureId(null);
+        return;
       }
       if (e.key === 'v' || e.key === 'V') {
         e.preventDefault();
         setTool('select');
+        return;
+      }
+
+      if (e.key >= '1' && e.key <= '9') {
+        const idx = Number(e.key) - 1;
+        if (tool === 'road') {
+          const level = roadLevels[idx];
+          if (!level) return;
+          e.preventDefault();
+          setRoadLevel(level);
+          return;
+        }
+        if (tool === 'railway') {
+          const kind = RAIL_KINDS[idx];
+          if (!kind) return;
+          e.preventDefault();
+          setRailKind(kind.id);
+          return;
+        }
+        if (tool === 'eraser') {
+          const target = ERASER_TARGETS[idx];
+          if (!target) return;
+          e.preventDefault();
+          setEraserTarget(target.id);
+          return;
+        }
+        if (terrainTools.includes(tool)) {
+          const next = terrainTools[idx];
+          if (!next) return;
+          e.preventDefault();
+          setTool(next);
+          if (next !== 'select') setSelectedFeatureId(null);
+        }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tool]);
 
   if (authLoading || boot === 'booting') {
     return (
