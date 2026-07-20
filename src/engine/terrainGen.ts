@@ -8,6 +8,7 @@ import {
   preferredTerrainCellSizeM,
   type TerrainGrid,
 } from './terrain';
+import { buildTerrainRings, fillTerrainRings } from './terrainDraw';
 
 /** 海洋占比（接边大水体） */
 export const DEFAULT_OCEAN_RATIO = 0.26;
@@ -121,7 +122,7 @@ export function generateLandscape(
     for (let i = 0; i < n; i++) {
       if (field[i] <= threshold) cells[i] = TERRAIN_WATER;
     }
-    smoothWaterLand(cells, cols, rows, 2);
+    smoothWaterLand(cells, cols, rows, 4);
     // 只保留接边的海，内陆候选留给湖泊逻辑
     keepBorderWaterOnly(cells, cols, rows);
     pruneSmallSeas(cells, cols, rows);
@@ -142,6 +143,7 @@ export function generateLandscape(
   if (params.oceanEnabled || params.lakeEnabled) {
     cleanupIslands(cells, cols, rows);
     despeckle(cells, cols, rows);
+    smoothWaterLand(cells, cols, rows, 2);
   }
 
   if (params.riverEnabled) {
@@ -158,6 +160,7 @@ export function generateLandscape(
 
   if (params.greenEnabled) {
     paintGreens(cells, cols, rows, field, seed, clampGreenDensity(params.greenDensity));
+    smoothGreenLand(cells, cols, rows, 3);
     let green = 0;
     for (let i = 0; i < n; i++) if (cells[i] === TERRAIN_GREEN) green++;
     greenPct = green / n;
@@ -298,6 +301,33 @@ function smoothWaterLand(
         }
         if (water >= 5) next[i] = TERRAIN_WATER;
         else if (water <= 3) next[i] = TERRAIN_LAND;
+      }
+    }
+    cells.set(next);
+  }
+}
+
+/** 绿地边界多数票平滑（不侵染水域） */
+function smoothGreenLand(
+  cells: Uint8Array,
+  cols: number,
+  rows: number,
+  passes: number,
+): void {
+  for (let p = 0; p < passes; p++) {
+    const next = new Uint8Array(cells);
+    for (let y = 1; y < rows - 1; y++) {
+      for (let x = 1; x < cols - 1; x++) {
+        const i = y * cols + x;
+        if (cells[i] === TERRAIN_WATER) continue;
+        let green = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (cells[(y + dy) * cols + (x + dx)] === TERRAIN_GREEN) green++;
+          }
+        }
+        if (green >= 5) next[i] = TERRAIN_GREEN;
+        else if (green <= 3 && cells[i] === TERRAIN_GREEN) next[i] = TERRAIN_LAND;
       }
     }
     cells.set(next);
@@ -1074,7 +1104,7 @@ function downsample(field: Float32Array, maxN: number): Float32Array {
   return out.subarray(0, j);
 }
 
-/** 预览：陆地 / 水域 / 绿地（平滑缩放） */
+/** 预览：陆地 / 水域 / 绿地（矢量轮廓，避免模糊放大） */
 export function paintTerrainPreview(
   canvas: HTMLCanvasElement,
   grid: TerrainGrid,
@@ -1086,40 +1116,19 @@ export function paintTerrainPreview(
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  const { cols, rows, cells } = grid;
   const w = canvas.width;
   const h = canvas.height;
+  const worldW = grid.cols * grid.cellSizeM;
+  const worldH = grid.rows * grid.cellSizeM;
+  const sx = w / worldW;
+  const sy = h / worldH;
 
-  const off = document.createElement('canvas');
-  off.width = cols;
-  off.height = rows;
-  const octx = off.getContext('2d');
-  if (!octx) return;
-  const img = octx.createImageData(cols, rows);
-  const data = img.data;
-
-  const parse = (hex: string) => {
-    const n = parseInt(hex.slice(1), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255] as const;
-  };
-  const land = parse(landColor);
-  const water = parse(waterColor);
-  const green = parse(greenColor);
-
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i];
-    const [cr, cg, cb] =
-      cell === TERRAIN_WATER ? water : cell === TERRAIN_GREEN ? green : land;
-    const o = i * 4;
-    data[o] = cr;
-    data[o + 1] = cg;
-    data[o + 2] = cb;
-    data[o + 3] = 255;
-  }
-  octx.putImageData(img, 0, 0);
-
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
   ctx.clearRect(0, 0, w, h);
-  ctx.drawImage(off, 0, 0, w, h);
+  ctx.fillStyle = landColor;
+  ctx.fillRect(0, 0, w, h);
+
+  const rings = buildTerrainRings(grid);
+  const mapPt = (p: Point) => ({ x: p.x * sx, y: p.y * sy });
+  fillTerrainRings(ctx, rings.water, mapPt, waterColor, '#7eb8c9');
+  fillTerrainRings(ctx, rings.green, mapPt, greenColor, '#8fbc7a');
 }

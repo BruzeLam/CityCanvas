@@ -16,13 +16,14 @@ export type TerrainGrid = {
   cells: Uint8Array;
 };
 
-/** 按地图尺寸选栅格粒度：约 1600 格边长，5km 图约 3–4m/格 */
+/** 按地图尺寸选栅格粒度：约 2200 格边长，5km 图约 2–3m/格（矢量描边后更细腻） */
 export function preferredTerrainCellSizeM(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
 ): number {
   const maxDim = Math.max(settings.widthM, settings.heightM);
-  const target = 1600;
+  const target = 2200;
   const raw = maxDim / target;
+  if (raw <= 2) return 2;
   if (raw <= 3) return 3;
   if (raw <= 4) return 4;
   if (raw <= 5) return 5;
@@ -159,7 +160,7 @@ export function stampBrush(
 
       const n1 = Math.sin(ang * 3.1 + hash2(col, row) * Math.PI * 2);
       const n2 = Math.sin(ang * 7.4 + hash2(col + 17, row - 9) * Math.PI * 2);
-      const jagged = (n1 * 0.65 + n2 * 0.35) * t * r * 0.18;
+      const jagged = (n1 * 0.65 + n2 * 0.35) * t * r * 0.08;
 
       if (dist <= r + jagged) {
         cells[row * cols + col] = value;

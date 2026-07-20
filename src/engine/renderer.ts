@@ -17,10 +17,9 @@ import type { GuideSnap, Segment } from './geometry';
 import { collectJoinedCaps, collectJunctionNodes } from './junctions';
 import {
   ensureTerrain,
-  TERRAIN_GREEN,
-  TERRAIN_WATER,
   type TerrainGrid,
 } from './terrain';
+import { buildTerrainRings, fillTerrainRings, type TerrainRings } from './terrainDraw';
 
 function sortByGradeAsc(a: MapFeature, b: MapFeature): number {
   return renderGrade(a) - renderGrade(b);
@@ -154,31 +153,6 @@ function tracePath(ctx: CanvasRenderingContext2D, points: Point[], closed: boole
   if (closed) ctx.closePath();
 }
 
-function parseCssColor(css: string): [number, number, number, number] {
-  if (css.startsWith('#') && (css.length === 7 || css.length === 4)) {
-    const hex =
-      css.length === 4
-        ? `#${css[1]}${css[1]}${css[2]}${css[2]}${css[3]}${css[3]}`
-        : css;
-    return [
-      parseInt(hex.slice(1, 3), 16),
-      parseInt(hex.slice(3, 5), 16),
-      parseInt(hex.slice(5, 7), 16),
-      255,
-    ];
-  }
-  const m = css.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/);
-  if (m) {
-    return [
-      Number(m[1]),
-      Number(m[2]),
-      Number(m[3]),
-      m[4] != null ? Math.round(Number(m[4]) * 255) : 255,
-    ];
-  }
-  return [242, 239, 233, 255];
-}
-
 function drawTerrainGrid(
   ctx: CanvasRenderingContext2D,
   grid: TerrainGrid,
@@ -186,77 +160,44 @@ function drawTerrainGrid(
   viewport: Viewport,
   palette: StylePalette,
 ) {
-  const { cols, rows, cellSizeM } = grid;
-  const bitmap = getTerrainBitmap(grid, palette);
-
-  const tl = toScreen({ x: 0, y: 0 }, viewport);
-  const br = toScreen(
-    { x: cols * cellSizeM, y: rows * cellSizeM },
-    viewport,
-  );
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(bitmap, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  const rings = getTerrainRings(grid);
+  const mapPt = (p: { x: number; y: number }) => toScreen(p, viewport);
+  // 矢量实心填充：放大不发糊，Chaikin 后岸线更顺
+  fillTerrainRings(ctx, rings.water, mapPt, palette.water, palette.waterStroke);
+  fillTerrainRings(ctx, rings.green, mapPt, palette.mountain, palette.mountainStroke);
 }
 
-/** 地形位图缓存：平移缩放复用，仅在 cells/配色变化时重建 */
-type TerrainBitmapCache = {
+/** 地形轮廓缓存：刷子改 cells 引用后失效 */
+type TerrainRingsCache = {
   cells: Uint8Array;
   cols: number;
   rows: number;
-  waterKey: string;
-  greenKey: string;
-  canvas: HTMLCanvasElement;
+  cellSizeM: number;
+  rings: TerrainRings;
 };
 
-let terrainBitmapCache: TerrainBitmapCache | null = null;
+let terrainRingsCache: TerrainRingsCache | null = null;
 
-function getTerrainBitmap(grid: TerrainGrid, palette: StylePalette): HTMLCanvasElement {
-  const { cols, rows, cells } = grid;
-  const waterKey = palette.water;
-  const greenKey = palette.mountain;
-  const hit = terrainBitmapCache;
+function getTerrainRings(grid: TerrainGrid): TerrainRings {
+  const hit = terrainRingsCache;
   if (
     hit &&
-    hit.cells === cells &&
-    hit.cols === cols &&
-    hit.rows === rows &&
-    hit.waterKey === waterKey &&
-    hit.greenKey === greenKey
+    hit.cells === grid.cells &&
+    hit.cols === grid.cols &&
+    hit.rows === grid.rows &&
+    hit.cellSizeM === grid.cellSizeM
   ) {
-    return hit.canvas;
+    return hit.rings;
   }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = cols;
-  canvas.height = rows;
-  const gctx = canvas.getContext('2d')!;
-  const img = gctx.createImageData(cols, rows);
-  const data = img.data;
-  const water = parseCssColor(waterKey);
-  const green = parseCssColor(greenKey);
-
-  for (let i = 0; i < cells.length; i++) {
-    const v = cells[i];
-    const o = i * 4;
-    if (v === TERRAIN_WATER) {
-      data[o] = water[0];
-      data[o + 1] = water[1];
-      data[o + 2] = water[2];
-      data[o + 3] = water[3];
-    } else if (v === TERRAIN_GREEN) {
-      data[o] = green[0];
-      data[o + 1] = green[1];
-      data[o + 2] = green[2];
-      data[o + 3] = green[3];
-    } else {
-      data[o + 3] = 0; // 陆地透出底图米白
-    }
-  }
-  gctx.putImageData(img, 0, 0);
-
-  terrainBitmapCache = { cells, cols, rows, waterKey, greenKey, canvas };
-  return canvas;
+  const rings = buildTerrainRings(grid);
+  terrainRingsCache = {
+    cells: grid.cells,
+    cols: grid.cols,
+    rows: grid.rows,
+    cellSizeM: grid.cellSizeM,
+    rings,
+  };
+  return rings;
 }
 
 function drawMapBase(
