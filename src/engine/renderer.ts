@@ -34,6 +34,7 @@ import {
   collectJunctionNodes,
   collectJoinMouths,
   collectCasingTrimM,
+  ENDPOINT_MERGE_M,
   segmentIntersection,
   type JoinMouth,
 } from './junctions';
@@ -290,84 +291,76 @@ function buildRampDrawPieces(
   return pieces.length ? pieces : [{ feature, grade: (g0 + g1) / 2, order }];
 }
 
-function drawJunctionMouths(
+/**
+ * 汇入渐变：盖住宿主边线 barrier，不做圆环节点。
+ * 沿汇入方向画一段 round 胶囊（仅路面色），tip→host 线性渐变。
+ */
+function drawJoinBlends(
   ctx: CanvasRenderingContext2D,
   mouths: JoinMouth[],
   band: number,
   viewport: Viewport,
   style: MapStyle,
 ) {
-  const casingExtra =
-    style === 'sketch' ? Math.max(1.5, 1.8 * viewport.zoom) : 2 * viewport.zoom;
   const fillScale = style === 'sketch' ? 0.72 : 1;
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
     const p = toScreen(m.point, viewport);
-    const halfW = (m.hostWidth * 0.5) * viewport.zoom;
-    const fillR = Math.max(2, halfW * fillScale);
-    const casingR = Math.max(fillR + 1.5, halfW + casingExtra + 0.5);
+    const halfHost = Math.max(2, (m.hostWidth * 0.5) * viewport.zoom);
+    const tipW = Math.max(2, m.tipWidth * viewport.zoom * fillScale);
+    const hostW = Math.max(tipW, m.hostWidth * viewport.zoom * fillScale);
 
     let hostFill = style === 'blueprint' ? '#e8f4ff' : m.hostColor;
     let tipFill = style === 'blueprint' ? '#e8f4ff' : m.tipColor;
-    let hostCasing =
-      style === 'sketch' ? sketchRoadInk(m.hostCasing) : m.hostCasing;
-    let tipCasing =
-      style === 'sketch' ? sketchRoadInk(m.tipCasing) : m.tipCasing;
     if (style === 'sketch') {
       hostFill = sketchRoadFill(m.hostColor);
       tipFill = sketchRoadFill(m.tipColor);
     }
 
+    // approach：路内 → tip；inward：tip → 路内（汇入臂）
+    const ix = -m.approachX;
+    const iy = -m.approachY;
+    // 从汇入臂内侧，穿过中心，略伸进宿主，盖掉宿主边线
+    const a = {
+      x: p.x + ix * halfHost * 1.05,
+      y: p.y + iy * halfHost * 1.05,
+    };
+    const b = {
+      x: p.x - ix * halfHost * 0.55,
+      y: p.y - iy * halfHost * 0.55,
+    };
+
     const useBlend =
       style !== 'blueprint' &&
-      (m.tipColor !== m.hostColor ||
-        m.tipCasing !== m.hostCasing ||
-        m.tipWidth + 0.05 < m.hostWidth);
+      (m.tipColor !== m.hostColor || m.tipWidth + 0.05 < m.hostWidth);
 
-    // 路内方向（与 approach 相反）：渐变从汇入路色 → 宿主路色
-    const inwardX = -m.approachX;
-    const inwardY = -m.approachY;
-
-    const fillPaint = (): string | CanvasGradient => {
-      if (!useBlend) return hostFill;
-      const g = ctx.createLinearGradient(
-        p.x + inwardX * fillR,
-        p.y + inwardY * fillR,
-        p.x - inwardX * fillR * 0.15,
-        p.y - inwardY * fillR * 0.15,
-      );
-      g.addColorStop(0, tipFill);
-      g.addColorStop(0.42, lerpColor(tipFill, hostFill, 0.55));
-      g.addColorStop(1, hostFill);
-      return g;
-    };
-
-    const casingPaint = (): string | CanvasGradient => {
-      if (!useBlend) return hostCasing;
-      const g = ctx.createLinearGradient(
-        p.x + inwardX * casingR,
-        p.y + inwardY * casingR,
-        p.x - inwardX * casingR * 0.12,
-        p.y - inwardY * casingR * 0.12,
-      );
-      g.addColorStop(0, tipCasing);
-      g.addColorStop(0.38, lerpColor(tipCasing, hostCasing, 0.5));
-      g.addColorStop(1, hostCasing);
-      return g;
-    };
-
+    // 先用宿主路面色抹掉边线（无路缘描边）
     ctx.beginPath();
-    ctx.arc(p.x, p.y, casingR, 0, Math.PI * 2);
-    ctx.fillStyle = casingPaint();
-    ctx.fill();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = hostFill;
+    ctx.lineWidth = hostW + 1.2 * viewport.zoom;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    if (!useBlend) continue;
+
+    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    g.addColorStop(0, tipFill);
+    g.addColorStop(0.45, lerpColor(tipFill, hostFill, 0.5));
+    g.addColorStop(1, hostFill);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, fillR, 0, Math.PI * 2);
-    ctx.fillStyle = fillPaint();
-    ctx.fill();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = hostW;
+    ctx.lineCap = 'round';
+    ctx.stroke();
   }
 }
 
-/** 同层：tip stub → 匝道 → 主路；路缘在汇入处截断开口；路面后补宿主色圆盘 */
+/** 同层：tip stub → 匝道 → 主路；路缘截断开口；汇入处软渐变（无圆环） */
 function drawRoadsMerged(
   ctx: CanvasRenderingContext2D,
   roads: MapFeature[],
@@ -495,8 +488,8 @@ function drawRoadsMerged(
         piece.subPoints,
       );
     }
-    // 宿主渐变圆盘：撕开汇入口，异级时汇入色→宿主色过渡
-    drawJunctionMouths(ctx, mouths, band, viewport, style);
+    // 汇入渐变胶囊：抹掉宿主边线，异级 tip→host 过渡（无圆环节点）
+    drawJoinBlends(ctx, mouths, band, viewport, style);
     i = j;
   }
 
@@ -1183,8 +1176,17 @@ function drawJunctionNodes(
   viewport: Viewport,
   style: MapStyle,
 ) {
+  const mouths = collectJoinMouths(features.filter((f) => f.kind === 'road'));
+  const hideNearMouth = (pt: { x: number; y: number }) =>
+    mouths.some(
+      (m) =>
+        Math.hypot(m.point.x - pt.x, m.point.y - pt.y) <= ENDPOINT_MERGE_M,
+    );
+
   const nodes = collectJunctionNodes(features);
   for (const node of nodes) {
+    // 匝道/支路汇入点不当「路口节点」画出来
+    if (hideNearMouth(node.point)) continue;
     const p = toScreen(node.point, viewport);
     const r = Math.max(1.4, 1.6 * viewport.zoom);
     ctx.beginPath();
