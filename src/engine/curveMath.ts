@@ -62,17 +62,17 @@ export function formatRadius(m: number): string {
   return `R ${Math.round(m)} m`;
 }
 
-/** 弧折线默认弦长上限（米）——城市尺度下足够圆滑，避免上百顶点 */
-export const DEFAULT_ARC_SEGMENT_M = 14;
+/** 弧折线默认弦长上限（米） */
+export const DEFAULT_ARC_SEGMENT_M = 10;
 
-/** 弧采样最大角步（弧度）≈ 12° */
-const ARC_MAX_ANGLE_RAD = (12 * Math.PI) / 180;
-/** 弧采样最小角步（弧度）≈ 5°，小半径仍保基本圆度 */
-const ARC_MIN_ANGLE_RAD = (5 * Math.PI) / 180;
-const ARC_MIN_SEGMENTS = 4;
-const ARC_MAX_SEGMENTS = 28;
-/** 目标弦高误差（米）：决定角步，与路宽同量级即可 */
-const ARC_SAGITTA_ERR_M = 0.45;
+/** 弧采样最大角步（弧度）≈ 8° —— 更圆，减少「折线拼接」感 */
+const ARC_MAX_ANGLE_RAD = (8 * Math.PI) / 180;
+/** 弧采样最小角步（弧度）≈ 4° */
+const ARC_MIN_ANGLE_RAD = (4 * Math.PI) / 180;
+const ARC_MIN_SEGMENTS = 6;
+const ARC_MAX_SEGMENTS = 40;
+/** 目标弦高误差（米） */
+const ARC_SAGITTA_ERR_M = 0.28;
 
 /**
  * 圆弧折线化：按弦高误差 + 弦长上限自适应段数，硬封顶避免运算爆炸。

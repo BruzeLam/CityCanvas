@@ -90,18 +90,24 @@ function drawRoadsMerged(
   const pieces: RoadDrawPiece[] = [];
 
   for (const feature of roads) {
-    // 跨层/匝道/异级：按段拆开。匝道交汇处用插值标高排序，高的压低的，不织平面路口
-    const split =
-      feature.roadLevel === 'ramp' ||
-      isRampFeature(feature) ||
-      isLevelBlendRoad(feature);
-    if (split && feature.points.length >= 2) {
+    // 仅跨层匝道按段拆开做 z-order；同层渐变/普通匝道整段连续描边，避免「拼接断点」
+    if (isRampFeature(feature) && feature.points.length >= 2) {
       const n = feature.points.length - 1;
       for (let i = 0; i < n; i++) {
         const t = (i + 0.5) / n;
         pieces.push({
           feature,
           grade: gradeAtPathT(feature, t),
+          segIndex: i,
+        });
+      }
+    } else if (isLevelBlendRoad(feature) && feature.points.length >= 2) {
+      // 同层异色：分段变色，但用 round 重叠接缝（见 drawRoad*）
+      const n = feature.points.length - 1;
+      for (let i = 0; i < n; i++) {
+        pieces.push({
+          feature,
+          grade: featureGrade(feature),
           segIndex: i,
         });
       }
@@ -114,9 +120,13 @@ function drawRoadsMerged(
     }
   }
 
-  // 按标高分层绘制：同层先全部边线再全部路面（路口并块）；高层整层压在低层之上（边线在上）
+  // 同层：匝道先画（压在主路下 → 挂接处呈同级汇入）；再按道路等级；高层整层在上
   pieces.sort((a, b) => {
     if (a.grade !== b.grade) return a.grade - b.grade;
+    const rampFirst = (f: typeof a.feature) => (f.roadLevel === 'ramp' ? 0 : 1);
+    const ra0 = rampFirst(a.feature);
+    const rb0 = rampFirst(b.feature);
+    if (ra0 !== rb0) return ra0 - rb0;
     const classOf = (f: typeof a.feature) => {
       if (f.roadLevel === 'ramp') {
         return rampSolidClass(f) ?? 'local';
@@ -637,11 +647,12 @@ function drawRoadCasing(
   if (segIndex != null) {
     const n = points.length - 1;
     const t = (segIndex + 0.5) / n;
-    const { a, b } = extendedSegEnds(points, segIndex, 1.25);
+    // 圆帽 + 半宽重叠，消除分段拼接缝
+    const { a, b } = extendedSegEnds(points, segIndex, Math.max(1.5, casingW * 0.55));
     ctx.strokeStyle = blend ? lerpColor(casing0, casing1, t) : casingMid;
     ctx.lineWidth = casingW;
     ctx.lineJoin = 'round';
-    ctx.lineCap = 'butt';
+    ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -713,7 +724,7 @@ function drawRoadFill(
   if (segIndex != null) {
     const n = points.length - 1;
     const t = (segIndex + 0.5) / n;
-    const { a, b } = extendedSegEnds(points, segIndex, 1.25);
+    const { a, b } = extendedSegEnds(points, segIndex, Math.max(1.5, baseFillW * 0.55));
     ctx.strokeStyle =
       style === 'blueprint'
         ? '#e8f4ff'
@@ -722,7 +733,7 @@ function drawRoadFill(
           : midFill;
     ctx.lineWidth = baseFillW;
     ctx.lineJoin = 'round';
-    ctx.lineCap = 'butt';
+    ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -935,27 +946,50 @@ function drawScaleBar(
   palette: StylePalette,
 ) {
   const { scale } = project.settings;
-  const candidates = [100, 200, 500, 1000, 2000, 5000];
-  let barM = 500;
-  for (const c of candidates) {
-    if (c * viewport.zoom >= 60 && c * viewport.zoom <= 180) {
-      barM = c;
-      break;
+  // 高德式 1–2–5 序列：按目标像素宽度选最接近的「好看」长度
+  const targetPx = 110;
+  const rawM = targetPx / Math.max(viewport.zoom, 1e-6);
+  const exp = Math.floor(Math.log10(Math.max(rawM, 1e-6)));
+  const base = Math.pow(10, exp);
+  const nice = [1, 2, 5, 10];
+  let best = nice[0] * base;
+  let bestDiff = Infinity;
+  for (const e of [exp - 1, exp, exp + 1]) {
+    const b = Math.pow(10, e);
+    for (const n of nice) {
+      const cand = n * b;
+      if (cand < 1) continue;
+      const px = cand * viewport.zoom;
+      // 允许 48–200 px，优先贴近 targetPx
+      if (px < 48 || px > 200) continue;
+      const diff = Math.abs(px - targetPx);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = cand;
+      }
     }
   }
+  // 极端缩放兜底
+  if (bestDiff === Infinity) {
+    best = Math.max(1, Math.round(rawM));
+  }
 
-  const barPx = barM * viewport.zoom;
+  const barM = best;
+  const barPx = Math.max(2, barM * viewport.zoom);
   const x = 16;
   const y = canvasH - 28;
 
   ctx.fillStyle = palette.scaleBar;
-  ctx.fillRect(x, y, barPx, 4);
-  ctx.fillRect(x, y - 4, 2, 12);
-  ctx.fillRect(x + barPx - 2, y - 4, 2, 12);
+  ctx.fillRect(x, y, barPx, 3);
+  ctx.fillRect(x, y - 4, 2, 11);
+  ctx.fillRect(x + barPx - 2, y - 4, 2, 11);
 
   ctx.font = '11px system-ui, sans-serif';
   ctx.fillStyle = palette.scaleText;
-  const label = barM >= 1000 ? `${barM / 1000} km` : `${barM} m`;
+  let label: string;
+  if (barM >= 1000) label = `${+(barM / 1000).toPrecision(3)} km`;
+  else if (barM >= 1) label = `${Math.round(barM)} m`;
+  else label = `${Math.round(barM * 100)} cm`;
   ctx.fillText(`${label} · 1:${scale.toLocaleString()}`, x, y - 8);
 }
 

@@ -7,7 +7,7 @@ import {
   isRampFeature,
   normalizeRoadClass,
 } from '../types';
-import { simplifyPolylineRdp } from './curveMath';
+import { simplifyPolylineRdp, curveFromBestTangent } from './curveMath';
 import { closestOnSegment, dist } from './geometry';
 
 const EPS = 1e-6;
@@ -16,9 +16,11 @@ export const ENDPOINT_MERGE_M = 6;
 const JUNCTION_SNAP_M = 10;
 /** 匝道端点挂接到目标路（含中段）的搜索半径 */
 export const RAMP_ATTACH_M = 22;
-/** 超过此顶点数的折线在重织时做 RDP 简化（保留路口） */
-const DENSE_PATH_SIMPLIFY_AT = 40;
-const DENSE_PATH_SIMPLIFY_EPS_M = 0.7;
+/** 超过此顶点数的折线在重织时做 RDP 简化（保留路口）；匝道更保守 */
+const DENSE_PATH_SIMPLIFY_AT = 48;
+const DENSE_PATH_SIMPLIFY_EPS_M = 0.35;
+const DENSE_RAMP_SIMPLIFY_AT = 64;
+const DENSE_RAMP_SIMPLIFY_EPS_M = 0.2;
 
 type SegHit = {
   featureId: string;
@@ -469,7 +471,7 @@ export function tryMergeHeadToTail(
     without,
     draftIsRamp ? featureGrade(best.host) : grade,
   );
-  const merged: MapFeature = {
+  let merged: MapFeature = {
     ...best.host,
     points: simplified,
     grade: best.startG,
@@ -477,11 +479,36 @@ export function tryMergeHeadToTail(
   };
 
   if (draftIsRamp) {
-    const withMerged = [...without, merged];
-    return refreshRampRoadClasses(withMerged, merged.id);
+    merged = refitRampAsSingleArc(merged);
+    // 挂到主路端点（同级汇入）并刷新配色
+    return attachCrossGradeTips(without, merged);
   }
 
   return weaveSameGradeCrossings(without, merged);
+}
+
+/**
+ * 分段弯道拉通后，若整体近似单圆弧，重拟合为连续弧，去掉拼接折角。
+ */
+function refitRampAsSingleArc(ramp: MapFeature): MapFeature {
+  if (ramp.points.length < 5) return ramp;
+  const start = ramp.points[0];
+  const end = ramp.points[ramp.points.length - 1];
+  const h0 = Math.atan2(
+    ramp.points[1].y - start.y,
+    ramp.points[1].x - start.x,
+  );
+  const curve = curveFromBestTangent(start, h0, end);
+  if (!curve || !Number.isFinite(curve.radius) || curve.points.length < 3) {
+    return ramp;
+  }
+  // 与原折线中点偏差过大则保留原形（可能是故意的 S 弯）
+  const midOld = ramp.points[Math.floor(ramp.points.length / 2)];
+  const midNew = curve.points[Math.floor(curve.points.length / 2)];
+  if (dist(midOld, midNew) > Math.max(18, curve.radius * 0.12)) {
+    return ramp;
+  }
+  return { ...ramp, points: curve.points };
 }
 
 /**
@@ -779,18 +806,22 @@ export function simplifyDensePath(
   feature: MapFeature,
   features: MapFeature[],
 ): MapFeature {
-  if (!isPathKind(feature) || feature.points.length < DENSE_PATH_SIMPLIFY_AT) {
+  const isRamp =
+    feature.kind === 'road' &&
+    (feature.roadLevel === 'ramp' || isRampFeature(feature));
+  const threshold = isRamp ? DENSE_RAMP_SIMPLIFY_AT : DENSE_PATH_SIMPLIFY_AT;
+  const eps = isRamp ? DENSE_RAMP_SIMPLIFY_EPS_M : DENSE_PATH_SIMPLIFY_EPS_M;
+  if (!isPathKind(feature) || feature.points.length < threshold) {
     return feature;
   }
   const grade = featureGrade(feature);
   const keep = new Set<number>([0, feature.points.length - 1]);
-  const checkAttach = feature.roadLevel === 'ramp' || isRampFeature(feature);
   for (let i = 1; i < feature.points.length - 1; i++) {
     if (otherFeatureTouchesPoint(features, feature.id, feature.points[i], grade)) {
       keep.add(i);
       continue;
     }
-    if (!checkAttach) continue;
+    if (!isRamp) continue;
     for (const f of features) {
       if (f.id === feature.id || !isPathKind(f)) continue;
       for (let s = 0; s < f.points.length - 1; s++) {
@@ -806,11 +837,7 @@ export function simplifyDensePath(
       if (keep.has(i)) break;
     }
   }
-  const points = simplifyPolylineRdp(
-    feature.points,
-    DENSE_PATH_SIMPLIFY_EPS_M,
-    keep,
-  );
+  const points = simplifyPolylineRdp(feature.points, eps, keep);
   return points.length >= 2 ? { ...feature, points } : feature;
 }
 
