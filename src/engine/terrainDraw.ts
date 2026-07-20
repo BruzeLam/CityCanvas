@@ -2,6 +2,7 @@ import type { Point } from '../types';
 import {
   TERRAIN_GREEN,
   TERRAIN_WATER,
+  type TerrainCell,
   type TerrainGrid,
 } from './terrain';
 
@@ -14,11 +15,13 @@ type TerrainBitmapCache = {
   cellSizeM: number;
   waterKey: string;
   greenKey: string;
-  quality: TerrainPaintQuality;
   canvas: HTMLCanvasElement;
 };
 
 let terrainBitmapCache: TerrainBitmapCache | null = null;
+
+/** 烘焙位图最长边：够细、又不会拖垮一次烘焙 */
+const BAKE_MAX_EDGE = 1800;
 
 function parseCssColor(css: string): [number, number, number, number] {
   if (css.startsWith('#') && (css.length === 7 || css.length === 4)) {
@@ -48,9 +51,8 @@ function parseCssColor(css: string): [number, number, number, number] {
 }
 
 /**
- * 中等栅格也能看起来顺：对 0/1 掩膜做双线性采样再硬阈值，
- * 岸线会沿格心对角线切开（比最近邻楼梯顺，又不会整图毛玻璃）。
- * draft=格点原样（刷子拖动时快）；final=2× 超采样缓存。
+ * draft：格点原样（刷子拖动快）
+ * final：提取轮廓 → Chaikin → 烘焙到高分辨率位图（只算一次，平移只 drawImage）
  */
 export function getTerrainBitmap(
   grid: TerrainGrid,
@@ -58,7 +60,6 @@ export function getTerrainBitmap(
   greenCss: string,
   quality: TerrainPaintQuality = 'final',
 ): HTMLCanvasElement {
-  // 草稿不走缓存：刷子原地改 cells，引用不变也会变脏
   if (quality === 'draft') {
     return buildNearestBitmap(grid, waterCss, greenCss);
   }
@@ -72,13 +73,12 @@ export function getTerrainBitmap(
     hit.rows === rows &&
     hit.cellSizeM === cellSizeM &&
     hit.waterKey === waterCss &&
-    hit.greenKey === greenCss &&
-    hit.quality === 'final'
+    hit.greenKey === greenCss
   ) {
     return hit.canvas;
   }
 
-  const canvas = buildSmoothBitmap(grid, waterCss, greenCss);
+  const canvas = buildContourBakedBitmap(grid, waterCss, greenCss);
   terrainBitmapCache = {
     cells,
     cols,
@@ -86,7 +86,6 @@ export function getTerrainBitmap(
     cellSizeM,
     waterKey: waterCss,
     greenKey: greenCss,
-    quality: 'final',
     canvas,
   };
   return canvas;
@@ -132,79 +131,210 @@ function buildNearestBitmap(
   return canvas;
 }
 
-/** 输出边长上限，避免超采样位图过大 */
-const SMOOTH_MAX_EDGE = 1280;
+function bakeSize(cols: number, rows: number): { outW: number; outH: number; pxPerCell: number } {
+  const maxSide = Math.max(cols, rows);
+  // 每格至少 2.5 屏像素，上限 BAKE_MAX_EDGE
+  const outEdge = Math.min(BAKE_MAX_EDGE, Math.max(960, Math.round(maxSide * 2.75)));
+  const outW = Math.max(1, Math.round((outEdge * cols) / maxSide));
+  const outH = Math.max(1, Math.round((outEdge * rows) / maxSide));
+  return { outW, outH, pxPerCell: outW / cols };
+}
 
-function buildSmoothBitmap(
+/** 轮廓平滑后矢量填充到高清位图（一次烘焙） */
+function buildContourBakedBitmap(
   grid: TerrainGrid,
   waterCss: string,
   greenCss: string,
 ): HTMLCanvasElement {
-  const { cols, rows, cells } = grid;
-  const maxSide = Math.max(cols, rows);
-  const outEdge = Math.min(SMOOTH_MAX_EDGE, Math.max(640, Math.round(maxSide * 2)));
-  const outW = Math.max(1, Math.round((outEdge * cols) / maxSide));
-  const outH = Math.max(1, Math.round((outEdge * rows) / maxSide));
-
+  const { cols, rows } = grid;
+  const { outW, outH, pxPerCell } = bakeSize(cols, rows);
   const canvas = document.createElement('canvas');
   canvas.width = outW;
   canvas.height = outH;
   const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(outW, outH);
-  const data = img.data;
-  const water = parseCssColor(waterCss);
-  const green = parseCssColor(greenCss);
+  ctx.clearRect(0, 0, outW, outH);
 
-  const maskAt = (target: number, gx: number, gy: number): number => {
-    const x = gx - 0.5;
-    const y = gy - 0.5;
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = x - x0;
-    const ty = y - y0;
-    const v = (ix: number, iy: number) => {
-      if (ix < 0 || iy < 0 || ix >= cols || iy >= rows) return 0;
-      return cells[iy * cols + ix] === target ? 1 : 0;
-    };
-    const a = v(x0, y0);
-    const b = v(x0 + 1, y0);
-    const c = v(x0, y0 + 1);
-    const d = v(x0 + 1, y0 + 1);
-    return (
-      a * (1 - tx) * (1 - ty) +
-      b * tx * (1 - ty) +
-      c * (1 - tx) * ty +
-      d * tx * ty
-    );
-  };
+  const waterRings = extractSmoothRings(grid, TERRAIN_WATER);
+  const greenRings = extractSmoothRings(grid, TERRAIN_GREEN);
 
-  for (let py = 0; py < outH; py++) {
-    const gy = ((py + 0.5) / outH) * rows;
-    for (let px = 0; px < outW; px++) {
-      const gx = ((px + 0.5) / outW) * cols;
-      const ow = maskAt(TERRAIN_WATER, gx, gy);
-      const og = maskAt(TERRAIN_GREEN, gx, gy);
-      const o = (py * outW + px) * 4;
-      if (ow >= 0.5) {
-        data[o] = water[0];
-        data[o + 1] = water[1];
-        data[o + 2] = water[2];
-        data[o + 3] = water[3];
-      } else if (og >= 0.5) {
-        data[o] = green[0];
-        data[o + 1] = green[1];
-        data[o + 2] = green[2];
-        data[o + 3] = green[3];
-      } else {
-        data[o + 3] = 0;
-      }
-    }
-  }
-  ctx.putImageData(img, 0, 0);
+  // 只画平滑轮廓，避免底下最近邻楼梯透出来
+  fillRingsOnBake(ctx, greenRings, pxPerCell, greenCss);
+  fillRingsOnBake(ctx, waterRings, pxPerCell, waterCss);
+
   return canvas;
 }
 
-/** 设置页预览 */
+function fillRingsOnBake(
+  ctx: CanvasRenderingContext2D,
+  rings: Point[][],
+  pxPerCell: number,
+  fill: string,
+): void {
+  if (rings.length === 0) return;
+  ctx.beginPath();
+  for (const ring of rings) {
+    if (ring.length < 3) continue;
+    // ring 坐标是「格点角」米制；此处 cellSize 已折进角点整数，用格坐标 * pxPerCell
+    // extract 返回的是世界米；bake 用格角坐标更稳——见 extractSmoothRings
+    const s0 = ring[0]!;
+    ctx.moveTo(s0.x * pxPerCell, s0.y * pxPerCell);
+    for (let i = 1; i < ring.length; i++) {
+      const p = ring[i]!;
+      ctx.lineTo(p.x * pxPerCell, p.y * pxPerCell);
+    }
+    ctx.closePath();
+  }
+  ctx.fillStyle = fill;
+  ctx.fill('evenodd');
+}
+
+/** 返回格点角坐标（非米），方便烘焙 */
+function extractSmoothRings(grid: TerrainGrid, target: TerrainCell): Point[][] {
+  const loops = extractCornerLoops(grid, target);
+  const out: Point[][] = [];
+  for (const loop of loops) {
+    if (loop.length < 4) continue;
+    const pts = loop.map(([cx, cy]) => ({ x: cx, y: cy }));
+    const simplified = simplifyCollinear(pts, 0.35);
+    if (simplified.length < 4) continue;
+    const iters = simplified.length < 20 ? 2 : 3;
+    out.push(chaikinClosed(simplified, iters));
+  }
+  return out;
+}
+
+function extractCornerLoops(
+  grid: TerrainGrid,
+  target: TerrainCell,
+): [number, number][][] {
+  const { cols, rows, cells } = grid;
+  const cols1 = cols + 1;
+
+  const isInside = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= cols || y >= rows) return false;
+    return cells[y * cols + x] === target;
+  };
+
+  const adj = new Map<number, number[]>();
+  const addEdge = (a: number, b: number) => {
+    if (a === b) return;
+    let la = adj.get(a);
+    if (!la) {
+      la = [];
+      adj.set(a, la);
+    }
+    let lb = adj.get(b);
+    if (!lb) {
+      lb = [];
+      adj.set(b, lb);
+    }
+    if (!la.includes(b)) la.push(b);
+    if (!lb.includes(a)) lb.push(a);
+  };
+
+  const id = (cx: number, cy: number) => cy * cols1 + cx;
+
+  for (let y = -1; y < rows; y++) {
+    for (let x = -1; x < cols; x++) {
+      const a = isInside(x, y);
+      const right = isInside(x + 1, y);
+      const down = isInside(x, y + 1);
+      if (a !== right) addEdge(id(x + 1, y), id(x + 1, y + 1));
+      if (a !== down) addEdge(id(x, y + 1), id(x + 1, y + 1));
+    }
+  }
+
+  const used = new Set<string>();
+  const edgeKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+  const loops: [number, number][][] = [];
+
+  for (const [start, neighbors] of adj) {
+    for (const first of neighbors) {
+      const ek0 = edgeKey(start, first);
+      if (used.has(ek0)) continue;
+
+      const loop: [number, number][] = [];
+      let prev = start;
+      let cur = first;
+      used.add(ek0);
+      loop.push([start % cols1, (start / cols1) | 0]);
+
+      let guard = 0;
+      const maxGuard = (cols + 1) * (rows + 1) * 2;
+      while (cur !== start && guard++ < maxGuard) {
+        loop.push([cur % cols1, (cur / cols1) | 0]);
+        const nexts = adj.get(cur);
+        if (!nexts || nexts.length === 0) break;
+        let next = -1;
+        for (const cand of nexts) {
+          if (cand === prev) continue;
+          if (!used.has(edgeKey(cur, cand))) {
+            next = cand;
+            break;
+          }
+        }
+        if (next < 0) {
+          for (const cand of nexts) {
+            if (cand === prev) continue;
+            next = cand;
+            break;
+          }
+        }
+        if (next < 0) break;
+        used.add(edgeKey(cur, next));
+        prev = cur;
+        cur = next;
+      }
+
+      if (loop.length >= 4) loops.push(loop);
+    }
+  }
+
+  return loops;
+}
+
+function simplifyCollinear(points: Point[], eps: number): Point[] {
+  if (points.length < 4) return points;
+  const out: Point[] = [];
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const prev = points[(i - 1 + n) % n]!;
+    const cur = points[i]!;
+    const next = points[(i + 1) % n]!;
+    const ax = cur.x - prev.x;
+    const ay = cur.y - prev.y;
+    const bx = next.x - cur.x;
+    const by = next.y - cur.y;
+    const cross = ax * by - ay * bx;
+    const dot = ax * bx + ay * by;
+    if (Math.abs(cross) <= eps * eps && dot > 0) continue;
+    out.push(cur);
+  }
+  return out.length >= 4 ? out : points;
+}
+
+function chaikinClosed(points: Point[], iters: number): Point[] {
+  let pts = points;
+  for (let k = 0; k < iters; k++) {
+    const next: Point[] = [];
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i]!;
+      const b = pts[(i + 1) % n]!;
+      next.push({
+        x: a.x * 0.75 + b.x * 0.25,
+        y: a.y * 0.75 + b.y * 0.25,
+      });
+      next.push({
+        x: a.x * 0.25 + b.x * 0.75,
+        y: a.y * 0.25 + b.y * 0.75,
+      });
+    }
+    pts = next;
+  }
+  return pts;
+}
+
 export function paintTerrainBitmapToCanvas(
   canvas: HTMLCanvasElement,
   grid: TerrainGrid,
@@ -220,32 +350,8 @@ export function paintTerrainBitmapToCanvas(
   ctx.fillStyle = landColor;
   ctx.fillRect(0, 0, w, h);
   const bmp = getTerrainBitmap(grid, waterColor, greenColor, 'final');
-  ctx.imageSmoothingEnabled = w < bmp.width || h < bmp.height;
+  // 预览多为缩小，开平滑；放大仍用邻近以免糊
+  ctx.imageSmoothingEnabled = w <= bmp.width && h <= bmp.height;
   if (ctx.imageSmoothingEnabled) ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bmp, 0, 0, w, h);
-}
-
-/** @deprecated 保留空壳避免旧引用；请用 getTerrainBitmap */
-export type TerrainRings = {
-  cells: Uint8Array;
-  cols: number;
-  rows: number;
-  cellSizeM: number;
-  water: Point[][];
-  green: Point[][];
-};
-
-export function buildTerrainRings(grid: TerrainGrid): TerrainRings {
-  return {
-    cells: grid.cells,
-    cols: grid.cols,
-    rows: grid.rows,
-    cellSizeM: grid.cellSizeM,
-    water: [],
-    green: [],
-  };
-}
-
-export function fillTerrainRings(): void {
-  /* no-op */
 }

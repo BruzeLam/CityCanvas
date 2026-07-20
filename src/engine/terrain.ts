@@ -16,13 +16,14 @@ export type TerrainGrid = {
   cells: Uint8Array;
 };
 
-/** 按地图尺寸选栅格：约 960 格边长（5km≈5–6m/格）。更细的观感靠渲染超采样，不靠堆格子。 */
+/** 按地图尺寸选栅格：约 1400 格边长（5km≈3.5–4m/格）；岸线观感再靠一次高清烘焙 */
 export function preferredTerrainCellSizeM(
   settings: Pick<MapSettings, 'widthM' | 'heightM'>,
 ): number {
   const maxDim = Math.max(settings.widthM, settings.heightM);
-  const target = 960;
+  const target = 1400;
   const raw = maxDim / target;
+  if (raw <= 4) return 4;
   if (raw <= 5) return 5;
   if (raw <= 6) return 6;
   if (raw <= 8) return 8;
