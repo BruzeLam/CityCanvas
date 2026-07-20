@@ -201,6 +201,50 @@ input {
   gap: 8px;
 }
 
+.toolbar-game .tb-drawer {
+  border: 1px solid color-mix(in srgb, var(--line) 80%, #c4a574 20%);
+  background:
+    linear-gradient(180deg, #fffefb 0%, var(--paper) 100%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.toolbar-game .tb-drawer-head {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 55%, #fff) 0%, var(--paper-deep) 40%) !important;
+  border-bottom: 1px solid transparent;
+}
+
+.toolbar-game .tb-drawer.open .tb-drawer-head {
+  border-bottom-color: var(--line);
+}
+
+.toolbar-game .tb-drawer-title {
+  letter-spacing: 0.12em;
+}
+
+.toolbar-game .mode-switch {
+  border-color: color-mix(in srgb, var(--line-strong) 70%, var(--accent-line) 30%);
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.toolbar-game .mode-btn.active {
+  background: linear-gradient(180deg, #2a2622 0%, var(--ink) 100%) !important;
+}
+
+.toolbar-game .tb-undo {
+  border-radius: 999px !important;
+  padding: 3px 8px 3px 4px !important;
+  background: #fff !important;
+  border-color: color-mix(in srgb, var(--line) 70%, #3b76c4 30%) !important;
+}
+
+.toolbar-game .tb-undo .tb-glyph {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+
 .tb-top {
   display: flex;
   align-items: center;
@@ -310,8 +354,8 @@ input {
 }
 
 .tb-tile:hover:not(:disabled) .tb-tile-glyph {
-  border-color: var(--line-strong);
-  background: var(--paper-deep);
+  border-color: color-mix(in srgb, var(--accent-line) 45%, var(--line-strong));
+  transform: translateY(-1px);
 }
 
 .tb-tile.active {
@@ -320,8 +364,9 @@ input {
 }
 
 .tb-tile.active .tb-tile-glyph {
-  background: var(--ink);
+  background: radial-gradient(circle at 35% 30%, #3a3530 0%, var(--ink) 75%);
   border-color: var(--ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 90%, transparent);
 }
 
 .tb-tile.soon,
@@ -334,31 +379,52 @@ input {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  border: 1px solid var(--line);
-  background: #fff;
+  border: 1.5px solid color-mix(in srgb, var(--line) 75%, #b8a070 25%);
+  background:
+    radial-gradient(circle at 35% 30%, #fff 0%, #f7f3ec 70%);
   line-height: 0;
   box-sizing: border-box;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 1px 2px rgba(40, 30, 20, 0.06);
+  overflow: hidden;
+  padding: 2px;
+}
+
+.tb-tile:hover:not(:disabled) .tb-tile-glyph {
+  border-color: color-mix(in srgb, var(--accent-line) 45%, var(--line-strong));
+  transform: translateY(-1px);
+}
+
+.tb-tile.active .tb-tile-glyph {
+  background: radial-gradient(circle at 35% 30%, #3a3530 0%, var(--ink) 75%);
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 90%, transparent);
 }
 
 .tb-glyph {
-  width: 16px;
-  height: 10px;
+  width: 22px;
+  height: 22px;
   display: block;
+  flex-shrink: 0;
 }
 
 .tb-tile-label {
   font-size: 9px;
-  font-weight: 650;
+  font-weight: 700;
   letter-spacing: 0.02em;
   text-align: center;
   line-height: 1.15;
-  max-width: 40px;
+  max-width: 42px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.tb-tile.active .tb-tile-label {
+  color: var(--accent-line);
 }
 
 .tb-tile-soon {

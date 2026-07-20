@@ -1,56 +1,69 @@
-/** 工具栏小圆标内简图（无外框，由 CSS 圆框承托） */
+/** 工具栏圆标：饱满色块简图，一眼能认 */
 
 type GlyphProps = { active?: boolean };
 
-const ink = (active?: boolean) => (active ? '#fff' : '#3d3a36');
-const soft = (active?: boolean) => (active ? 'rgba(255,255,255,0.7)' : '#8a8580');
-
 export function GlyphLand({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M1 9 Q5 4 10 7 T19 5" fill="none" stroke={ink(active)} strokeWidth="1.4" strokeLinecap="round" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#e8e0d0' : '#f0ebe3'} />
+      <path d="M2 15c3-4 6-2 9-3s5-4 11-2v8H2z" fill={active ? '#c4b59a' : '#d2c4a8'} />
+      <path d="M3 18h18" stroke={active ? '#8a7a60' : '#a89878'} strokeWidth="1.2" />
     </svg>
   );
 }
 
 export function GlyphWater({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M2 4h4M8 7h5M14 3h4" stroke={active ? '#9ed8ea' : '#5aa0b8'} strokeWidth="1.6" strokeLinecap="round" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#5eb0c8' : '#7ec8da'} />
+      <path d="M4 9c2 2 4 0 6 2s4 0 6 2 4 0 6 1" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" opacity="0.9" />
+      <path d="M4 14c2 2 4 0 6 2s4 0 6 1 3 1 6 2" fill="none" stroke="#dff6fc" strokeWidth="1.6" strokeLinecap="round" opacity="0.85" />
     </svg>
   );
 }
 
 export function GlyphGreen({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <circle cx="7" cy="6" r="3" fill={active ? '#b7df9f' : '#7aab68'} />
-      <circle cx="13" cy="7" r="2.2" fill={active ? '#dff0d4' : '#8fbc7a'} />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#6f9e5e' : '#8fbc7a'} />
+      <circle cx="9" cy="11" r="4.2" fill={active ? '#b7e09a' : '#c5e8ad'} />
+      <circle cx="15.5" cy="13" r="3.4" fill={active ? '#9fd07e' : '#addf93'} />
+      <rect x="10.5" y="14" width="2.2" height="5" rx="0.6" fill={active ? '#5a7a40' : '#6b8f4e'} />
     </svg>
   );
 }
 
 export function GlyphEraser({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M5 9 L9 3 L15 9 Z" fill={active ? '#f0a090' : '#e8b4a8'} stroke={ink(active)} strokeWidth="1" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#4a4540' : '#efeae4'} />
+      <path d="M7 15l5-8 6 8H7z" fill={active ? '#f2a090' : '#efb0a0'} stroke={active ? '#fff' : '#c47868'} strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M9 15h8" stroke={active ? '#fff' : '#a06050'} strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }
 
 export function GlyphRiverLine({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M1 9 C4 2 8 11 11 5 S18 4 19 8" fill="none" stroke={active ? '#9ed0e0' : '#5a9fc4'} strokeWidth="1.8" strokeLinecap="round" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#3d6474' : '#e8f4f8'} />
+      <path
+        d="M4 16c3-8 5 2 8-4s4-6 8-2"
+        fill="none"
+        stroke={active ? '#9fe0f2' : '#3d9bb8'}
+        strokeWidth="3.2"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
 
 export function GlyphRoad({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M1 6 H19" stroke={active ? '#f5c14a' : '#d4a017'} strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M4 6 H7 M10 6 H13 M16 6 H18" stroke="#fff" strokeWidth="1" strokeLinecap="round" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#3a3834' : '#ebe7e0'} />
+      <path d="M3 12h18" stroke={active ? '#f0b429' : '#e0a010'} strokeWidth="5" strokeLinecap="round" />
+      <path d="M6 12h2.5M11 12h2.5M16 12h2.5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -59,13 +72,33 @@ export function GlyphRail({
   active,
   kind = 'railway',
 }: GlyphProps & { kind?: 'railway' | 'hsr' | 'metro' | 'tram' }) {
-  const color =
-    kind === 'hsr' ? '#4d8fd6' : kind === 'metro' ? '#e85d4c' : kind === 'tram' ? '#6aa05f' : ink(active);
+  const bg =
+    kind === 'hsr'
+      ? active
+        ? '#1e4f86'
+        : '#dceaf8'
+      : kind === 'metro'
+        ? active
+          ? '#8b2e24'
+          : '#fce8e6'
+        : kind === 'tram'
+          ? active
+            ? '#3d6b3a'
+            : '#e5f2e2'
+          : active
+            ? '#2c2a28'
+            : '#eceae6';
+  const line =
+    kind === 'hsr' ? '#4d9be8' : kind === 'metro' ? '#e85d4c' : kind === 'tram' ? '#6db35f' : active ? '#ddd' : '#2a2a2a';
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M1 6 H19" stroke={color} strokeWidth={kind === 'tram' ? 1.6 : 2.4} strokeLinecap="round" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={bg} />
+      <path d="M3 12h18" stroke={line} strokeWidth={kind === 'tram' ? 3 : 4.2} strokeLinecap="round" />
       {(kind === 'railway' || kind === 'hsr') && (
-        <path d="M2 6 H18" stroke="#fff" strokeWidth="0.9" strokeLinecap="round" strokeDasharray="2.2 1.8" />
+        <path d="M5 12h14" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 2.2" />
+      )}
+      {kind === 'metro' && (
+        <circle cx="12" cy="12" r="2.2" fill="#fff" />
       )}
     </svg>
   );
@@ -73,32 +106,40 @@ export function GlyphRail({
 
 export function GlyphFerry({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M1 7 H19" stroke={active ? '#8ec8e0' : '#4a90c4'} strokeWidth="1.6" strokeLinecap="round" strokeDasharray="2.5 2" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#1f4f66' : '#e3f1f8'} />
+      <path d="M4 13h16" stroke={active ? '#8fd0ea' : '#3b8db8'} strokeWidth="2.4" strokeLinecap="round" strokeDasharray="3.5 2.5" />
+      <path d="M8 9h4l3 4H9z" fill={active ? '#c5eaf6' : '#6eb0d0'} />
     </svg>
   );
 }
 
 export function GlyphStationRect({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <rect x="5" y="3.5" width="10" height="5" fill={active ? '#fff' : '#2a2a2a'} stroke={ink(active)} strokeWidth="1" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#2c2a28' : '#eceae6'} />
+      <rect x="6" y="8" width="12" height="7" fill={active ? '#fff' : '#2a2a2a'} stroke={active ? '#aaa' : '#111'} strokeWidth="1.2" />
+      <path d="M8 11.5h8" stroke={active ? '#2c2a28' : '#fff'} strokeWidth="1.3" />
     </svg>
   );
 }
 
 export function GlyphStationRound({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <rect x="4" y="3.5" width="12" height="5" rx="2.5" fill="#e85d4c" stroke={ink(active)} strokeWidth="1" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#5a201c' : '#fce8e6'} />
+      <rect x="5" y="8" width="14" height="7" rx="3.5" fill="#e85d4c" stroke={active ? '#fff' : '#b83d32'} strokeWidth="1.2" />
+      <circle cx="12" cy="11.5" r="1.4" fill="#fff" />
     </svg>
   );
 }
 
 export function GlyphLabel({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <text x="10" y="9.5" textAnchor="middle" fontSize="9" fontWeight="700" fill={ink(active)}>
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#3d352c' : '#f3ede4'} />
+      <rect x="5" y="7" width="14" height="10" rx="1.5" fill={active ? '#f5e6c8' : '#fff'} stroke={active ? '#c4a574' : '#cbb896'} strokeWidth="1.2" />
+      <text x="12" y="14.5" textAnchor="middle" fontSize="7.5" fontWeight="800" fill={active ? '#5a4030' : '#4a3c30'}>
         Aa
       </text>
     </svg>
@@ -107,18 +148,22 @@ export function GlyphLabel({ active }: GlyphProps) {
 
 export function GlyphFacility({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <rect x="4" y="3" width="4" height="7" fill={soft(active)} />
-      <rect x="10" y="5" width="5" height="5" fill={soft(active)} />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#3a3a38' : '#eeebe6'} strokeDasharray={active ? undefined : '2 2'} stroke={active ? 'none' : '#c4bfb8'} strokeWidth="1" />
+      <rect x="6" y="8" width="5" height="10" fill={active ? '#d4c4a0' : '#b8a888'} />
+      <rect x="13" y="11" width="5" height="7" fill={active ? '#c4b090' : '#a89878'} />
+      <rect x="7.2" y="10" width="1.4" height="1.4" fill="#fff" opacity="0.7" />
+      <rect x="9.2" y="10" width="1.4" height="1.4" fill="#fff" opacity="0.7" />
     </svg>
   );
 }
 
 export function GlyphUndo({ active }: GlyphProps) {
   return (
-    <svg className="tb-glyph" viewBox="0 0 20 12" aria-hidden>
-      <path d="M14 3.5a4.2 4.2 0 1 1-4.2 4.2" fill="none" stroke={active ? '#9ec5ff' : '#4a7ab5'} strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M8 4.5 L5.5 7 L9 7.5" fill="none" stroke={active ? '#9ec5ff' : '#4a7ab5'} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    <svg className="tb-glyph" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="3" width="20" height="18" rx="3" fill={active ? '#1e3a5f' : '#e8f0fa'} />
+      <path d="M15 7a5 5 0 1 1-5 5" fill="none" stroke={active ? '#9ec5ff' : '#3b76c4'} strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M8.5 8.5 L5.5 11.5 L9.5 12.2" fill="none" stroke={active ? '#9ec5ff' : '#3b76c4'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
