@@ -31,6 +31,23 @@ export function snapAnglePoint(from: Point, to: Point, stepDeg = 15): Point {
   };
 }
 
+/**
+ * 靠近水平/垂直时软吸附到正交；否则保持自由角度。
+ * Shift 可关闭软吸附（调用方传 raw 点即可）。
+ */
+export function softOrthoSnap(from: Point, to: Point, thresholdDeg = 10): Point {
+  const len = dist(from, to);
+  if (len < 1e-6) return { ...to };
+  const ang = normalizeAngleDeg(bearingDeg(from, to));
+  let bestDiff = Infinity;
+  for (const c of [0, 90, -90, 180, -180]) {
+    const d = Math.abs(normalizeAngleDeg(ang - c));
+    if (d < bestDiff) bestDiff = d;
+  }
+  if (bestDiff <= thresholdDeg) return snapAnglePoint(from, to, 90);
+  return { ...to };
+}
+
 export function formatLength(m: number): string {
   if (m >= 1000) return `${(m / 1000).toFixed(2)} km`;
   return `${Math.round(m)} m`;

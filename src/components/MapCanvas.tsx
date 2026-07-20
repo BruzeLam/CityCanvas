@@ -32,6 +32,7 @@ import {
   curveFromTangent,
   headingFromPolyline,
   snapAnglePoint,
+  softOrthoSnap,
 } from '../engine/curveMath';
 import {
   findPathGuideSnap,
@@ -44,6 +45,8 @@ import {
 import {
   findPathTipAt,
   findNearestAnyGradeAttachment,
+  gradeAlongPath,
+  gradeAtVertex,
   tryMergeHeadToTail,
   attachCrossGradeTips,
   reweaveAllCrossings,
@@ -697,6 +700,42 @@ export function MapCanvas({
     [applyGuideSnap],
   );
 
+  /** 从已有路网点推断标高，并同步工具栏绘制层 */
+  const syncDrawGradeFromPoint = useCallback(
+    (point: Point, opts?: { lockDraftStart?: boolean }) => {
+      const features = projectRef.current.features;
+      const zoom = projectRef.current.viewport.zoom;
+      const tip = findPathTipAt(features, point, RAMP_ATTACH_M);
+      if (tip) {
+        const g = gradeAlongPath(tip.feature, tip.point);
+        if (opts?.lockDraftStart) setDraftStartGrade(g);
+        onDrawGradeChange(g);
+        return g;
+      }
+      const near = findNearestAnyGradeAttachment(features, point, RAMP_ATTACH_M);
+      if (near) {
+        if (opts?.lockDraftStart) setDraftStartGrade(near.grade);
+        onDrawGradeChange(near.grade);
+        return near.grade;
+      }
+      const under = findFeatureAt(features, point, zoom);
+      if (under && (under.kind === 'road' || under.kind === 'railway')) {
+        const g = gradeAlongPath(under, point);
+        if (opts?.lockDraftStart) setDraftStartGrade(g);
+        onDrawGradeChange(g);
+        return g;
+      }
+      if (opts?.lockDraftStart) setDraftStartGrade(drawGrade);
+      return drawGrade;
+    },
+    [drawGrade, onDrawGradeChange],
+  );
+
+  const straightenSegment = useCallback((from: Point, to: Point) => {
+    // 默认软吸正交；Shift = 完全自由角度
+    return shiftDown.current ? to : softOrthoSnap(from, to);
+  }, []);
+
   const handleWheel = useCallback(
     (e: WheelEvent) => {
       e.preventDefault();
@@ -795,6 +834,9 @@ export function MapCanvas({
       if (selected) {
         const vi = findVertexIndex(selected, world, projectRef.current.viewport.zoom);
         if (vi !== null) {
+          if (selected.kind === 'road' || selected.kind === 'railway') {
+            onDrawGradeChange(gradeAtVertex(selected, vi));
+          }
           undoSnapshot.current = projectRef.current;
           draggingVertex.current = { featureId: selected.id, index: vi, moved: false };
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -804,7 +846,7 @@ export function MapCanvas({
       const hit = findFeatureAt(projectRef.current.features, world, projectRef.current.viewport.zoom);
       onSelectFeature(hit?.id ?? null);
       if (hit && (hit.kind === 'road' || hit.kind === 'railway')) {
-        onDrawGradeChange(featureGrade(hit));
+        onDrawGradeChange(gradeAlongPath(hit, world));
       }
       return;
     }
@@ -852,26 +894,17 @@ export function MapCanvas({
       const pt = snapPoint(world, [], from);
 
       if (isPathGuided && pathDrawMode === 'straight') {
-        setPolyDraft((prev) => {
-          if (prev.length === 0) {
-            const hit = applyGuideSnap(world, [], null);
-            const tip = findPathTipAt(projectRef.current.features, hit.point);
-            if (tip) {
-              const g = featureGrade(tip.feature);
-              setDraftStartGrade(g);
-              onDrawGradeChange(g);
-            } else {
-              setDraftStartGrade(drawGrade);
-            }
-            return [hit.point];
-          }
-          const last = prev[prev.length - 1];
-          const snapped = snapPoint(world, prev, last);
-          const next = shiftDown.current ? snapped : snapAnglePoint(last, snapped, 90);
-          const endTip = findPathTipAt(projectRef.current.features, next);
-          if (endTip) onDrawGradeChange(featureGrade(endTip.feature));
-          return [...prev, next];
-        });
+        if (polyDraft.length === 0) {
+          const hit = applyGuideSnap(world, [], null);
+          syncDrawGradeFromPoint(hit.point, { lockDraftStart: true });
+          setPolyDraft([hit.point]);
+          return;
+        }
+        const last = polyDraft[polyDraft.length - 1];
+        const snapped = snapPoint(world, polyDraft, last);
+        const next = straightenSegment(last, snapped);
+        syncDrawGradeFromPoint(next);
+        setPolyDraft([...polyDraft, next]);
         return;
       }
 
@@ -891,25 +924,7 @@ export function MapCanvas({
                 : null) ??
               headingAlongSegment(hit.point, pathSegments, project.viewport.zoom);
           }
-          const tip = findPathTipAt(projectRef.current.features, hit.point);
-          if (tip) {
-            const g = featureGrade(tip.feature);
-            setDraftStartGrade(g);
-            onDrawGradeChange(g);
-          } else {
-            const under = findFeatureAt(
-              projectRef.current.features,
-              hit.point,
-              project.viewport.zoom,
-            );
-            if (under && (under.kind === 'road' || under.kind === 'railway')) {
-              const g = featureGrade(under);
-              setDraftStartGrade(g);
-              onDrawGradeChange(g);
-            } else {
-              setDraftStartGrade(drawGrade);
-            }
-          }
+          syncDrawGradeFromPoint(hit.point, { lockDraftStart: true });
           setPolyDraft([hit.point]);
           setCurveControl(null);
           setCurveAnchorHeading(anchor);
@@ -944,10 +959,7 @@ export function MapCanvas({
             setCurveAnchorHeading(curve.endHeading);
             setActiveGuide(null);
             // 终点吸附到异层端点时，同步绘制层为终点层（形成匝道）
-            const endTip = findPathTipAt(projectRef.current.features, c);
-            if (endTip) {
-              onDrawGradeChange(featureGrade(endTip.feature));
-            }
+            syncDrawGradeFromPoint(c);
           }
           return;
         }
@@ -992,10 +1004,7 @@ export function MapCanvas({
           setCurveControl(null);
           setCurveAnchorHeading(curve.endHeading);
           setActiveGuide(null);
-          const endTip = findPathTipAt(projectRef.current.features, c);
-          if (endTip) {
-            onDrawGradeChange(featureGrade(endTip.feature));
-          }
+          syncDrawGradeFromPoint(c);
         }
         return;
       }
@@ -1055,7 +1064,7 @@ export function MapCanvas({
       if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0) {
         const last = polyDraft[polyDraft.length - 1];
         const base = snapPoint(world, polyDraft, last);
-        setPolyCursor(shiftDown.current ? base : snapAnglePoint(last, base, 90));
+        setPolyCursor(straightenSegment(last, base));
         return;
       }
       if (isPathGuided && pathDrawMode === 'curve') {
@@ -1268,7 +1277,7 @@ export function MapCanvas({
         ? ` · 平行 ${parallelSpacingM} m（${parallelSide === 'both' ? '双侧' : parallelSide === 'left' ? '左' : '右'}）`
         : '';
       if (pathDrawMode === 'straight') {
-        return `直线默认水平/垂直 · Shift 自由角度 · Alt 关软吸附 · 双击完成${parallelHint} · ${gradeHint}`;
+        return `直线自由角度 · 靠近横/竖软吸正交 · Shift 关软吸 · Alt 关路网吸附 · 双击完成${parallelHint} · ${gradeHint}`;
       }
       if (!polyDraft.length) {
         return `弯道：点起点（端点/中心线锁切线）${parallelHint} · ${gradeHint}`;
@@ -1309,7 +1318,7 @@ export function MapCanvas({
 
     if (isPathGuided && pathDrawMode === 'straight' && polyDraft.length > 0 && polyCursor) {
       const m = lineMetrics(polyDraft[polyDraft.length - 1], polyCursor);
-      const angleLock = shiftSnap ? ' · 自由角度' : ' · 正交';
+      const angleLock = shiftSnap ? ' · 自由角度' : ' · 软吸正交';
       return {
         lines: [
           formatLength(m.lengthM),

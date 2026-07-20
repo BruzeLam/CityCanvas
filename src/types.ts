@@ -286,7 +286,7 @@ export const POLYLINE_TOOLS: Tool[] = ['river', 'road', 'railway'];
 export type PathDrawMode = 'straight' | 'curve';
 
 export const PATH_DRAW_MODES: { id: PathDrawMode; label: string; desc: string }[] = [
-  { id: 'straight', label: '直线', desc: '默认水平/垂直 · Shift 自由角度' },
+  { id: 'straight', label: '直线', desc: '自由角度 · 靠近时软吸正交 · Shift 关软吸' },
   { id: 'curve', label: '弯道', desc: '锁切线定半径劣弧 · 空白三点选侧' },
 ];
 

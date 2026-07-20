@@ -1,5 +1,11 @@
 import type { FeatureGrade, MapFeature, Point } from '../types';
-import { featureGrade, featureGradeEnd, isLevelBlendRoad, isRampFeature } from '../types';
+import {
+  clampGrade,
+  featureGrade,
+  featureGradeEnd,
+  isLevelBlendRoad,
+  isRampFeature,
+} from '../types';
 import { closestOnSegment, dist } from './geometry';
 
 const EPS = 1e-6;
@@ -132,6 +138,44 @@ export type PathTipHit = {
   point: Point;
 };
 
+/** 路径上某点的标高（跨层匝道按弧长比例插值） */
+export function gradeAlongPath(f: MapFeature, point: Point): FeatureGrade {
+  const g0 = featureGrade(f);
+  const g1 = featureGradeEnd(f);
+  if (g0 === g1 || f.points.length < 2) return g0;
+
+  let total = 0;
+  const lens: number[] = [];
+  for (let i = 0; i < f.points.length - 1; i++) {
+    const d = dist(f.points[i], f.points[i + 1]);
+    lens.push(d);
+    total += d;
+  }
+  if (total < EPS) return g0;
+
+  let bestDist = Infinity;
+  let bestT = 0;
+  let acc = 0;
+  for (let i = 0; i < f.points.length - 1; i++) {
+    const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
+    if (hit.dist < bestDist) {
+      bestDist = hit.dist;
+      bestT = (acc + lens[i] * hit.t) / total;
+    }
+    acc += lens[i];
+  }
+  return clampGrade(g0 + (g1 - g0) * bestT);
+}
+
+/** 顶点索引处的标高（跨层匝道按索引比例） */
+export function gradeAtVertex(f: MapFeature, index: number): FeatureGrade {
+  const g0 = featureGrade(f);
+  const g1 = featureGradeEnd(f);
+  if (g0 === g1 || f.points.length < 2) return g0;
+  const t = Math.max(0, Math.min(1, index / (f.points.length - 1)));
+  return clampGrade(g0 + (g1 - g0) * t);
+}
+
 /** 查找落在某条道路/铁路首尾端点上的命中 */
 export function findPathTipAt(
   features: MapFeature[],
@@ -221,7 +265,6 @@ export function findNearestAnyGradeAttachment(
   for (const f of features) {
     if (!isPathKind(f) || f.points.length < 2) continue;
     if (excludeId && f.id === excludeId) continue;
-    const grade = featureGrade(f);
     for (let i = 0; i < f.points.length - 1; i++) {
       const hit = closestOnSegment(point, { a: f.points[i], b: f.points[i + 1] });
       if (hit.dist > maxDist) continue;
@@ -229,7 +272,7 @@ export function findNearestAnyGradeAttachment(
         best = {
           feature: f,
           point: hit.point,
-          grade,
+          grade: gradeAlongPath(f, hit.point),
           segIndex: i,
           t: hit.t,
           dist: hit.dist,
