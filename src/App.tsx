@@ -27,6 +27,7 @@ import type {
   LayerKey,
   MapStyle,
   PathDrawMode,
+  RailKind,
   RoadLevel,
   Tool,
 } from './types';
@@ -35,6 +36,8 @@ import {
   DEFAULT_BRUSH_THICKNESS,
   DEFAULT_ERASER_TARGET,
   DEFAULT_GRADE,
+  DEFAULT_METRO_COLOR,
+  DEFAULT_RAIL_KIND,
   getLayers,
 } from './types';
 import './App.css';
@@ -55,6 +58,8 @@ function App() {
   const [brushThickness, setBrushThickness] = useState(DEFAULT_BRUSH_THICKNESS);
   const [eraserTarget, setEraserTarget] = useState<EraserTarget>(DEFAULT_ERASER_TARGET);
   const [roadLevel, setRoadLevel] = useState<RoadLevel>('arterial');
+  const [railKind, setRailKind] = useState<RailKind>(DEFAULT_RAIL_KIND);
+  const [metroColor, setMetroColor] = useState(DEFAULT_METRO_COLOR);
   const [drawGrade, setDrawGrade] = useState<FeatureGrade>(DEFAULT_GRADE);
   const [history, setHistory] = useState<CityProject[]>([]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -482,6 +487,8 @@ function App() {
         <Toolbar
           tool={tool}
           roadLevel={roadLevel}
+          railKind={railKind}
+          metroColor={metroColor}
           drawGrade={drawGrade}
           pathDrawMode={pathDrawMode}
           parallelEnabled={parallelEnabled}
@@ -497,6 +504,8 @@ function App() {
             if (t !== 'select') setSelectedFeatureId(null);
           }}
           onRoadLevelChange={setRoadLevel}
+          onRailKindChange={setRailKind}
+          onMetroColorChange={setMetroColor}
           onDrawGradeChange={setDrawGrade}
           onPathDrawModeChange={setPathDrawMode}
           onParallelEnabledChange={setParallelEnabled}
@@ -518,6 +527,8 @@ function App() {
           project={project}
           tool={tool}
           roadLevel={roadLevel}
+          railKind={railKind}
+          metroColor={metroColor}
           drawGrade={drawGrade}
           pathDrawMode={pathDrawMode}
           parallelEnabled={parallelEnabled}

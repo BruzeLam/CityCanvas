@@ -5,6 +5,33 @@ export type Point = { x: number; y: number };
 
 export type RoadLevel = 'expressway' | 'arterial' | 'collector' | 'local';
 
+/** 轨道线路细分（同属 kind=railway，用 railKind 区分画法） */
+export type RailKind = 'railway' | 'hsr' | 'metro' | 'tram';
+
+export const DEFAULT_RAIL_KIND: RailKind = 'railway';
+export const DEFAULT_METRO_COLOR = '#e85d4c';
+
+export const RAIL_KINDS: {
+  id: RailKind;
+  label: string;
+  hint: string;
+}[] = [
+  { id: 'railway', label: '铁路', hint: '普速铁路 · 黑白轨枕线' },
+  { id: 'hsr', label: '高铁', hint: '高速铁路 · 蓝白线' },
+  { id: 'metro', label: '地铁', hint: '地铁 · 彩色实线' },
+  { id: 'tram', label: '有轨', hint: '有轨电车 · 细实线' },
+];
+
+export const RAIL_STYLES: Record<
+  RailKind,
+  { width: number; color: string; dash?: number[]; stripe?: string }
+> = {
+  railway: { width: 3.5, color: '#2a2a2a', dash: [6, 5], stripe: '#fff' },
+  hsr: { width: 4, color: '#2b6cb0', dash: [8, 4], stripe: '#fff' },
+  metro: { width: 4.5, color: DEFAULT_METRO_COLOR },
+  tram: { width: 2.8, color: '#5b8c5a' },
+};
+
 /**
  * 要素 kind。ocean/land/mountain 旧矢量面已弃用（改由 terrain 栅格表示），
  * 仍保留枚举以便加载旧档兼容；新绘制不再写入这三类面。
@@ -33,6 +60,10 @@ export type MapFeature = {
   points: Point[];
   closed: boolean;
   roadLevel?: RoadLevel;
+  /** 轨道细分；缺省视为普通铁路 */
+  railKind?: RailKind;
+  /** 地铁线路色（可选） */
+  metroColor?: string;
   /** 路网标高（道路/铁路）；缺省视为 0。匝道时表示起点层 */
   grade?: FeatureGrade;
   /** 匝道终点层；与 grade 不同时表示跨层坡道 */

@@ -185,7 +185,7 @@ input {
 }
 
 .toolbar {
-  padding: 12px 12px 24px;
+  padding: 10px 10px 20px;
 }
 
 .side-panel {
@@ -193,6 +193,231 @@ input {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.toolbar-game {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tb-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tb-top .toolbar-kicker {
+  margin: 0;
+}
+
+.tb-undo {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  margin: 0 !important;
+  padding: 4px 8px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--paper) !important;
+  color: var(--ink) !important;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tb-undo:disabled {
+  opacity: 0.4;
+}
+
+.tb-undo .tb-glyph {
+  width: 22px;
+  height: 14px;
+}
+
+.tb-drawer {
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.tb-drawer-head {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0 !important;
+  padding: 7px 8px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: var(--paper-deep) !important;
+  color: var(--ink) !important;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.tb-drawer-title {
+  flex: 1;
+  text-align: left;
+}
+
+.tb-drawer-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: #fff;
+}
+
+.tb-drawer-chevron {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tb-drawer-body {
+  padding: 8px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tb-tile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.tb-tile {
+  position: relative;
+  display: flex !important;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  margin: 0 !important;
+  padding: 4px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: #fff !important;
+  color: var(--ink) !important;
+  cursor: pointer;
+  min-height: 0;
+}
+
+.tb-tile:hover:not(:disabled) {
+  border-color: var(--line-strong) !important;
+  background: var(--paper-deep) !important;
+}
+
+.tb-tile.active {
+  border-color: var(--ink) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+}
+
+.tb-tile.soon,
+.tb-tile:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tb-tile-glyph {
+  display: block;
+  line-height: 0;
+}
+
+.tb-glyph {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.tb-tile-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.tb-tile-soon {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 0 3px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--muted);
+}
+
+.tb-tile.active .tb-tile-soon {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.tb-subtabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0;
+  border: 1px solid var(--line);
+  background: var(--paper-deep);
+}
+
+.tb-subtab {
+  margin: 0 !important;
+  padding: 6px 4px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--muted) !important;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.tb-subtab + .tb-subtab {
+  border-left: 1px solid var(--line) !important;
+}
+
+.tb-subtab.active {
+  background: #fff !important;
+  color: var(--ink) !important;
+}
+
+.tb-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tb-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.metro-swatches {
+  gap: 6px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 2px solid transparent !important;
+  border-radius: 2px !important;
+  cursor: pointer;
+}
+
+.swatch.active {
+  border-color: var(--ink) !important;
+  box-shadow: 0 0 0 1px #fff inset;
 }
 
 .toolbar-kicker {
@@ -440,6 +665,20 @@ input {
 
 .chip:hover {
   border-color: var(--line-strong) !important;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.check-row input {
+  margin: 0;
 }
 
 .chip.active {

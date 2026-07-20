@@ -6,6 +6,7 @@ import type {
   FeatureKind,
   MapFeature,
   PathDrawMode,
+  RailKind,
   Point,
   RoadLevel,
   Tool,
@@ -14,6 +15,7 @@ import {
   PATH_GUIDED_TOOLS,
   POLYLINE_TOOLS,
   BRUSH_TOOLS,
+  DEFAULT_METRO_COLOR,
   clampGrade,
   clampToMap,
   createId,
@@ -72,6 +74,8 @@ type Props = {
   project: CityProject;
   tool: Tool;
   roadLevel: RoadLevel;
+  railKind: RailKind;
+  metroColor: string;
   drawGrade: FeatureGrade;
   brushSizeM: number;
   brushThickness: number;
@@ -133,6 +137,8 @@ export function MapCanvas({
   project,
   tool,
   roadLevel,
+  railKind,
+  metroColor,
   drawGrade,
   brushSizeM,
   brushThickness,
@@ -602,6 +608,11 @@ export function MapCanvas({
         points,
         closed: false,
         roadLevel: kind === 'road' ? roadLevel : undefined,
+        railKind: kind === 'railway' ? railKind : undefined,
+        metroColor:
+          kind === 'railway' && railKind === 'metro'
+            ? metroColor || DEFAULT_METRO_COLOR
+            : undefined,
         grade: grades.grade,
         gradeEnd: grades.gradeEnd,
       })),
@@ -609,10 +620,12 @@ export function MapCanvas({
     resetDrafts();
   }, [
     commitPathFeatures,
+    metroColor,
     parallelEnabled,
     parallelSide,
     parallelSpacingM,
     polyDraft,
+    railKind,
     resetDrafts,
     resolvePathGrades,
     roadLevel,

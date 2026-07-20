@@ -1,27 +1,51 @@
-import { useState } from 'react';
-import type { EraserTarget, FeatureGrade, PathDrawMode, RoadLevel, Tool } from '../types';
+import { useState, type ReactNode } from 'react';
+import type {
+  EraserTarget,
+  FeatureGrade,
+  PathDrawMode,
+  RailKind,
+  RoadLevel,
+  Tool,
+} from '../types';
 import {
   ERASER_TARGETS,
   FEATURE_GRADES,
   PATH_DRAW_MODES,
   PATH_GUIDED_TOOLS,
+  RAIL_KINDS,
   ROAD_STYLES,
   TERRAIN_BRUSH_TOOLS,
   clampGrade,
   formatGrade,
 } from '../types';
 import {
-  DEFAULT_PARALLEL_SPACING_M,
   PARALLEL_SIDES,
   PARALLEL_SPACING_MAX_M,
   PARALLEL_SPACING_MIN_M,
   clampParallelSpacing,
   type ParallelSide,
 } from '../engine/parallelOffset';
+import {
+  GlyphEraser,
+  GlyphFacility,
+  GlyphFerry,
+  GlyphGreen,
+  GlyphLabel,
+  GlyphLand,
+  GlyphRail,
+  GlyphRiverLine,
+  GlyphRoad,
+  GlyphStationRect,
+  GlyphStationRound,
+  GlyphUndo,
+  GlyphWater,
+} from './ToolbarGlyphs';
 
 type Props = {
   tool: Tool;
   roadLevel: RoadLevel;
+  railKind: RailKind;
+  metroColor: string;
   drawGrade: FeatureGrade;
   pathDrawMode: PathDrawMode;
   parallelEnabled: boolean;
@@ -34,6 +58,8 @@ type Props = {
   canUndo: boolean;
   onToolChange: (tool: Tool) => void;
   onRoadLevelChange: (level: RoadLevel) => void;
+  onRailKindChange: (kind: RailKind) => void;
+  onMetroColorChange: (color: string) => void;
   onDrawGradeChange: (grade: FeatureGrade) => void;
   onPathDrawModeChange: (mode: PathDrawMode) => void;
   onParallelEnabledChange: (on: boolean) => void;
@@ -46,39 +72,85 @@ type Props = {
   onUndo: () => void;
 };
 
-const TERRAIN_TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
-  { id: 'land', label: '陆地', icon: '🏝️', hint: '陆地刷 · 擦回米白底图' },
-  { id: 'ocean', label: '水域', icon: '🌊', hint: '水域刷 · 海/湖/河同色，形状自辨' },
-  { id: 'mountain', label: '绿地', icon: '🌲', hint: '绿地/山地刷 · 平面绿色，无等高线' },
-  { id: 'eraser', label: '橡皮', icon: '🧹', hint: '橡皮刷 · 单选目标，按类型擦除' },
-  { id: 'river', label: '河道线', icon: '💧', hint: '可选中心线标注；面状水域请用水域刷' },
-];
-
-const PATH_MODE_ICONS: Record<PathDrawMode, string> = {
-  straight: '／',
-  curve: '⌒',
-};
-
-const ROAD_LEVEL_ICONS: Record<RoadLevel, string> = {
-  expressway: '🛣️',
-  arterial: '🛤️',
-  collector: '➖',
-  local: '┈',
-};
+type DrawerId = 'terrain' | 'transit' | 'mark' | 'facility';
+type TransitDrawer = 'road' | 'rail' | 'water';
 
 const ROAD_LEVELS = Object.entries(ROAD_STYLES) as [
   RoadLevel,
   (typeof ROAD_STYLES)[RoadLevel],
 ][];
 
+const METRO_COLORS = ['#e85d4c', '#3b82f6', '#22a06b', '#a855f7', '#f59e0b', '#0f766e'];
+
 const isTerrainBrush = (t: Tool) => TERRAIN_BRUSH_TOOLS.includes(t) || t === 'eraser';
 const isPathGuided = (t: Tool) => PATH_GUIDED_TOOLS.includes(t);
 
-type SectionId = 'view' | 'terrain' | 'network' | 'label' | 'keys';
+function Drawer({
+  id,
+  title,
+  open,
+  onToggle,
+  children,
+  badge,
+}: {
+  id: DrawerId;
+  title: string;
+  open: boolean;
+  onToggle: (id: DrawerId) => void;
+  children: ReactNode;
+  badge?: string;
+}) {
+  return (
+    <section className={`tb-drawer ${open ? 'open' : ''}`}>
+      <button type="button" className="tb-drawer-head" onClick={() => onToggle(id)}>
+        <span className="tb-drawer-title">{title}</span>
+        {badge ? <span className="tb-drawer-badge">{badge}</span> : null}
+        <span className="tb-drawer-chevron" aria-hidden>
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+      {open ? <div className="tb-drawer-body">{children}</div> : null}
+    </section>
+  );
+}
+
+function Tile({
+  label,
+  active,
+  disabled,
+  soon,
+  title,
+  onClick,
+  glyph,
+}: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  soon?: boolean;
+  title?: string;
+  onClick?: () => void;
+  glyph: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={`tb-tile${active ? ' active' : ''}${soon ? ' soon' : ''}`}
+      disabled={disabled || soon}
+      title={title ?? (soon ? '即将推出' : label)}
+      onClick={onClick}
+    >
+      <span className="tb-tile-glyph">{glyph}</span>
+      <span className="tb-tile-label">{label}</span>
+      {soon ? <span className="tb-tile-soon">后</span> : null}
+    </button>
+  );
+}
 
 export function Toolbar({
   tool,
   roadLevel,
+  railKind,
+  metroColor,
   drawGrade,
   pathDrawMode,
   parallelEnabled,
@@ -91,6 +163,8 @@ export function Toolbar({
   canUndo,
   onToolChange,
   onRoadLevelChange,
+  onRailKindChange,
+  onMetroColorChange,
   onDrawGradeChange,
   onPathDrawModeChange,
   onParallelEnabledChange,
@@ -102,212 +176,206 @@ export function Toolbar({
   onShowJunctionsChange,
   onUndo,
 }: Props) {
-  const [open, setOpen] = useState<Record<SectionId, boolean>>({
-    view: true,
+  const [open, setOpen] = useState<Record<DrawerId, boolean>>({
     terrain: true,
-    network: true,
-    label: true,
-    keys: true,
+    transit: true,
+    mark: false,
+    facility: false,
   });
+  const [transitOpen, setTransitOpen] = useState<TransitDrawer>(
+    tool === 'railway' ? 'rail' : 'road',
+  );
 
-  const toggle = (id: SectionId) => {
+  const toggle = (id: DrawerId) => {
     setOpen((o) => ({ ...o, [id]: !o[id] }));
+  };
+
+  const selectTransit = (panel: TransitDrawer) => {
+    setTransitOpen(panel);
+    setOpen((o) => ({ ...o, transit: true }));
   };
 
   return (
     <aside
-      className="toolbar"
+      className="toolbar toolbar-game"
       onMouseDown={(e) => {
-        // 按钮点击不抢焦点，避免空格误触；滑条仍可聚焦
         const t = e.target as HTMLElement;
-        if (t.closest('button')) e.preventDefault();
+        if (t.closest('button') && !t.closest('input')) e.preventDefault();
       }}
     >
-      <p className="toolbar-kicker">图板</p>
+      <div className="tb-top">
+        <p className="toolbar-kicker">图板</p>
+        <button
+          type="button"
+          className="tb-undo"
+          onClick={onUndo}
+          disabled={!canUndo}
+          title="撤销 · Ctrl/⌘ Z"
+        >
+          <GlyphUndo />
+          <span>撤销</span>
+        </button>
+      </div>
 
       <div className="mode-switch" role="group" aria-label="鼠标左键模式">
         <button
           type="button"
           className={tool === 'pan' ? 'mode-btn active' : 'mode-btn'}
           onClick={() => onToolChange('pan')}
-          title="左键拖动地图 · 快捷键 H · 空格也可临时拖动"
+          title="拖图 · H"
         >
-          <span className="btn-emoji" aria-hidden>
-            ✋
-          </span>
           拖动
         </button>
         <button
           type="button"
           className={tool === 'select' ? 'mode-btn active' : 'mode-btn'}
           onClick={() => onToolChange('select')}
-          title="左键选中要素、拖动顶点 · 快捷键 V"
+          title="编辑 · V"
         >
-          <span className="btn-emoji" aria-hidden>
-            ✏️
-          </span>
           编辑
         </button>
       </div>
       <p className="mode-hint">
         {tool === 'pan'
-          ? '左键拖图 · WASD 平移 · H'
+          ? '左键拖图 · WASD · H'
           : tool === 'select'
-            ? '左键选中 / 改顶点 · V'
-            : '绘制中 · 空格临时拖图 · WASD 平移'}
+            ? '选中 / 改顶点 · V'
+            : '绘制中 · 空格拖图'}
       </p>
 
-      <section className="tool-section">
-        <button type="button" className="section-toggle" onClick={() => toggle('view')}>
-          <span>工具</span>
-          <span className="section-chevron">{open.view ? '−' : '+'}</span>
-        </button>
-        {open.view && (
-          <div className="tool-grid">
-            <button
-              type="button"
-              className="tool-cell"
-              onClick={onUndo}
-              disabled={!canUndo}
-              title="撤销上一步 · Ctrl/⌘ Z"
-            >
-              <span className="btn-emoji" aria-hidden>
-                ↩️
-              </span>
-              撤销
-            </button>
-            <button type="button" className="tool-cell soon" disabled title="即将推出">
-              <span className="btn-emoji" aria-hidden>
-                🏢
-              </span>
-              建筑
-            </button>
-            <button type="button" className="tool-cell soon" disabled title="即将推出">
-              <span className="btn-emoji" aria-hidden>
-                🚌
-              </span>
-              公交
-            </button>
+      <Drawer id="terrain" title="地貌" open={open.terrain} onToggle={toggle}>
+        <div className="tb-tile-grid">
+          <Tile
+            label="陆地"
+            active={tool === 'land'}
+            glyph={<GlyphLand active={tool === 'land'} />}
+            title="陆地刷"
+            onClick={() => onToolChange('land')}
+          />
+          <Tile
+            label="水域"
+            active={tool === 'ocean'}
+            glyph={<GlyphWater active={tool === 'ocean'} />}
+            title="水域刷"
+            onClick={() => onToolChange('ocean')}
+          />
+          <Tile
+            label="绿地"
+            active={tool === 'mountain'}
+            glyph={<GlyphGreen active={tool === 'mountain'} />}
+            title="绿地刷"
+            onClick={() => onToolChange('mountain')}
+          />
+          <Tile
+            label="橡皮"
+            active={tool === 'eraser'}
+            glyph={<GlyphEraser active={tool === 'eraser'} />}
+            title="按类型擦除"
+            onClick={() => onToolChange('eraser')}
+          />
+          <Tile
+            label="河道线"
+            active={tool === 'river'}
+            glyph={<GlyphRiverLine active={tool === 'river'} />}
+            title="河道中心线"
+            onClick={() => onToolChange('river')}
+          />
+        </div>
+
+        {isTerrainBrush(tool) && (
+          <div className="tb-options">
+            {tool === 'eraser' && (
+              <>
+                <p className="option-label">擦除目标</p>
+                <div className="chip-row" role="radiogroup" aria-label="擦除目标">
+                  {ERASER_TARGETS.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={eraserTarget === t.id}
+                      className={eraserTarget === t.id ? 'chip active' : 'chip'}
+                      onClick={() => onEraserTargetChange(t.id)}
+                      title={t.hint}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <label className="brush-slider">
+              <span>大小 {Math.round(brushSizeM)} m</span>
+              <input
+                type="range"
+                min={40}
+                max={400}
+                step={10}
+                value={brushSizeM}
+                onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+              />
+            </label>
+            {(tool !== 'eraser' || eraserTarget === 'terrain') && (
+              <label className="brush-slider">
+                <span>厚度 {brushThickness.toFixed(2)}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={brushThickness}
+                  onChange={(e) => onBrushThicknessChange(Number(e.target.value))}
+                />
+              </label>
+            )}
           </div>
         )}
-      </section>
+      </Drawer>
 
-      <section className="tool-section">
-        <button type="button" className="section-toggle" onClick={() => toggle('terrain')}>
-          <span>地貌</span>
-          <span className="section-chevron">{open.terrain ? '−' : '+'}</span>
-        </button>
-        {open.terrain && (
-          <>
-            <div className="tool-grid">
-              {TERRAIN_TOOLS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={tool === t.id ? 'tool-cell active' : 'tool-cell'}
-                  onClick={() => onToolChange(t.id)}
-                  title={t.hint}
-                >
-                  <span className="btn-emoji" aria-hidden>
-                    {t.icon}
-                  </span>
-                  {t.label}
-                </button>
-              ))}
+      <Drawer
+        id="transit"
+        title="交通"
+        open={open.transit}
+        onToggle={toggle}
+        badge={tool === 'road' || tool === 'railway' ? '绘' : undefined}
+      >
+        <div className="tb-subtabs" role="tablist" aria-label="交通大类">
+          {(
+            [
+              ['road', '道路'],
+              ['rail', '轨道'],
+              ['water', '航运'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={transitOpen === id}
+              className={transitOpen === id ? 'tb-subtab active' : 'tb-subtab'}
+              onClick={() => selectTransit(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {transitOpen === 'road' && (
+          <div className="tb-panel">
+            <div className="tb-tile-grid">
+              <Tile
+                label="道路"
+                active={tool === 'road'}
+                glyph={<GlyphRoad active={tool === 'road'} />}
+                title="绘制道路（可扩容等级）"
+                onClick={() => {
+                  selectTransit('road');
+                  onToolChange('road');
+                }}
+              />
             </div>
-            {isTerrainBrush(tool) && (
-              <div className="option-block">
-                {tool === 'eraser' && (
-                  <>
-                    <p className="option-label">擦除目标</p>
-                    <div className="tool-grid tool-grid-compact" role="radiogroup" aria-label="擦除目标">
-                      {ERASER_TARGETS.map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={eraserTarget === t.id}
-                          className={
-                            eraserTarget === t.id ? 'tool-cell active' : 'tool-cell'
-                          }
-                          onClick={() => onEraserTargetChange(t.id)}
-                          title={t.hint}
-                        >
-                          {t.label}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-                <p className="option-label">毛边刷</p>
-                <label className="brush-slider">
-                  <span>大小 {Math.round(brushSizeM)} m</span>
-                  <input
-                    type="range"
-                    min={40}
-                    max={400}
-                    step={10}
-                    value={brushSizeM}
-                    onChange={(e) => onBrushSizeChange(Number(e.target.value))}
-                  />
-                </label>
-                {(tool !== 'eraser' || eraserTarget === 'terrain') && (
-                  <label className="brush-slider">
-                    <span>厚度 {brushThickness.toFixed(2)}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={brushThickness}
-                      onChange={(e) => onBrushThicknessChange(Number(e.target.value))}
-                    />
-                  </label>
-                )}
-                <p className="tool-note">
-                  {tool === 'eraser'
-                    ? ERASER_TARGETS.find((t) => t.id === eraserTarget)?.hint ??
-                      '单选一类擦除，不会误伤其他图层'
-                    : '底图默认全陆地 · 绿地为平面色块，无等高线'}
-                </p>
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      <section className="tool-section">
-        <button type="button" className="section-toggle" onClick={() => toggle('network')}>
-          <span>路网</span>
-          <span className="section-chevron">{open.network ? '−' : '+'}</span>
-        </button>
-        {open.network && (
-          <>
-            <div className="tool-grid">
-              <button
-                type="button"
-                className={tool === 'road' ? 'tool-cell active' : 'tool-cell'}
-                onClick={() => onToolChange('road')}
-              >
-                <span className="btn-emoji" aria-hidden>
-                  🛣️
-                </span>
-                道路
-              </button>
-              <button
-                type="button"
-                className={tool === 'railway' ? 'tool-cell active' : 'tool-cell'}
-                onClick={() => onToolChange('railway')}
-              >
-                <span className="btn-emoji" aria-hidden>
-                  🚆
-                </span>
-                铁路
-              </button>
-            </div>
-
             {tool === 'road' && (
-              <div className="option-block">
+              <div className="tb-options">
                 <p className="option-label">等级</p>
                 <div className="chip-row">
                   {ROAD_LEVELS.map(([id, style]) => (
@@ -316,234 +384,188 @@ export function Toolbar({
                       type="button"
                       className={roadLevel === id ? 'chip active' : 'chip'}
                       onClick={() => onRoadLevelChange(id)}
+                      title={style.label}
                     >
-                      <span className="btn-emoji" aria-hidden>
-                        {ROAD_LEVEL_ICONS[id]}
-                      </span>
-                      <span
-                        className="road-swatch"
-                        style={{ background: style.color, borderColor: style.casing }}
-                      />
                       {style.label}
                     </button>
                   ))}
                 </div>
+                <p className="tool-note">后期可扩容更多道路类型</p>
               </div>
             )}
+          </div>
+        )}
 
-            {isPathGuided(tool) && (
+        {transitOpen === 'rail' && (
+          <div className="tb-panel">
+            <p className="option-label">线路</p>
+            <div className="tb-tile-grid">
+              {RAIL_KINDS.map((r) => (
+                <Tile
+                  key={r.id}
+                  label={r.label}
+                  active={tool === 'railway' && railKind === r.id}
+                  glyph={<GlyphRail active={tool === 'railway' && railKind === r.id} kind={r.id} />}
+                  title={r.hint}
+                  onClick={() => {
+                    selectTransit('rail');
+                    onRailKindChange(r.id);
+                    onToolChange('railway');
+                  }}
+                />
+              ))}
+            </div>
+            {tool === 'railway' && railKind === 'metro' && (
+              <div className="tb-options">
+                <p className="option-label">地铁色</p>
+                <div className="chip-row metro-swatches">
+                  {METRO_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={metroColor === c ? 'swatch active' : 'swatch'}
+                      style={{ background: c }}
+                      title={c}
+                      onClick={() => onMetroColorChange(c)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="option-label">站点</p>
+            <div className="tb-tile-grid">
+              <Tile
+                label="铁路站"
+                soon
+                glyph={<GlyphStationRect />}
+                title="矩形站台 · 可拖大小 · 即将推出"
+              />
+              <Tile
+                label="地铁站"
+                soon
+                glyph={<GlyphStationRound />}
+                title="圆角站台 · 玩法后续扩容"
+              />
+            </div>
+          </div>
+        )}
+
+        {transitOpen === 'water' && (
+          <div className="tb-panel">
+            <div className="tb-tile-grid">
+              <Tile
+                label="轮渡"
+                soon
+                glyph={<GlyphFerry />}
+                title="蓝色虚线轮渡 · 即将推出"
+              />
+            </div>
+            <p className="tool-note">航运目前预留轮渡线路</p>
+          </div>
+        )}
+
+        {isPathGuided(tool) && (
+          <div className="tb-options">
+            <p className="option-label">画法</p>
+            <div className="chip-row">
+              {PATH_DRAW_MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={pathDrawMode === m.id ? 'chip active' : 'chip'}
+                  onClick={() => onPathDrawModeChange(m.id)}
+                  title={m.desc}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            <p className="option-label">标高 {formatGrade(drawGrade)}</p>
+            <div className="chip-row">
+              {FEATURE_GRADES.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={drawGrade === g ? 'chip active' : 'chip'}
+                  onClick={() => onDrawGradeChange(clampGrade(g))}
+                >
+                  {g > 0 ? `+${g}` : `${g}`}
+                </button>
+              ))}
+            </div>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={showJunctions}
+                onChange={(e) => onShowJunctionsChange(e.target.checked)}
+              />
+              显示路口节点
+            </label>
+            {tool === 'road' && (
               <>
-                <div className="option-block">
-                  <p className="option-label">路径</p>
-                  <div className="chip-row">
-                    {PATH_DRAW_MODES.map((mode) => (
-                      <button
-                        key={mode.id}
-                        type="button"
-                        className={pathDrawMode === mode.id ? 'chip active' : 'chip'}
-                        onClick={() => onPathDrawModeChange(mode.id)}
-                        title={mode.desc}
-                      >
-                        <span className="btn-emoji" aria-hidden>
-                          {PATH_MODE_ICONS[mode.id]}
-                        </span>
-                        {mode.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="option-block">
-                  <p className="option-label">平行 · 独立开关</p>
-                  <div className="chip-row">
-                    <button
-                      type="button"
-                      className={parallelEnabled ? 'chip active' : 'chip'}
-                      onClick={() => onParallelEnabledChange(!parallelEnabled)}
-                      title="开启后，完成绘制时同时生成平行路（直线/弯道均可用）"
-                    >
-                      {parallelEnabled ? '平行 · 开' : '平行 · 关'}
-                    </button>
-                  </div>
-                  {parallelEnabled && (
-                    <>
-                      <div className="chip-row" style={{ marginTop: 6 }}>
-                        {PARALLEL_SIDES.map((s) => (
-                          <button
-                            key={s.id}
-                            type="button"
-                            className={parallelSide === s.id ? 'chip active' : 'chip'}
-                            onClick={() => onParallelSideChange(s.id)}
-                            title={s.desc}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="parallel-spacing-row">
-                        <label className="parallel-spacing-label">
-                          间距
-                          <input
-                            type="number"
-                            min={PARALLEL_SPACING_MIN_M}
-                            max={PARALLEL_SPACING_MAX_M}
-                            step={2}
-                            value={parallelSpacingM}
-                            onChange={(e) =>
-                              onParallelSpacingChange(
-                                clampParallelSpacing(Number(e.target.value)),
-                              )
-                            }
-                          />
-                          <span>m</span>
-                        </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={parallelEnabled}
+                    onChange={(e) => onParallelEnabledChange(e.target.checked)}
+                  />
+                  平行线
+                </label>
+                {parallelEnabled && (
+                  <>
+                    <label className="brush-slider">
+                      <span>间距 {parallelSpacingM} m</span>
+                      <input
+                        type="range"
+                        min={PARALLEL_SPACING_MIN_M}
+                        max={PARALLEL_SPACING_MAX_M}
+                        step={1}
+                        value={parallelSpacingM}
+                        onChange={(e) =>
+                          onParallelSpacingChange(clampParallelSpacing(Number(e.target.value)))
+                        }
+                      />
+                    </label>
+                    <div className="chip-row">
+                      {PARALLEL_SIDES.map((s) => (
                         <button
+                          key={s.id}
                           type="button"
-                          className="chip"
-                          onClick={() =>
-                            onParallelSpacingChange(DEFAULT_PARALLEL_SPACING_M)
-                          }
-                          title="恢复默认间距"
+                          className={parallelSide === s.id ? 'chip active' : 'chip'}
+                          onClick={() => onParallelSideChange(s.id)}
                         >
-                          默认 {DEFAULT_PARALLEL_SPACING_M}
+                          {s.label}
                         </button>
-                      </div>
-                      <p className="tool-note">
-                        双侧：轨迹为中线，左右各偏半间距。单侧：保留轨迹并再画一条。
-                      </p>
-                    </>
-                  )}
-                </div>
-                <div className="option-block">
-                  <p className="option-label">标高 · -/=</p>
-                  <div className="grade-row">
-                    <button
-                      type="button"
-                      className="grade-step"
-                      onClick={() => onDrawGradeChange(clampGrade(drawGrade - 1))}
-                      title="降低一层 -"
-                    >
-                      −
-                    </button>
-                    <span className="grade-current">{formatGrade(drawGrade)}</span>
-                    <button
-                      type="button"
-                      className="grade-step"
-                      onClick={() => onDrawGradeChange(clampGrade(drawGrade + 1))}
-                      title="升高一层 ="
-                    >
-                      +
-                    </button>
-                  </div>
-                  <div className="chip-row grade-chips">
-                    {FEATURE_GRADES.map((g) => (
-                      <button
-                        key={g}
-                        type="button"
-                        className={drawGrade === g ? 'chip active' : 'chip'}
-                        onClick={() => onDrawGradeChange(g)}
-                        title={formatGrade(g)}
-                      >
-                        {g > 0 ? `+${g}` : `${g}`}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="tool-note">同层成路口 · 异层上跨/下穿</p>
-                </div>
-                <div className="option-block">
-                  <p className="option-label">显示</p>
-                  <div className="chip-row">
-                    <button
-                      type="button"
-                      className={showJunctions ? 'chip active' : 'chip'}
-                      onClick={() => onShowJunctionsChange(!showJunctions)}
-                      title="路口节点圆点显隐"
-                    >
-                      <span className="btn-emoji" aria-hidden>
-                        ◎
-                      </span>
-                      路口
-                    </button>
-                  </div>
-                </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </>
             )}
-          </>
-        )}
-      </section>
-
-      <section className="tool-section">
-        <button type="button" className="section-toggle" onClick={() => toggle('label')}>
-          <span>标注</span>
-          <span className="section-chevron">{open.label ? '−' : '+'}</span>
-        </button>
-        {open.label && (
-          <div className="tool-grid">
-            <button
-              type="button"
-              className={tool === 'label' ? 'tool-cell active' : 'tool-cell'}
-              onClick={() => onToolChange('label')}
-            >
-              <span className="btn-emoji" aria-hidden>
-                🏷️
-              </span>
-              标注
-            </button>
-            <button type="button" className="tool-cell soon" disabled title="即将推出">
-              <span className="btn-emoji" aria-hidden>
-                📏
-              </span>
-              尺规
-            </button>
           </div>
         )}
-      </section>
+      </Drawer>
 
-      <section className="tool-section">
-        <button type="button" className="section-toggle" onClick={() => toggle('keys')}>
-          <span>快捷键</span>
-          <span className="section-chevron">{open.keys ? '−' : '+'}</span>
-        </button>
-        {open.keys && (
-          <div className="option-block">
-            <ul className="shortcut-list">
-              <li>
-                <span>平移地图</span>
-                <span>
-                  <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>
-                </span>
-              </li>
-              <li>
-                <span>拖动 / 编辑</span>
-                <span>
-                  <kbd>H</kbd> / <kbd>V</kbd>
-                </span>
-              </li>
-              <li>
-                <span>临时拖图</span>
-                <kbd>Space</kbd>
-              </li>
-              <li>
-                <span>路网标高</span>
-                <span>
-                  <kbd>-</kbd> / <kbd>=</kbd>
-                </span>
-              </li>
-              <li>
-                <span>关软吸附</span>
-                <kbd>Alt</kbd>
-              </li>
-              <li>
-                <span>平行间距</span>
-                <span className="shortcut-note">默认 {DEFAULT_PARALLEL_SPACING_M} m</span>
-              </li>
-              <li>
-                <span>完成折线</span>
-                <kbd>Enter</kbd>
-              </li>
-            </ul>
-          </div>
-        )}
-      </section>
+      <Drawer id="mark" title="标记" open={open.mark} onToggle={toggle}>
+        <div className="tb-tile-grid">
+          <Tile
+            label="标注"
+            active={tool === 'label'}
+            glyph={<GlyphLabel active={tool === 'label'} />}
+            onClick={() => onToolChange('label')}
+          />
+          <Tile label="尺度" soon glyph={<GlyphLabel />} title="测距 / 尺度 · 即将推出" />
+        </div>
+      </Drawer>
+
+      <Drawer id="facility" title="设施" open={open.facility} onToggle={toggle} badge="预留">
+        <div className="tb-tile-grid">
+          <Tile label="建筑" soon glyph={<GlyphFacility />} />
+          <Tile label="服务" soon glyph={<GlyphFacility />} />
+          <Tile label="枢纽" soon glyph={<GlyphFacility />} />
+        </div>
+        <p className="tool-note">设施玩法还在构思，先占位分类</p>
+      </Drawer>
     </aside>
   );
 }

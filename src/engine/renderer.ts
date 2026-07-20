@@ -7,7 +7,7 @@ import type {
   Point,
   Viewport,
 } from '../types';
-import { ROAD_STYLES, featureGrade, featureGradeEnd, getLayers, isRampFeature } from '../types';
+import { ROAD_STYLES, RAIL_STYLES, featureGrade, featureGradeEnd, getLayers, isRampFeature } from '../types';
 import { detectBlocks } from './blockDetect';
 import {
   curveFromThreePoints,
@@ -410,26 +410,34 @@ function drawRailway(
   ctx: CanvasRenderingContext2D,
   feature: MapFeature,
   viewport: Viewport,
-  palette: StylePalette,
+  _palette: StylePalette,
 ) {
   const points = feature.points.map((p) => toScreen(p, viewport));
   if (points.length < 2) return;
 
-  const w = Math.max(2, 3.5 * viewport.zoom);
+  const kind = feature.railKind ?? 'railway';
+  const style = RAIL_STYLES[kind];
+  const color =
+    kind === 'metro' && feature.metroColor ? feature.metroColor : style.color;
+  const w = Math.max(2, style.width * viewport.zoom);
 
   tracePath(ctx, points, false);
-  ctx.strokeStyle = palette.railway;
+  ctx.strokeStyle = color;
   ctx.lineWidth = w;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
+  ctx.setLineDash([]);
   ctx.stroke();
 
-  // CSLMV 风格：黑白虚线轨枕感
-  ctx.setLineDash([Math.max(4, 6 * viewport.zoom), Math.max(4, 5 * viewport.zoom)]);
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = Math.max(1, w * 0.45);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // 普铁 / 高铁：白虚线轨枕感；地铁/有轨为彩色实线
+  if (style.stripe && style.dash) {
+    const dash = style.dash.map((d) => Math.max(2, d * viewport.zoom));
+    ctx.setLineDash(dash);
+    ctx.strokeStyle = style.stripe;
+    ctx.lineWidth = Math.max(1, w * 0.45);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function drawLabel(
