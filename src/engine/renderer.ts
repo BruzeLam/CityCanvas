@@ -127,7 +127,7 @@ function trimPolylineEnds(
 }
 
 /** 匝道端点短截：与宿主同层绘制，避免中段抬升后整条压在主路上 */
-const RAMP_TIP_STUB_M = 14;
+const RAMP_TIP_STUB_M = 32;
 
 /** 端点若挂在主路上，用宿主标高画 tip stub（可压在宿主下，避免 +2 tip 叠在 0 层上） */
 function hostGradeAtAttachment(
@@ -358,7 +358,27 @@ function pointInHostBody(p: Point, host: MapFeature, padM: number): boolean {
   return false;
 }
 
-/** 路缘只画在宿主路面外侧：碰撞区内不画 tip 边线 → 无「中间那条线」 */
+/** 折线加密，浅角碰撞区顶点不够时也能判进宿主 */
+function densifyPolyline(points: Point[], stepM: number): Point[] {
+  if (points.length < 2) return points.map((p) => ({ ...p }));
+  const out: Point[] = [{ ...points[0] }];
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const n = Math.max(1, Math.ceil(len / Math.max(0.8, stepM)));
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      out.push({
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+      });
+    }
+  }
+  return out;
+}
+
+/** 路缘只画在宿主路面外侧：碰撞区内不画 tip 边线 */
 function splitCasingOutsideHosts(
   points: Point[],
   selfId: string,
@@ -366,8 +386,10 @@ function splitCasingOutsideHosts(
   selfHalfM: number,
 ): Point[][] {
   if (points.length < 2 || hosts.length === 0) return [points];
-  const pad = selfHalfM + 0.6;
-  const inside = points.map((p) =>
+  const dense = densifyPolyline(points, 2);
+  // pad 含 tip 半宽，边线整条停在宿主外
+  const pad = selfHalfM + 1.2;
+  const inside = dense.map((p) =>
     hosts.some((h) => h.id !== selfId && pointInHostBody(p, h, pad)),
   );
   const segs: Point[][] = [];
@@ -376,12 +398,12 @@ function splitCasingOutsideHosts(
     if (cur.length >= 2) segs.push(cur);
     cur = [];
   };
-  for (let i = 0; i < points.length; i++) {
+  for (let i = 0; i < dense.length; i++) {
     if (inside[i]) {
       flush();
       continue;
     }
-    cur.push({ ...points[i] });
+    cur.push({ ...dense[i] });
   }
   flush();
   return segs;
@@ -421,8 +443,9 @@ function splitHostCasingAtMouths(
     if (bestD > m.hostWidth * 0.6 + 4) continue;
     const sinA = Math.abs(m.hostDirX * m.approachY - m.hostDirY * m.approachX);
     const half = Math.max(
-      m.tipWidth * 0.55,
-      (m.tipWidth * 0.5) / Math.max(sinA, 0.2),
+      m.tipWidth * 0.95,
+      (m.tipWidth * 0.9) / Math.max(sinA, 0.16),
+      5,
     );
     cuts.push({
       a: Math.max(0, bestS - half),
@@ -470,7 +493,6 @@ function paintJoinBlends(
   const fillScale = style === 'sketch' ? 0.72 : 1;
   for (const m of mouths) {
     if (Math.floor(m.grade + 1e-9) !== band) continue;
-    if (m.tipColor === m.hostColor) continue;
     const p = toScreen(m.point, viewport);
     let hostFill = m.hostColor;
     let tipFill = m.tipColor;
@@ -482,19 +504,24 @@ function paintJoinBlends(
     const halfHost = (m.hostWidth * 0.5) * z;
     const ax = m.approachX;
     const ay = m.approachY;
+    // 从宿主外缘扫到中心：盖住残留封口线，异色则渐变
     const a = {
-      x: p.x - ax * (halfHost + tipFillW * 0.9),
-      y: p.y - ay * (halfHost + tipFillW * 0.9),
+      x: p.x - ax * (halfHost + tipFillW * 1.15),
+      y: p.y - ay * (halfHost + tipFillW * 1.15),
     };
     const b = { x: p.x, y: p.y };
-    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-    g.addColorStop(0, tipFill);
-    g.addColorStop(0.5, lerpColor(tipFill, hostFill, 0.45));
-    g.addColorStop(1, hostFill);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = g;
+    if (m.tipColor === m.hostColor) {
+      ctx.strokeStyle = tipFill;
+    } else {
+      const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      g.addColorStop(0, tipFill);
+      g.addColorStop(0.45, lerpColor(tipFill, hostFill, 0.4));
+      g.addColorStop(1, hostFill);
+      ctx.strokeStyle = g;
+    }
     ctx.lineWidth = tipFillW;
     ctx.lineCap = 'butt';
     ctx.stroke();
@@ -568,17 +595,7 @@ function drawRoadsMerged(
     );
 
     for (const piece of tips) {
-      drawRoadCasing(
-        ctx,
-        piece.feature,
-        viewport,
-        style,
-        joinedCaps,
-        casingTrim,
-        piece.subPoints,
-        roads,
-        mouths,
-      );
+      // tip stub 只画路面、不画路缘 → 汇入口无 butt 封口线
       drawRoadFill(
         ctx,
         piece.feature,
