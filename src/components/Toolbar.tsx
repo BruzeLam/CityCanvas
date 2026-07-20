@@ -32,9 +32,12 @@ import {
   GlyphGreen,
   GlyphLabel,
   GlyphLand,
+  GlyphPathCurve,
+  GlyphPathStraight,
   GlyphRail,
   GlyphRiverLine,
   GlyphRoad,
+  GlyphRoadLevel,
   GlyphStationRect,
   GlyphStationRound,
   GlyphUndo,
@@ -203,46 +206,57 @@ export function Toolbar({
         if (t.closest('button') && !t.closest('input')) e.preventDefault();
       }}
     >
-      <div className="tb-top">
-        <p className="toolbar-kicker">图板</p>
-        <button
-          type="button"
-          className="tb-undo"
-          onClick={onUndo}
-          disabled={!canUndo}
-          title="撤销 · Ctrl/⌘ Z"
-        >
-          <GlyphUndo />
-          <span>撤销</span>
-        </button>
+      <div className="tb-sticky">
+        <div className="tb-top">
+          <p className="toolbar-kicker">图板</p>
+          <button
+            type="button"
+            className="tb-undo"
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="撤销 · Ctrl/⌘ Z"
+          >
+            <GlyphUndo />
+            <span>撤销</span>
+          </button>
+        </div>
+
+        <div className="mode-switch mode-switch-compact" role="group" aria-label="鼠标左键模式">
+          <button
+            type="button"
+            className={tool === 'pan' ? 'mode-btn active' : 'mode-btn'}
+            onClick={() => onToolChange('pan')}
+            title="拖图 · H"
+          >
+            <span className="mode-emoji" aria-hidden>
+              ✋
+            </span>
+            <span className="mode-label">拖动</span>
+            <kbd className="mode-kbd">H</kbd>
+          </button>
+          <button
+            type="button"
+            className={tool === 'select' ? 'mode-btn active' : 'mode-btn'}
+            onClick={() => onToolChange('select')}
+            title="编辑 · V"
+          >
+            <span className="mode-emoji" aria-hidden>
+              ✏️
+            </span>
+            <span className="mode-label">编辑</span>
+            <kbd className="mode-kbd">V</kbd>
+          </button>
+        </div>
+        <p className="mode-hint">
+          {tool === 'pan'
+            ? '左键拖图 · WASD'
+            : tool === 'select'
+              ? '选中 / 改顶点'
+              : '绘制中 · 空格拖图'}
+        </p>
       </div>
 
-      <div className="mode-switch" role="group" aria-label="鼠标左键模式">
-        <button
-          type="button"
-          className={tool === 'pan' ? 'mode-btn active' : 'mode-btn'}
-          onClick={() => onToolChange('pan')}
-          title="拖图 · H"
-        >
-          拖动
-        </button>
-        <button
-          type="button"
-          className={tool === 'select' ? 'mode-btn active' : 'mode-btn'}
-          onClick={() => onToolChange('select')}
-          title="编辑 · V"
-        >
-          编辑
-        </button>
-      </div>
-      <p className="mode-hint">
-        {tool === 'pan'
-          ? '左键拖图 · WASD · H'
-          : tool === 'select'
-            ? '选中 / 改顶点 · V'
-            : '绘制中 · 空格拖图'}
-      </p>
-
+      <div className="tb-scroll">
       <Drawer id="terrain" title="地貌" open={open.terrain} onToggle={toggle}>
         <div className="tb-tile-grid">
           <Tile
@@ -377,20 +391,21 @@ export function Toolbar({
             {tool === 'road' && (
               <div className="tb-options">
                 <p className="option-label">等级</p>
-                <div className="chip-row">
+                <div className="preview-chip-row">
                   {ROAD_LEVELS.map(([id, style]) => (
                     <button
                       key={id}
                       type="button"
-                      className={roadLevel === id ? 'chip active' : 'chip'}
+                      className={roadLevel === id ? 'preview-chip active' : 'preview-chip'}
                       onClick={() => onRoadLevelChange(id)}
-                      title={style.label}
+                      title={`${style.label} · 宽约 ${style.width}px`}
                     >
-                      {style.label}
+                      <GlyphRoadLevel level={id} active={roadLevel === id} />
+                      <span className="preview-chip-label">{style.label}</span>
                     </button>
                   ))}
                 </div>
-                <p className="tool-note">后期可扩容更多道路类型</p>
+                <p className="tool-note">预览即画布配色粗细 · 后期可扩容更多类型</p>
               </div>
             )}
           </div>
@@ -467,16 +482,24 @@ export function Toolbar({
         {isPathGuided(tool) && (
           <div className="tb-options">
             <p className="option-label">画法</p>
-            <div className="chip-row">
+            <div className="preview-chip-row">
               {PATH_DRAW_MODES.map((m) => (
                 <button
                   key={m.id}
                   type="button"
-                  className={pathDrawMode === m.id ? 'chip active' : 'chip'}
+                  className={pathDrawMode === m.id ? 'preview-chip active' : 'preview-chip'}
                   onClick={() => onPathDrawModeChange(m.id)}
                   title={m.desc}
                 >
-                  {m.label}
+                  {m.id === 'curve' ? (
+                    <GlyphPathCurve active={pathDrawMode === 'curve'} />
+                  ) : (
+                    <GlyphPathStraight active={pathDrawMode === 'straight'} />
+                  )}
+                  <span className="preview-chip-label">
+                    {m.label}
+                    {m.id === 'curve' ? ' · 三点' : ''}
+                  </span>
                 </button>
               ))}
             </div>
@@ -566,6 +589,7 @@ export function Toolbar({
         </div>
         <p className="tool-note">设施玩法还在构思，先占位分类</p>
       </Drawer>
+      </div>
     </aside>
   );
 }

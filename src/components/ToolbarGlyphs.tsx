@@ -1,6 +1,110 @@
-/** 工具栏圆标：饱满色块简图，一眼能认 */
+/** 工具栏圆标 / 预览条：饱满色块简图，一眼能认 */
+
+import type { RoadLevel } from '../types';
+import { ROAD_STYLES } from '../types';
 
 type GlyphProps = { active?: boolean };
+
+/** 道路等级：画布上的粗细与配色预览 */
+export function GlyphRoadLevel({
+  level,
+  active,
+}: GlyphProps & { level: RoadLevel }) {
+  const style = ROAD_STYLES[level];
+  const strokeW = { expressway: 9, arterial: 7, collector: 5, local: 3.2 }[level];
+  const dash = level === 'expressway' || level === 'arterial';
+  return (
+    <svg className="tb-preview-glyph" viewBox="0 0 56 28" aria-hidden>
+      <rect x="1" y="1" width="54" height="26" rx="4" fill={active ? '#2f2c28' : '#f3efe8'} />
+      <path
+        d="M6 14h44"
+        stroke={style.casing}
+        strokeWidth={strokeW + 2.4}
+        strokeLinecap="round"
+      />
+      <path
+        d="M6 14h44"
+        stroke={style.color}
+        strokeWidth={strokeW}
+        strokeLinecap="round"
+      />
+      {dash && (
+        <path
+          d="M10 14h36"
+          stroke={active ? 'rgba(255,255,255,0.85)' : '#fff'}
+          strokeWidth={Math.max(1.2, strokeW * 0.22)}
+          strokeLinecap="round"
+          strokeDasharray="4 3"
+        />
+      )}
+    </svg>
+  );
+}
+
+/** 直线画法 */
+export function GlyphPathStraight({ active }: GlyphProps) {
+  return (
+    <svg className="tb-preview-glyph" viewBox="0 0 56 28" aria-hidden>
+      <rect x="1" y="1" width="54" height="26" rx="4" fill={active ? '#2f2c28' : '#f3efe8'} />
+      <path
+        d="M8 14h40"
+        stroke={active ? '#f0b429' : '#d4a017'}
+        strokeWidth="5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12 14h4M20 14h4M28 14h4M36 14h4"
+        stroke="#fff"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <circle cx="8" cy="14" r="2.6" fill={active ? '#ffe08a' : '#fff'} stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1.2" />
+      <circle cx="48" cy="14" r="2.6" fill={active ? '#ffe08a' : '#fff'} stroke={active ? '#c47d12' : '#b8860b'} strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+/** 弯道画法：突出三点 A→B→C */
+export function GlyphPathCurve({ active }: GlyphProps) {
+  const ink = active ? '#ffe08a' : '#d4a017';
+  const dot = active ? '#fff' : '#fff';
+  const ring = active ? '#c47d12' : '#b8860b';
+  const label = active ? '#2f2c28' : '#5a4a28';
+  return (
+    <svg className="tb-preview-glyph" viewBox="0 0 56 28" aria-hidden>
+      <rect x="1" y="1" width="54" height="26" rx="4" fill={active ? '#2f2c28' : '#f3efe8'} />
+      {/* 三点折线暗示，半透明 */}
+      <path
+        d="M8 20 L28 6 L48 20"
+        fill="none"
+        stroke={active ? 'rgba(255,224,138,0.35)' : 'rgba(180,140,40,0.35)'}
+        strokeWidth="1.2"
+        strokeDasharray="2.5 2"
+      />
+      {/* 劣弧弯道 */}
+      <path
+        d="M8 20 Q28 2 48 20"
+        fill="none"
+        stroke={ink}
+        strokeWidth="4.2"
+        strokeLinecap="round"
+      />
+      {/* 点 A / B / C */}
+      <circle cx="8" cy="20" r="3.2" fill={dot} stroke={ring} strokeWidth="1.3" />
+      <circle cx="28" cy="6" r="3.4" fill="#ff7a45" stroke="#fff" strokeWidth="1.2" />
+      <circle cx="48" cy="20" r="3.2" fill={dot} stroke={ring} strokeWidth="1.3" />
+      <text x="8" y="21.2" textAnchor="middle" fontSize="5.5" fontWeight="800" fill={label}>
+        1
+      </text>
+      <text x="28" y="7.4" textAnchor="middle" fontSize="5.5" fontWeight="800" fill="#fff">
+        2
+      </text>
+      <text x="48" y="21.2" textAnchor="middle" fontSize="5.5" fontWeight="800" fill={label}>
+        3
+      </text>
+    </svg>
+  );
+}
 
 export function GlyphLand({ active }: GlyphProps) {
   return (

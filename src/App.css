@@ -188,6 +188,14 @@ input {
   padding: 10px 10px 20px;
 }
 
+.toolbar.toolbar-game {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .side-panel {
   padding: 14px 12px 24px;
   display: flex;
@@ -195,7 +203,25 @@ input {
   gap: 16px;
 }
 
-.toolbar-game {
+.tb-sticky {
+  flex-shrink: 0;
+  z-index: 4;
+  padding: 8px 10px 6px;
+  background:
+    linear-gradient(180deg, #fffefb 0%, var(--panel) 100%);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 85%, #c4a574 15%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+}
+
+.tb-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 10px 20px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -353,20 +379,9 @@ input {
   min-height: 0;
 }
 
-.tb-tile:hover:not(:disabled) .tb-tile-glyph {
-  border-color: color-mix(in srgb, var(--accent-line) 45%, var(--line-strong));
-  transform: translateY(-1px);
-}
-
 .tb-tile.active {
   background: transparent !important;
   color: var(--ink) !important;
-}
-
-.tb-tile.active .tb-tile-glyph {
-  background: radial-gradient(circle at 35% 30%, #3a3530 0%, var(--ink) 75%);
-  border-color: var(--ink);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 90%, transparent);
 }
 
 .tb-tile.soon,
@@ -443,10 +458,6 @@ input {
 .tb-tile.active .tb-tile-soon {
   background: rgba(0, 0, 0, 0.2);
   color: #fff;
-}
-
-.tb-tile.active .tb-tile-label {
-  color: var(--ink);
 }
 
 .tb-subtabs {
@@ -528,22 +539,51 @@ input {
   background: var(--paper-deep);
 }
 
+.mode-switch-compact {
+  margin: 6px 0 2px;
+  border-radius: 4px;
+}
+
 .mode-btn {
   display: flex !important;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   width: 100%;
   margin: 0 !important;
-  padding: 9px 6px !important;
+  padding: 4px 6px !important;
   border: none !important;
   border-radius: 0 !important;
   background: transparent !important;
   color: var(--muted) !important;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
   cursor: pointer;
+  line-height: 1.2;
+  min-height: 0;
+}
+
+.mode-emoji {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.mode-label {
+  font-size: 11px;
+}
+
+.mode-kbd {
+  display: inline-block;
+  margin: 0;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 3px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.35;
+  opacity: 0.75;
 }
 
 .mode-btn + .mode-btn {
@@ -560,12 +600,18 @@ input {
   color: #fff !important;
 }
 
+.mode-btn.active .mode-kbd {
+  border-color: rgba(255, 255, 255, 0.45);
+  opacity: 0.9;
+}
+
 .mode-hint {
-  margin: 0 0 12px;
-  font-size: 10px;
+  margin: 0;
+  font-size: 9px;
   color: var(--muted);
   letter-spacing: 0.02em;
   text-align: center;
+  line-height: 1.3;
 }
 
 .brush-slider {
@@ -928,6 +974,63 @@ input {
   border-radius: 0;
   border: 1px solid;
   flex-shrink: 0;
+}
+
+.preview-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preview-chip {
+  display: flex !important;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: calc(50% - 3px) !important;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 4px !important;
+  border: 1.5px solid color-mix(in srgb, var(--line) 80%, #b8a070 20%) !important;
+  border-radius: 6px !important;
+  background:
+    linear-gradient(180deg, #fffefb 0%, #f7f2ea 100%) !important;
+  color: var(--ink) !important;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.preview-chip:hover {
+  border-color: color-mix(in srgb, var(--accent-line) 50%, var(--line-strong)) !important;
+  transform: translateY(-1px);
+}
+
+.preview-chip.active {
+  border-color: var(--ink) !important;
+  background: linear-gradient(180deg, #3a3530 0%, var(--ink) 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 85%, transparent);
+}
+
+.tb-preview-glyph {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 56 / 28;
+  border-radius: 4px;
+}
+
+.preview-chip-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  line-height: 1.2;
+  color: var(--ink-soft);
+}
+
+.preview-chip.active .preview-chip-label {
+  color: color-mix(in srgb, var(--accent-soft) 80%, #fff);
 }
 
 .canvas-wrap {
