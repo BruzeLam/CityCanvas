@@ -8,16 +8,31 @@
 面向城市尺度的地貌与交通规划：不是 GIS，也不是模拟城市。  
 适合架空底图、立交草图、结构推演与教学演示。
 
-<!-- 实机截图：把文件放到 docs/readme-media/hero-editor.png 后取消下一行注释
-![CityCanvas 编辑器](docs/readme-media/hero-editor.png)
--->
-> 📷 **截图位** `docs/readme-media/hero-editor.png` — 编辑器全貌（地貌 + 路网 + 立交）
+![CityCanvas 编辑器（半成品）](docs/readme-media/wip-editor.png)
+
+<p align="center"><sub>当前编辑器半成品 · 地貌刷子 + 五级道路 + 匝道立交</sub></p>
 
 ---
 
 ## 特色功能 · 地图生成器（模式识别）
 
-地图生成器是 CityCanvas 的开局引擎：不靠一句 Prompt 瞎猜，而是用**可识别的地理原型**套结构化配方，再掷种子生成可编辑底图。
+地图生成器是 CityCanvas 的开局引擎：不靠一句 Prompt 瞎猜，而是用**可识别的地理原型 / Seed** 套结构化配方，再掷种子生成可编辑底图。
+
+### 理想原型 · 选 Seed
+
+选 Seed 不是抽随机数，而是选一座城市的**气质**：叙事文案 + 模式识别参数（海洋 / 水网 / 绿地 / 破碎度）一眼对齐。
+
+![选 Seed 理想原型](docs/readme-media/vision-seed-carousel.png)
+
+<p align="center"><sub>理想原型（设计稿）：Choose a Seed · 江州 / 河谷 / 山海港城轮播</sub></p>
+
+### 当前半成品 · 地理原型 + 预览
+
+量产路径已落地：网格选地理原型 → 四参微调 → 低分实时预览 → 生成完整地图。UI 仍在迭代，目标对齐上方理想原型。
+
+![地图生成器半成品](docs/readme-media/wip-generator.png)
+
+<p align="center"><sub>当前半成品：11 地理原型 + seed 换一换 + 陆水绿地占比预览</sub></p>
 
 核心理念：
 
@@ -43,25 +58,15 @@
 
 ### 肌理样例（模式库示意）
 
-下面三张是**模式识别参考肌理**（自然层：水 / 绿 / 陆）。正式生成结果会随种子变化；后续可换成你实机导出的生成器预览图。
+下面三张是**模式识别参考肌理**（自然层：水 / 绿 / 陆）。正式生成结果会随种子变化。
 
 | 江州 · 主河塑城 | 港湾 · 陆海交错 | 河谷 · 两山夹一江 |
 |:---:|:---:|:---:|
 | ![江州肌理](docs/readme-media/pattern-jiangzhou.png) | ![港湾肌理](docs/readme-media/pattern-harbor.png) | ![河谷肌理](docs/readme-media/pattern-valley.png) |
 
-<!-- 实机截图：生成器选原型页
-![选择地理原型](docs/readme-media/gen-step-prototype.png)
--->
-> 📷 **截图位** `docs/readme-media/gen-step-prototype.png` — Step 1 地理原型网格
-
-<!-- 实机截图：四参 + 预览
-![参数与预览](docs/readme-media/gen-step-preview.png)
--->
-> 📷 **截图位** `docs/readme-media/gen-step-preview.png` — 四核心参数 + 实时预览
-
 ### 四步开局
 
-1. **地理原型** — 11 种可识别的地貌骨架（见下表）  
+1. **地理原型 / Seed** — 可识别的地貌气质（见下表；理想态为轮播选 Seed）  
 2. **城市尺度** — 社区 / 小城市 / 城市 / 大都市 / 自定义  
 3. **四核心参数** — 海洋比例 · 水网密度 · 绿地覆盖 · 地形破碎度  
 4. **实时预览 → 生成地图** — 低分预览即时刷新；确认后再出完整底图  
@@ -101,12 +106,11 @@
 
 > **同层相交 = 路口；异层相交 = 上跨压盖；匝道用连续标高连接两层，中段相交不织平面路口。**
 
-<!--
+<!-- 后续实机特写
 ![标高与立交](docs/readme-media/feature-grade.png)
 ![匝道挂接](docs/readme-media/feature-ramp.png)
 -->
-> 📷 **截图位** `docs/readme-media/feature-grade.png` — 同层路口 / 异层上跨  
-> 📷 **截图位** `docs/readme-media/feature-ramp.png` — 匝道挂接
+> 📷 **截图位** `feature-grade.png` / `feature-ramp.png` — 立交与匝道特写（场景选定后补）
 
 ---
 
