@@ -106,9 +106,24 @@
 
 > **同层相交 = 路口；异层相交 = 上跨压盖；匝道用连续标高连接两层，中段相交不织平面路口。**
 
-| 标高芯片（绘制时） | 选中后改层（匝道 · +1 上跨） |
-|:---:|:---:|
-| ![标高芯片](docs/readme-media/ui-road-grade.png) | ![选中改标高](docs/readme-media/feature-grade.png) |
+<table>
+<tr>
+<td width="45%" align="center" valign="top">
+
+<img src="docs/readme-media/ui-road-grade.png" alt="标高芯片" width="380" />
+
+<sub>绘制时 · 标高芯片</sub>
+
+</td>
+<td width="55%" align="center" valign="top">
+
+<img src="docs/readme-media/feature-grade.png" alt="选中改标高" width="480" />
+
+<sub>选中后 · 匝道 +1 上跨</sub>
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -149,24 +164,16 @@ npm run dev
 | 双击 / `Enter` | 完成当前折线 |
 | `Backspace` | 回退上一顶点 |
 | `Escape` | 取消本笔草稿 |
-| 右键 | 打断本笔 |
-| `Shift` | 直线模式：关闭软吸正交 |
-| `Alt` | 关闭路网吸附 |
+| 右键 | 打断本笔 |### 3. 地貌（刷子）
 
----
+<table>
+<tr>
+<td width="48%" valign="top">
 
-### 2. 新建地图（生成器）
+<img src="docs/readme-media/ui-terrain.png" alt="地貌工具" width="420" />
 
-进入编辑前走四步：地理原型 → 城市尺度 → 四参微调 → 预览生成。  
-也可跳过生成、空白开局，或 **导入本地 `.md`** / 打开云端地图。
-
-地图范围创建后固定。编辑页不能整图按种子重生，之后用刷子微调。
-
----
-
-### 3. 地貌（刷子）
-
-![地貌工具](docs/readme-media/ui-terrain.png)
+</td>
+<td width="52%" valign="top">
 
 | 快捷键 | 工具 | 作用 |
 |--------|------|------|
@@ -176,11 +183,22 @@ npm run dev
 | `4` | 橡皮 | 一次只擦一类 |
 | `5` | 河道 | 画河道中心线 |
 
+</td>
+</tr>
+</table>
+
 ---
 
 ### 4. 道路交通（等级 1–5）
 
-![道路等级](docs/readme-media/ui-roads.png)
+<table>
+<tr>
+<td width="48%" valign="top">
+
+<img src="docs/readme-media/ui-roads.png" alt="道路等级" width="420" />
+
+</td>
+<td width="52%" valign="top">
 
 | 键 | 等级 | 视觉 |
 |----|------|------|
@@ -188,15 +206,27 @@ npm run dev
 | `2` | 主干路 | 黄 |
 | `3` | 次干路 | 白 |
 | `4` | 支路 | 浅灰 |
-| `5` | **匝道** | 细线；配色随挂接端等级 |
+| `5` | **匝道** | 细线；配色随挂接端 |
 
 同层同级相交插入路口；延伸到已有端点可首尾合并。
 
-绘制时可选**直线 / 弯道**，并直接带上标高芯片：
+</td>
+</tr>
+<tr>
+<td width="48%" valign="top">
 
-![道路 · 画法与标高](docs/readme-media/ui-road-grade.png)
+<img src="docs/readme-media/ui-road-grade.png" alt="道路画法与标高" width="420" />
 
-**平行线**：道路可开平行线（双侧/单侧、间距可调）。
+</td>
+<td width="52%" valign="top">
+
+绘制时可选**直线 / 弯道**，并直接带上标高芯片。
+
+**平行线**：道路可开平行线（双侧 / 单侧、间距可调）。
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -204,21 +234,35 @@ npm run dev
 
 标高 **-3 … +3**，默认 **0 地面**。道路与轨道共用同一套芯片。
 
-![轨道抽屉中的标高芯片](docs/readme-media/ui-rail-grade.png)
+<table>
+<tr>
+<td width="42%" valign="top">
 
-<p align="center"><sub>绘制工具栏：标高 0 地面（道路 / 轨道面板一致）</sub></p>
+<img src="docs/readme-media/ui-rail-grade.png" alt="标高芯片" width="360" />
+
+<sub>绘制工具栏 · 标高 0 地面</sub>
+
+</td>
+<td width="58%" valign="top">
 
 | 场景 | 行为 |
 |------|------|
 | 同层两条路相交 | 织成平面路口 |
-| 异层相交 | 高层整层压在低层上，不织路口 |
-| 选中改标高 | 侧栏芯片或 `-` / `=`；平行姐妹线一起改 |
+| 异层相交 | 高层压在低层上，不织路口 |
+| 选中改标高 | 侧栏芯片或 `-` / `=` |
 
-选中要素后，侧栏可直接改层（下图：匝道设为 **+1 上跨**）：
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
 
-![选中匝道改标高](docs/readme-media/feature-grade.png)
+<img src="docs/readme-media/feature-grade.png" alt="选中匝道改标高" width="720" />
 
-**建议**：先画下层 `0`，再调到 `+1`/`+2` 画上层跨过。
+<sub>选中后改层：匝道设为 **+1 上跨**。建议先画下层 `0`，再调 `+1`/`+2` 画上层。</sub>
+
+</td>
+</tr>
+</table>
 
 街区由同层道路围合自动识别，不单独存档。
 
@@ -240,11 +284,31 @@ npm run dev
 
 ### 7. 桥与隧 · 铁路 · 标注
 
-路心穿过**水域**或靠近**河道线**时，自动标桥 / 隧（岸口有细括号；放大后更明显）：
+<table>
+<tr>
+<td width="55%" valign="top">
 
-![桥隧岸口](docs/readme-media/feature-bridge.png)
+<img src="docs/readme-media/feature-bridge.png" alt="桥隧岸口" width="520" />
 
-<p align="center"><sub>过河道路 · 岸线处的桥隧口标记（细线，需稍放大）</sub></p>
+<sub>过河岸口标记（细线，宜稍放大）</sub>
+
+</td>
+<td width="45%" valign="top">
+
+路心穿过**水域**或靠近**河道线**时自动标桥 / 隧：
+
+- **标高 ≥ 0**：桥 — 浅细实线 + 两岸括号口  
+- **标高 &lt; 0**：隧 — 浅细虚线 + 两岸括号口  
+- **铁路**：普速 / 高铁 / 地铁 / 有轨  
+- **标注**：点选写文字  
+
+</td>
+</tr>
+</table>
+
+---
+
+er"><sub>过河道路 · 岸线处的桥隧口标记（细线，需稍放大）</sub></p>
 
 - **标高 ≥ 0**：桥 — 浅细实线边线 + 两岸括号口  
 - **标高 &lt; 0**：隧 — 浅细虚线边线 + 两岸括号口  
